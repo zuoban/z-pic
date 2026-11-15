@@ -75,7 +75,7 @@ One main window and one modal child settings window:
 ## Design principles
 
 - Keep frequent compression actions on the main window and scheme maintenance in the settings dialog.
-- Start with “体积优先 / 均衡 / 画质优先”, defaulting to “均衡”. All schemes are named, editable, and deletable; at least one remains. Additions become selectable after saving. Restore saved schemes and the selected scheme on startup.
+- Start with built-in “体积优先 / 均衡 / 画质优先”, defaulting to “均衡”. Built-in schemes are read-only and non-deletable; user-added schemes are named, editable, and deletable. Additions become selectable after saving. Restore saved schemes and the selected scheme on startup.
 - Each scheme stores JPEG and PNG parameters independently. Editing a draft does not change the active scheme or its compression result until Save succeeds. Names are trimmed, nonempty, unique, free of control characters, and at most 40 Unicode characters.
 - JPEG quality is 1–100. PNG exposes target quality 1–100 and maximum colors 2–256, with minimum quality 0–target and speed 1–11 under “高级设置”. Lowering the target clamps the minimum. Explain that PNG quality is a tool score, not a percentage of quality retained.
 - Do not offer a separate PNG lossless compression path. All schemes tune the same lossy pipeline.

@@ -70,6 +70,21 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		if err := preset.png.Validate(); err != nil {
 			return fmt.Errorf("方案「%s」的 PNG 参数无效：%w", preset.name, err)
 		}
+		canonical, isBuiltin := findBuiltinPreset(preset.name)
+		if preset.builtin != isBuiltin {
+			if isBuiltin {
+				return fmt.Errorf("内置压缩方案「%s」标记无效", preset.name)
+			}
+			return fmt.Errorf("自定义压缩方案「%s」不能标记为内置", preset.name)
+		}
+		if isBuiltin && (preset.quality != canonical.quality || preset.png != canonical.png) {
+			return fmt.Errorf("内置压缩方案「%s」不允许编辑", preset.name)
+		}
+	}
+	for _, builtin := range compressionPresets {
+		if !names[builtin.name] {
+			return fmt.Errorf("内置压缩方案「%s」不允许删除", builtin.name)
+		}
 	}
 	if !names[selected] {
 		return errors.New("请选择一个有效的压缩方案")
@@ -83,7 +98,7 @@ func loadSettings(path string) ([]compressionPreset, string, error) {
 	}
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return append([]compressionPreset(nil), compressionPresets...), "均衡", nil
+		return defaultPresets(), "均衡", nil
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("无法读取设置文件信息：%w", err)
@@ -124,7 +139,13 @@ func loadSettings(path string) ([]compressionPreset, string, error) {
 	}
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
-		presets[index] = compressionPreset{name: preset.Name, quality: preset.Quality, png: preset.PNG}
+		_, builtin := findBuiltinPreset(preset.Name)
+		presets[index] = compressionPreset{
+			name:    preset.Name,
+			quality: preset.Quality,
+			png:     preset.PNG,
+			builtin: builtin,
+		}
 	}
 	if err := validatePresets(presets, stored.Selected); err != nil {
 		return nil, "", fmt.Errorf("设置文件内容无效：%w", err)

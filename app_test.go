@@ -278,6 +278,8 @@ func TestPresetsConfigureBothFormats(t *testing.T) {
 func TestPNGControlsClampDraftAndInvalidateOnlyAfterSaving(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format = "png"
+	s.presets = append(s.presets, compressionPreset{name: "自定义", quality: 80, png: compress.DefaultPNGOptions()})
+	s.setScheme("自定义")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
 	s.result, s.preview = result, preview
@@ -303,7 +305,7 @@ func TestPNGControlsClampDraftAndInvalidateOnlyAfterSaving(t *testing.T) {
 		t.Fatal("saving changed active parameters must discard the old export and restore the source")
 	}
 	main := ui.NewTester(s.view, 880, 660)
-	scheme, ok := main.AccessByRole(ui.RoleRadio, "均衡")
+	scheme, ok := main.AccessByRole(ui.RoleRadio, "自定义")
 	if !ok || !scheme.Checked {
 		t.Fatalf("editing a named scheme must keep that scheme selected: %+v", scheme)
 	}
@@ -435,6 +437,7 @@ func TestSettingsShortcutOpensWithoutChangingCompressionState(t *testing.T) {
 			if !s.settingsOpen || s.editor == nil {
 				t.Fatal("the settings shortcut must open the editor with or without an image")
 			}
+			s.addPreset()
 			s.editQuality(35)
 			editor := s.editor
 			tt.Key(ui.Cmd, ui.KeyComma)
@@ -508,6 +511,8 @@ func TestPNGAdvancedParametersAndBusyState(t *testing.T) {
 func TestAdvancedKeyboardFocusScrollsWithoutHidingSettingsActions(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format, s.advanced = "png", true
+	s.presets = append(s.presets, compressionPreset{name: "自定义", quality: 80, png: compress.DefaultPNGOptions()})
+	s.setScheme("自定义")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	s.result = result
 	tt := openTestSettings(t, s)
@@ -570,6 +575,9 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	}
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	settings := ui.NewTester(s.settingsView, 760, 560)
+	if err := settings.Click("新增方案"); err != nil {
+		t.Fatal(err)
+	}
 	for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数"} {
 		slider, ok := settings.AccessByRole(ui.RoleSlider, label)
 		if !ok || slider.Disabled {
@@ -586,7 +594,13 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if s.settingsOpen || s.quality != 100 || s.scheme != "画质优先" || !tt.HasText("选择图片") {
+	if s.settingsOpen || s.scheme != "画质优先" || s.quality != 92 || !tt.HasText("选择图片") {
+		t.Fatal("saving a new scheme must keep the active scheme until selected and return to the unchanged main view")
+	}
+	if err := tt.Click("新方案"); err != nil {
+		t.Fatal(err)
+	}
+	if s.quality != 100 || s.scheme != "新方案" {
 		t.Fatal("saving settings must preserve the named scheme and return to the unchanged main view")
 	}
 	button, ok := tt.AccessByRole(ui.RoleButton, "开始压缩")
@@ -662,6 +676,7 @@ func TestFileDropWhileSettingsAreOpenPreservesDraft(t *testing.T) {
 	s.result = result
 	s.setSettingsOpen(true)
 	editor := s.editor
+	s.addPreset()
 	s.editQuality(70)
 	s.dropFiles([]string{"/photos/first.jpg", "/photos/second.png"})
 	tt := ui.NewTester(s.view, 880, 660)
@@ -704,16 +719,33 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 			}, 760, 560)
 			for _, label := range []string{"取消", "保存", "新增方案", "删除方案"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || button.Disabled || button.Offscreen || button.Bounds.H < 28 ||
+				wantDisabled := label == "删除方案"
+				if !ok || button.Disabled != wantDisabled || button.Offscreen || button.Bounds.H < 28 ||
 					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
 					t.Fatalf("%s must fit in the minimum window: %+v", label, button)
 				}
 			}
 			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
-				if !ok || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
+				if !ok || !slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
 					slider.Bounds.X+slider.Bounds.W > 740 {
 					t.Fatalf("%s must fit the settings content width: %+v", label, slider)
+				}
+			}
+			s.addPreset()
+			tt.Frame()
+			for _, label := range []string{"取消", "保存", "新增方案", "删除方案"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Disabled || button.Offscreen || button.Bounds.H < 28 ||
+					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
+					t.Fatalf("%s must fit and be enabled for custom schemes: %+v", label, button)
+				}
+			}
+			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
+				if !ok || slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
+					slider.Bounds.X+slider.Bounds.W > 740 {
+					t.Fatalf("%s must fit and be enabled for custom schemes: %+v", label, slider)
 				}
 			}
 		})
@@ -723,6 +755,8 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 func TestSettingsNoOpAndBusyKeepResult(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		s := testSelectedApplication()
+		s.presets = append(s.presets, compressionPreset{name: "自定义", quality: 80, png: compress.DefaultPNGOptions()})
+		s.setScheme("自定义")
 		s.setSettingsOpen(true)
 		draft := s.editor.presets[s.editor.selected]
 		s.busy = busy
@@ -747,8 +781,9 @@ func TestSettingsNoOpAndBusyKeepResult(t *testing.T) {
 
 func TestCompressionSettingsSnapshot(t *testing.T) {
 	s := testSelectedApplication()
+	s.presets = append(s.presets, compressionPreset{name: "自定义", quality: 60, png: compress.DefaultPNGOptions()})
 	captured := s.compressionOptions()
-	s.setScheme("体积优先")
+	s.setScheme("自定义")
 	if captured.Quality != 80 || captured.PNG != compress.DefaultPNGOptions() {
 		t.Fatal("captured options must not change with subsequent UI edits")
 	}
@@ -761,7 +796,7 @@ func TestCompressionSettingsSnapshot(t *testing.T) {
 		t.Fatal("draft changes must not change captured options or valid results")
 	}
 	s.savePresetEdits()
-	if s.result != nil || s.png.Colors != 32 || s.scheme != "体积优先" {
+	if s.result != nil || s.png.Colors != 32 || s.scheme != "自定义" {
 		t.Fatal("saved custom color cap must update the named scheme and invalidate the old result")
 	}
 }

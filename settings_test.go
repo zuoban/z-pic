@@ -71,7 +71,15 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	}
 	tester = openTestSettings(t, restarted)
 	replaceTestPresetName(t, tester, "发送图片")
-	if err := tester.Click("编辑方案：体积优先"); err != nil {
+	if err := tester.Click("新增方案"); err != nil {
+		t.Fatal(err)
+	}
+	replaceTestPresetName(t, tester, "临时方案")
+	if err := tester.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	tester = openTestSettings(t, restarted)
+	if err := tester.Click("编辑方案：临时方案"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click("删除方案"); err != nil {
@@ -85,11 +93,11 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	}
 	again := newApplication()
 	again.restoreSettings()
-	if again.scheme != "发送图片" || again.quality != 73 || again.png != options || len(again.presets) != 3 {
-		t.Fatal("renaming the active scheme and deleting another scheme must survive restart")
+	if again.scheme != "发送图片" || again.quality != 73 || again.png != options || len(again.presets) != 4 {
+		t.Fatal("renaming the active custom scheme and deleting another custom scheme must survive restart")
 	}
 	for _, preset := range again.presets {
-		if preset.name == "手机分享" || preset.name == "体积优先" {
+		if preset.name == "手机分享" || preset.name == "临时方案" {
 			t.Fatalf("renamed and deleted entries must not return after restart: %+v", again.presets)
 		}
 	}
@@ -99,6 +107,10 @@ func TestCancelPresetEditsPreservesSavedConfiguration(t *testing.T) {
 	for _, exit := range []string{"取消", "Escape"} {
 		t.Run(exit, func(t *testing.T) {
 			application := testSelectedApplication()
+			application.presets = append(application.presets, compressionPreset{
+				name: "自定义方案", quality: 80, png: compress.DefaultPNGOptions(),
+			})
+			application.setScheme("自定义方案")
 			application.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 			if err := saveSettings(application.settingsFile, application.presets, application.scheme); err != nil {
 				t.Fatal(err)
@@ -134,6 +146,10 @@ func TestCancelPresetEditsPreservesSavedConfiguration(t *testing.T) {
 
 func TestSettingsSaveFailureKeepsDraftAndCompressionResult(t *testing.T) {
 	application := testSelectedApplication()
+	application.presets = append(application.presets, compressionPreset{
+		name: "自定义方案", quality: 80, png: compress.DefaultPNGOptions(),
+	})
+	application.setScheme("自定义方案")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	application.result = result
 	application.settingsFile = t.TempDir()
@@ -161,13 +177,18 @@ func TestInvalidPresetNamePreventsPublishingAndSaving(t *testing.T) {
 	for _, name := range []string{"", "体积优先"} {
 		t.Run("name="+name, func(t *testing.T) {
 			application := newApplication()
+			application.presets = append(application.presets, compressionPreset{
+				name: "自定义方案", quality: 80, png: compress.DefaultPNGOptions(),
+			})
+			application.setScheme("自定义方案")
+			expected := slices.Clone(application.presets)
 			tester := openTestSettings(t, application)
 			replaceTestPresetName(t, tester, name)
 			if err := tester.Click("保存"); err != nil {
 				t.Fatal(err)
 			}
 			if !application.settingsOpen || application.editor.message == "" ||
-				!reflect.DeepEqual(application.presets, compressionPresets) {
+				!reflect.DeepEqual(application.presets, expected) {
 				t.Fatal("empty or duplicate names must keep the draft open and leave active schemes unchanged")
 			}
 			if _, err := os.Stat(application.settingsFile); !os.IsNotExist(err) {
@@ -179,6 +200,10 @@ func TestInvalidPresetNamePreventsPublishingAndSaving(t *testing.T) {
 
 func TestRenamingActivePresetPreservesValidCompressionResult(t *testing.T) {
 	application := testSelectedApplication()
+	application.presets = append(application.presets, compressionPreset{
+		name: "日常备份", quality: 80, png: compress.DefaultPNGOptions(),
+	})
+	application.setScheme("日常备份")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	application.result = result
 	tester := openTestSettings(t, application)
@@ -190,17 +215,20 @@ func TestRenamingActivePresetPreservesValidCompressionResult(t *testing.T) {
 		t.Fatal("renaming without changing compression parameters must retain the valid result")
 	}
 	presets, selected, err := loadSettings(application.settingsFile)
-	if err != nil || selected != "日常压缩" || presets[1].name != "日常压缩" {
+	if err != nil || selected != "日常压缩" || presets[3].name != "日常压缩" {
 		t.Fatalf("the trimmed name and selection must be saved: selected=%q err=%v", selected, err)
 	}
 }
 
 func TestEditingInactivePresetPreservesActiveCompressionResult(t *testing.T) {
 	application := testSelectedApplication()
+	application.presets = append(application.presets, compressionPreset{
+		name: "待调整方案", quality: 60, png: compress.DefaultPNGOptions(),
+	})
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	application.result = result
 	tester := openTestSettings(t, application)
-	if err := tester.Click("编辑方案：体积优先"); err != nil {
+	if err := tester.Click("编辑方案：待调整方案"); err != nil {
 		t.Fatal(err)
 	}
 	application.editQuality(55)
@@ -208,14 +236,17 @@ func TestEditingInactivePresetPreservesActiveCompressionResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	if application.result != result || application.scheme != "均衡" || application.quality != 80 ||
-		application.presets[0].quality != 55 {
+		application.presets[3].quality != 55 {
 		t.Fatal("saving an inactive scheme must not invalidate the active result or change active parameters")
 	}
 }
 
 func TestDeletingActivePresetSelectsValidFallback(t *testing.T) {
 	application := testSelectedApplication()
-	application.setScheme("画质优先")
+	application.presets = append(application.presets, compressionPreset{
+		name: "临时方案", quality: 73, png: compress.DefaultPNGOptions(),
+	})
+	application.setScheme("临时方案")
 	application.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	tester := openTestSettings(t, application)
 	if err := tester.Click("删除方案"); err != nil {
@@ -231,34 +262,109 @@ func TestDeletingActivePresetSelectsValidFallback(t *testing.T) {
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
-	if application.scheme != "均衡" || application.quality != 80 || application.result != nil ||
-		len(application.presets) != 2 {
+	if application.scheme != "画质优先" || application.quality != 92 || application.result != nil ||
+		len(application.presets) != 3 {
 		t.Fatal("deleting the active scheme must choose a valid fallback and invalidate a changed result")
 	}
 	_, selected, err := loadSettings(application.settingsFile)
-	if err != nil || selected != "均衡" {
+	if err != nil || selected != "画质优先" {
 		t.Fatalf("the fallback selection must be saved: selected=%q err=%v", selected, err)
 	}
 }
 
-func TestCannotDeleteLastPreset(t *testing.T) {
+func TestCanDeleteOnlyCustomPresetWhileBuiltinsRemainLocked(t *testing.T) {
 	application := newApplication()
-	application.presets = []compressionPreset{compressionPresets[1]}
+	application.presets = append(application.presets, compressionPreset{
+		name: "唯一自定义", quality: 75, png: compress.DefaultPNGOptions(),
+	})
+	application.setScheme("唯一自定义")
 	tester := openTestSettings(t, application)
 	button, ok := tester.AccessByRole(ui.RoleButton, "删除方案")
+	if !ok || button.Disabled {
+		t.Fatal("deleting a custom scheme must be enabled when built-in schemes remain")
+	}
+	if err := tester.Click("删除方案"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("确认删除"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	if len(application.presets) != 3 || application.scheme != "画质优先" {
+		t.Fatalf("deleting the only custom scheme must keep built-ins and fall back cleanly: scheme=%q len=%d", application.scheme, len(application.presets))
+	}
+	tester = openTestSettings(t, application)
+	button, ok = tester.AccessByRole(ui.RoleButton, "删除方案")
 	if !ok || !button.Disabled {
-		t.Fatal("deleting the last remaining scheme must be disabled")
+		t.Fatal("deleting a built-in scheme must remain disabled")
 	}
 	application.editor.confirmDelete = true
 	application.deletePreset()
-	if len(application.editor.presets) != 1 {
-		t.Fatal("the state method must also preserve the last scheme")
+	if len(application.editor.presets) != 3 {
+		t.Fatal("the state method must never delete a built-in scheme")
+	}
+}
+
+func TestBuiltinPresetsCannotBeEditedOrDeleted(t *testing.T) {
+	application := newApplication()
+	application.advanced = true
+	tester := openTestSettings(t, application)
+	if !tester.HasText("内置") || !tester.HasText("内置方案不允许编辑或删除；如需调整可新增自定义方案。") {
+		t.Fatal("settings dialog must explain that built-in schemes are read-only")
+	}
+	for index, expected := range compressionPresets {
+		if err := tester.Click("查看方案：" + expected.name); err != nil {
+			t.Fatalf("failed to select built-in scheme %q: %v", expected.name, err)
+		}
+		nameField, ok := tester.AccessByRole(ui.RoleTextField, "方案名称")
+		if !ok || !nameField.Disabled {
+			t.Fatalf("built-in %q name field must be disabled: %+v", expected.name, nameField)
+		}
+		deleteButton, ok := tester.AccessByRole(ui.RoleButton, "删除方案")
+		if !ok || !deleteButton.Disabled {
+			t.Fatalf("built-in %q delete button must be disabled: %+v", expected.name, deleteButton)
+		}
+		for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+			slider, ok := tester.AccessByRole(ui.RoleSlider, label)
+			if !ok || !slider.Disabled {
+				t.Fatalf("built-in %q slider %q must be disabled: %+v", expected.name, label, slider)
+			}
+		}
+		tester.ClickAt(nameField.Bounds.X+nameField.Bounds.W/2, nameField.Bounds.Y+nameField.Bounds.H/2)
+		tester.Type("篡改名称")
+		qualitySlider, _ := tester.AccessByRole(ui.RoleSlider, "JPEG 质量")
+		tester.ClickAt(qualitySlider.Bounds.X+qualitySlider.Bounds.W/2, qualitySlider.Bounds.Y+qualitySlider.Bounds.H/2)
+		tester.Key(0, ui.KeyHome)
+		application.editQuality(15)
+		application.editPNGOptions(compress.PNGOptions{MinQuality: 1, MaxQuality: 10, Colors: 8, Speed: 10})
+		application.requestDeletePreset()
+		if application.editor.confirmDelete {
+			t.Fatalf("built-in %q must not enter delete confirmation", expected.name)
+		}
+		application.editor.confirmDelete = true
+		application.deletePreset()
+		application.editor.confirmDelete = false
+		if !reflect.DeepEqual(application.editor.presets[index], expected) {
+			t.Fatalf("built-in %q must remain immutable: got=%+v want=%+v", expected.name, application.editor.presets[index], expected)
+		}
+		if len(application.editor.presets) != len(compressionPresets) {
+			t.Fatalf("built-in %q must not be deleted", expected.name)
+		}
+	}
+	application.editor.presets[1].quality = 55
+	application.savePresetEdits()
+	if !application.settingsOpen || application.editor.message == "" ||
+		!reflect.DeepEqual(application.presets, compressionPresets) {
+		t.Fatal("saving tampered built-in parameters must be rejected")
 	}
 }
 
 func TestOpeningSettingsAgainKeepsUnsavedDraft(t *testing.T) {
 	application := newApplication()
 	openTestSettings(t, application)
+	application.addPreset()
 	application.editQuality(35)
 	editor := application.editor
 	application.setSettingsOpen(true)
