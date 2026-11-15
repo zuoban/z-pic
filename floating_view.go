@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	floatingCompactWidth   = 220
-	floatingCompactHeight  = 240
-	floatingExpandedWidth  = 600
-	floatingExpandedHeight = 460
+	floatingCompactWidth   = 176
+	floatingCompactHeight  = 184
+	floatingExpandedWidth  = 480
+	floatingExpandedHeight = 360
 )
 
 type floatingState struct {
@@ -184,7 +184,7 @@ func (s *application) floatingBitmap(item batchItem) *ui.Bitmap {
 func (s *application) floatingView(c *ui.Context) {
 	applyTheme(c)
 	theme := c.Theme()
-	theme.Radius = 16
+	theme.Radius = 12
 	c.SetTheme(theme)
 	s.prepareFloatingThumbnails()
 	indices := s.floatingIndices()
@@ -208,7 +208,7 @@ func (s *application) floatingView(c *ui.Context) {
 		background = ui.Transparent
 		c.Root().Background(ui.Transparent)
 	}
-	root := ui.Column(c).Fill().Padding(12).Gap(8).Background(background)
+	root := ui.Column(c).Fill().Padding(8).Gap(4).Background(background)
 	_, over := ui.DataDragOver(root, options)
 	if drop, ok := ui.DropData(root, options); ok {
 		s.receiveDrop(drop.Data)
@@ -216,7 +216,7 @@ func (s *application) floatingView(c *ui.Context) {
 	if over {
 		root.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			p.Stroke(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 2, W: bounds.W - 4, H: bounds.H - 4},
-				theme.Accent, 22, 2)
+				theme.Accent, 18, 2)
 		})
 	}
 	root.Children(func() {
@@ -234,7 +234,7 @@ func (s *application) floatingView(c *ui.Context) {
 			})
 			return
 		}
-		ui.Row(c).Height(32).DragWindow().Children(func() {
+		ui.Row(c).Height(28).DragWindow().Children(func() {
 			floatingIconButton(c, "floating-close", "收起", "close",
 				func() { s.setFloatingOpen(false) })
 			ui.Box(c).Grow(1)
@@ -250,12 +250,12 @@ func (s *application) floatingView(c *ui.Context) {
 			label = "松开加入队列"
 		}
 		ui.Row(c).FillWidth().Center().Children(func() {
-			ui.ButtonBase(c.Key("floating-count")).Height(32).Padding(0, 12).Gap(6).
-				Radius(16).Background(theme.Text.Alpha(0.07)).Label(label).
+			ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 8).Gap(4).
+				Radius(14).Background(theme.Text.Alpha(0.07)).Label(label).
 				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
 				OnClick(func() { s.setFloatingExpanded(true) }).Children(func() {
-				ui.Text(c, label).FontSize(13).FontWeight(500)
-				floatingIcon(c, "right", 14, theme.TextMuted)
+				ui.Text(c, label).FontSize(12).FontWeight(500)
+				floatingIcon(c, "right", 12, theme.TextMuted)
 			})
 		})
 		s.floatingFeedback(c)
@@ -278,13 +278,14 @@ func (s *application) floatingStack(c *ui.Context) {
 		Draw(func(p *ui.Painter, bounds ui.Rect) {
 			centerX, centerY := bounds.X+bounds.W/2, bounds.Y+bounds.H/2
 			if len(bitmaps) == 0 {
-				drawFloatingIcon(p, ui.Rect{X: centerX - 24, Y: centerY - 30, W: 48, H: 48},
+				drawFloatingIcon(p, ui.Rect{X: centerX - 18, Y: centerY - 18, W: 36, H: 36},
 					"photo", theme.TextMuted)
 				return
 			}
 			for index, bitmap := range bitmaps {
 				angle := []float32{-9, 7, 0}[3-len(bitmaps)+index]
-				rect := ui.Rect{X: centerX - 53, Y: centerY - 38, W: 106, H: 76}
+				width, height := min(float32(92), bounds.W-24), min(float32(64), bounds.H-16)
+				rect := ui.Rect{X: centerX - width/2, Y: centerY - height/2, W: width, H: height}
 				if bitmap != nil {
 					width, height := bitmap.Size()
 					scale := min(rect.W/float32(width), rect.H/float32(height))
@@ -311,11 +312,11 @@ func (s *application) floatingStack(c *ui.Context) {
 
 func (s *application) floatingHeader(c *ui.Context) {
 	theme := c.Theme()
-	ui.Row(c).Height(48).Gap(10).AlignItems(ui.Center).DragWindow().Children(func() {
+	ui.Row(c).Height(40).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		floatingIconButton(c, "floating-collapse", "收起图片", "back",
 			func() { s.setFloatingExpanded(false) })
-		ui.Column(c).Grow(1).Width(0).Gap(3).Children(func() {
-			ui.Textf(c, "%d 张图片", s.floatingImageCount()).FontSize(18).FontWeight(600)
+		ui.Column(c).Grow(1).Width(0).Gap(2).Children(func() {
+			ui.Textf(c, "%d 张图片", s.floatingImageCount()).FontSize(16).FontWeight(600)
 			detail := "拖入本地或网页图片"
 			if item, ok := s.floatingSelectedImage(); ok {
 				detail = "选择：1 张图片 · " + formatSize(item.originalSize)
@@ -338,7 +339,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(2).Padding(2).Radius(18).Background(theme.Text.Alpha(0.06)).Children(func() {
+		ui.Row(c).Gap(2).Padding(2).Radius(16).Background(theme.Text.Alpha(0.06)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -360,10 +361,10 @@ func (s *application) floatingHeader(c *ui.Context) {
 func (s *application) floatingGallery(c *ui.Context, indices []int) {
 	if len(indices) == 0 {
 		theme := c.Theme()
-		ui.Column(c).FillWidth().Grow(1).Center().Gap(10).Children(func() {
-			floatingIcon(c, "photo", 48, theme.TextMuted)
+		ui.Column(c).FillWidth().Grow(1).Center().Gap(8).Children(func() {
+			floatingIcon(c, "photo", 40, theme.TextMuted)
 			if s.floatingImageCount() == 0 {
-				ui.Text(c, "拖入图片").FontSize(16).FontWeight(500)
+				ui.Text(c, "拖入图片").FontSize(14).FontWeight(500)
 				ui.Text(c, "本地或网页图片 · JPEG / PNG / WebP").FontSize(12).TextColor(theme.TextMuted)
 			} else {
 				ui.Text(c, "没有符合筛选条件的图片").FontSize(14)
@@ -390,14 +391,14 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 		state := &s.floating.list
 		state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
 		gallery = ui.List(c.Key("floating-gallery-list"), state, len(indices)+1).
-			Label("悬浮窗图片列表").FillWidth().Grow(1).Gap(6)
+			Label("悬浮窗图片列表").FillWidth().Grow(1).Gap(4)
 		gallery.Rows(func(row ui.ListRow) {
 			s.floatingGalleryItem(row.Context, indices, row.Index, true)
 		})
 	} else {
 		state := &s.floating.grid
 		state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
-		gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 164, 160,
+		gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 128,
 			func(position int) { s.floatingGalleryItem(c, indices, position, false) }).
 			Label("悬浮窗图片网格").FillWidth().Grow(1)
 	}
@@ -418,19 +419,21 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	if position == len(indices) {
 		_, selected := s.floatingSelectedImage()
 		foreground, iconColor := theme.Text, theme.TextMuted
-		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(12).
+		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).
 			Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 			Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 			OnClick(s.revealFloatingSelection)
 		if s.floating.cursor == position {
-			button.Radius(14).Background(theme.Accent)
+			button.Radius(12).Background(theme.Accent)
 			foreground, iconColor = theme.AccentText, theme.AccentText
 		}
+		iconSize := float32(36)
 		if list {
-			button.Height(64).Row().Gap(12)
+			button.Height(56).Row().Gap(8)
+			iconSize = 28
 		}
 		button.Children(func() {
-			floatingIcon(c, "reveal", 48, iconColor)
+			floatingIcon(c, "reveal", iconSize, iconColor)
 			ui.Text(c, floatingRevealLabel()).FontSize(13).TextColor(foreground)
 		})
 		return
@@ -442,21 +445,21 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	if selected {
 		background, foreground, secondary = theme.Accent, theme.AccentText, theme.AccentText
 	}
-	tile := ui.Column(c).Fill().Padding(12).Gap(8).Radius(14).Background(background).
+	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(12).Background(background).
 		Tooltip(item.path)
 	if list {
-		tile.Row().Height(72).Gap(12).AlignItems(ui.Center)
+		tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
 	}
 	tile.Children(func() {
 		image := ui.Column(c).Grow(1).FillWidth().Center()
 		if list {
-			image.Grow(0).Size(68, 48).Shrink(0)
+			image.Grow(0).Size(56, 40).Shrink(0)
 		}
 		image.Children(func() {
 			if bitmap != nil {
-				maxWidth, maxHeight := float32(120), float32(84)
+				maxWidth, maxHeight := float32(96), float32(64)
 				if list {
-					maxWidth, maxHeight = 68, 48
+					maxWidth, maxHeight = 56, 40
 				}
 				width, height := bitmap.Size()
 				scale := min(maxWidth/float32(width), maxHeight/float32(height))
@@ -469,7 +472,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 				}
 			}
 		})
-		details := ui.Column(c).FillWidth().Gap(4)
+		details := ui.Column(c).FillWidth().Gap(2)
 		if list {
 			details.Width(0).Grow(1)
 		}
@@ -534,7 +537,7 @@ func (s *application) floatingFeedback(c *ui.Context) {
 
 func floatingIconButton(c *ui.Context, key, label, icon string, action func()) ui.Element {
 	theme := c.Theme()
-	button := ui.ButtonBase(c.Key(key)).Size(32, 32).Shrink(0).Radius(16).
+	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(14).
 		Background(theme.Text.Alpha(0.07)).Label(label).Tooltip(label)
 	if button.Hovered() {
 		button.Background(theme.Text.Alpha(0.12))
@@ -542,7 +545,7 @@ func floatingIconButton(c *ui.Context, key, label, icon string, action func()) u
 	if action != nil {
 		button.OnClick(action)
 	}
-	button.Children(func() { floatingIcon(c, icon, 18, theme.Text) })
+	button.Children(func() { floatingIcon(c, icon, 16, theme.Text) })
 	return button
 }
 
