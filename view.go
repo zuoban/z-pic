@@ -329,6 +329,10 @@ func (s *application) settingsView(c *ui.Context) {
 				locked := editor.selectedBuiltin()
 				ui.Button(c.Key("add-preset"), "新增方案").Height(32).
 					Disabled(s.busy).OnClick(s.addPreset)
+				ui.Button(c.Key("duplicate-preset"), "复制方案").Height(32).
+					Tooltip("复制当前方案的参数，创建可编辑的自定义方案").
+					Disabled(s.busy || editor.selectedPreset() == nil).
+					OnClick(s.duplicatePreset)
 				deleteButton := ui.Button(c.Key("delete-preset"), "删除方案").Height(32).TextColor(t.Danger).
 					Disabled(s.busy || locked || len(editor.presets) <= 1).
 					OnClick(s.requestDeletePreset)
@@ -343,7 +347,7 @@ func (s *application) settingsView(c *ui.Context) {
 					ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Radius(8).
 						Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Children(func() {
 						ui.Badge(c, "内置")
-						ui.Text(c, "内置方案不允许编辑或删除；如需调整可新增自定义方案。").
+						ui.Text(c, "内置方案不允许编辑或删除；如需调整可复制为自定义方案。").
 							FontSize(12).TextColor(t.TextMuted).Width(0).Grow(1)
 					})
 				}

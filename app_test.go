@@ -717,7 +717,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 				c.SetTheme(theme)
 				s.settingsView(c)
 			}, 760, 560)
-			for _, label := range []string{"取消", "保存", "新增方案", "删除方案"} {
+			for _, label := range []string{"取消", "保存", "新增方案", "复制方案", "删除方案"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				wantDisabled := label == "删除方案"
 				if !ok || button.Disabled != wantDisabled || button.Offscreen || button.Bounds.H < 28 ||
@@ -734,7 +734,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 			}
 			s.addPreset()
 			tt.Frame()
-			for _, label := range []string{"取消", "保存", "新增方案", "删除方案"} {
+			for _, label := range []string{"取消", "保存", "新增方案", "复制方案", "删除方案"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Disabled || button.Offscreen || button.Bounds.H < 28 ||
 					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 
@@ -32,6 +33,206 @@ func replaceTestPresetName(t *testing.T, tester *ui.Tester, name string) {
 	tester.ClickAt(field.Bounds.X+field.Bounds.W/2, field.Bounds.Y+field.Bounds.H/2)
 	tester.Key(ui.Cmd, ui.KeyA)
 	tester.Type(name)
+}
+
+func TestDuplicatePresetCopiesCurrentDraft(t *testing.T) {
+	cases := []struct {
+		name        string
+		sourceIndex int
+		editSource  bool
+	}{
+		{name: "builtin size", sourceIndex: 0},
+		{name: "builtin balanced", sourceIndex: 1},
+		{name: "builtin quality", sourceIndex: 2},
+		{name: "unsaved custom", sourceIndex: 3, editSource: true},
+	}
+	for _, scenario := range cases {
+		t.Run(scenario.name, func(t *testing.T) {
+			application := testSelectedApplication()
+			application.presets = append(application.presets, compressionPreset{
+				name: "已保存方案", quality: 75, png: compress.DefaultPNGOptions(),
+			})
+			openTestSettings(t, application)
+			editor := application.editor
+			editor.selected = scenario.sourceIndex
+			if scenario.editSource {
+				editor.selectedPreset().name = "未保存参数"
+				application.editQuality(43)
+				application.editPNGOptions(compress.PNGOptions{MinQuality: 12, MaxQuality: 67, Colors: 83, Speed: 9})
+			}
+			source := *editor.selectedPreset()
+			originals := slices.Clone(editor.presets)
+			published := slices.Clone(application.presets)
+			active := editor.active
+			editor.message, editor.confirmDelete = "旧提示", true
+			application.duplicatePreset()
+			expected := source
+			expected.name, expected.builtin = source.name+" 副本", false
+			if len(editor.presets) != len(originals)+1 || editor.selected != len(originals) ||
+				*editor.selectedPreset() != expected || editor.active != active ||
+				editor.message != "" || editor.confirmDelete ||
+				!reflect.DeepEqual(editor.presets[:len(originals)], originals) {
+				t.Fatalf("copy must append and select an independent custom draft: editor=%+v", editor)
+			}
+			application.editQuality(26)
+			editedPNG := compress.PNGOptions{MinQuality: 4, MaxQuality: 52, Colors: 32, Speed: 11}
+			application.editPNGOptions(editedPNG)
+			editor.selectedPreset().name = "编辑后的副本"
+			if editor.selectedPreset().quality != 26 || editor.selectedPreset().png != editedPNG ||
+				!reflect.DeepEqual(editor.presets[:len(originals)], originals) ||
+				!reflect.DeepEqual(application.presets, published) {
+				t.Fatal("editing a copy must leave the source draft and published schemes unchanged")
+			}
+		})
+	}
+}
+
+func TestDuplicatePresetUniqueNames(t *testing.T) {
+	longName := strings.Repeat("图", 40)
+	cases := []struct {
+		name      string
+		source    string
+		conflicts []string
+		expected  string
+	}{
+		{name: "plain", source: "手机分享", expected: "手机分享 副本"},
+		{name: "trimmed drafts", source: " 手机分享 ", conflicts: []string{" 手机分享 副本 ", "\t手机分享 副本 2\n"}, expected: "手机分享 副本 3"},
+		{name: "first available suffix", source: "手机分享", conflicts: []string{"手机分享 副本", "手机分享 副本 3"}, expected: "手机分享 副本 2"},
+		{name: "exact limit", source: strings.Repeat("图", 37), expected: strings.Repeat("图", 37) + " 副本"},
+		{name: "long Chinese", source: longName, expected: strings.Repeat("图", 37) + " 副本"},
+		{name: "long Unicode", source: strings.Repeat("图📷", 20), expected: strings.Repeat("图📷", 18) + "图 副本"},
+		{name: "long collision", source: longName, conflicts: []string{strings.Repeat("图", 37) + " 副本", strings.Repeat("图", 35) + " 副本 2"}, expected: strings.Repeat("图", 35) + " 副本 3"},
+		{name: "two digit suffix", source: longName, conflicts: []string{
+			strings.Repeat("图", 37) + " 副本",
+			strings.Repeat("图", 35) + " 副本 2", strings.Repeat("图", 35) + " 副本 3",
+			strings.Repeat("图", 35) + " 副本 4", strings.Repeat("图", 35) + " 副本 5",
+			strings.Repeat("图", 35) + " 副本 6", strings.Repeat("图", 35) + " 副本 7",
+			strings.Repeat("图", 35) + " 副本 8", strings.Repeat("图", 35) + " 副本 9",
+		}, expected: strings.Repeat("图", 34) + " 副本 10"},
+	}
+	for _, scenario := range cases {
+		t.Run(scenario.name, func(t *testing.T) {
+			application := newApplication()
+			openTestSettings(t, application)
+			application.addPreset()
+			application.editor.selectedPreset().name = scenario.source
+			for _, name := range scenario.conflicts {
+				application.editor.presets = append(application.editor.presets, compressionPreset{name: name})
+			}
+			application.duplicatePreset()
+			actual := application.editor.selectedPreset().name
+			if actual != scenario.expected || !utf8.ValidString(actual) || utf8.RuneCountInString(actual) > 40 {
+				t.Fatalf("unexpected unique name: got=%q want=%q", actual, scenario.expected)
+			}
+			for _, existing := range application.editor.presets[:application.editor.selected] {
+				if strings.TrimSpace(existing.name) == actual {
+					t.Fatalf("copy name conflicts with draft %q", existing.name)
+				}
+			}
+		})
+	}
+}
+
+func TestDuplicatePresetCancelSaveAndRestart(t *testing.T) {
+	for _, exit := range []string{"取消", "Escape", "保存"} {
+		t.Run(exit, func(t *testing.T) {
+			application := testSelectedApplication()
+			application.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+			t.Setenv("ZPIC_CONFIG_FILE", application.settingsFile)
+			if err := saveSettings(application.settingsFile, application.presets, application.scheme); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(application.settingsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+			application.result = result
+			presets := slices.Clone(application.presets)
+			scheme, options, message := application.scheme, application.compressionOptions(), application.message
+			tester := openTestSettings(t, application)
+			active := application.editor.active
+			application.editor.selected = 0
+			application.duplicatePreset()
+			application.editQuality(47)
+			application.editPNGOptions(compress.PNGOptions{MinQuality: 15, MaxQuality: 63, Colors: 74, Speed: 8})
+			copyPreset := *application.editor.selectedPreset()
+			afterCopy, err := os.ReadFile(application.settingsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if application.editor.active != active || !bytes.Equal(before, afterCopy) ||
+				!reflect.DeepEqual(application.presets, presets) || application.scheme != scheme ||
+				application.compressionOptions() != options || application.result != result || application.message != message {
+				t.Fatal("copying and editing must preserve active state, result, published presets and disk bytes")
+			}
+			if exit == "Escape" {
+				tester.Key(0, ui.KeyEscape)
+			} else if err := tester.Click(exit); err != nil {
+				t.Fatal(err)
+			}
+			if application.settingsOpen || application.editor != nil || application.scheme != scheme ||
+				application.compressionOptions() != options || application.result != result {
+				t.Fatal("closing settings must retain the active scheme and compression result")
+			}
+			expected := presets
+			if exit == "保存" {
+				expected = append(slices.Clone(presets), copyPreset)
+			} else {
+				afterCancel, err := os.ReadFile(application.settingsFile)
+				if err != nil || !bytes.Equal(before, afterCancel) {
+					t.Fatalf("cancel must preserve disk bytes: %v", err)
+				}
+			}
+			restarted := newApplication()
+			restarted.restoreSettings()
+			if !reflect.DeepEqual(application.presets, expected) || !reflect.DeepEqual(restarted.presets, expected) ||
+				restarted.scheme != scheme || restarted.compressionOptions() != options {
+				t.Fatal("restart must restore only saved presets and the unchanged active selection")
+			}
+			if exit == "保存" {
+				restarted.setScheme(copyPreset.name)
+				if restarted.quality != copyPreset.quality || restarted.png != copyPreset.png {
+					t.Fatal("saved copy must be selectable with all copied parameters after restart")
+				}
+			}
+		})
+	}
+}
+
+func TestDuplicatePresetGuards(t *testing.T) {
+	for _, guard := range []string{"busy", "no editor", "negative selection", "past end", "empty presets"} {
+		t.Run(guard, func(t *testing.T) {
+			application := newApplication()
+			openTestSettings(t, application)
+			application.editor.message, application.editor.confirmDelete = "保留提示", true
+			switch guard {
+			case "busy":
+				application.busy = true
+			case "no editor":
+				application.editor = nil
+			case "negative selection":
+				application.editor.selected = -1
+			case "past end":
+				application.editor.selected = len(application.editor.presets)
+			case "empty presets":
+				application.editor.presets = nil
+			}
+			var expected *presetEditor
+			if application.editor != nil {
+				snapshot := *application.editor
+				snapshot.presets = slices.Clone(snapshot.presets)
+				expected = &snapshot
+			}
+			application.duplicatePreset()
+			if !reflect.DeepEqual(application.editor, expected) {
+				t.Fatal("guarded copy must leave the editor unchanged")
+			}
+			if _, err := os.Stat(application.settingsFile); !os.IsNotExist(err) {
+				t.Fatalf("guarded copy must not create a settings file: %v", err)
+			}
+		})
+	}
 }
 
 func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
@@ -311,7 +512,7 @@ func TestBuiltinPresetsCannotBeEditedOrDeleted(t *testing.T) {
 	application := newApplication()
 	application.advanced = true
 	tester := openTestSettings(t, application)
-	if !tester.HasText("内置") || !tester.HasText("内置方案不允许编辑或删除；如需调整可新增自定义方案。") {
+	if !tester.HasText("内置") || !tester.HasText("内置方案不允许编辑或删除；如需调整可复制为自定义方案。") {
 		t.Fatal("settings dialog must explain that built-in schemes are read-only")
 	}
 	for index, expected := range compressionPresets {

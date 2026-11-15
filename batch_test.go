@@ -969,7 +969,7 @@ func TestBatchRetryFailedItemsAndSingleItemRetry(t *testing.T) {
 	s.batch.items[brokenIdx].status = batchPending
 	s.batch.items[brokenIdx].invalidInput = false
 	s.completeBatchRun(context.Background())
-	if s.failed || !strings.Contains(s.message, "重试完成，当前已完成 2 张，剩余 2 张待压缩") {
+	if s.failed || !strings.Contains(s.message, "当前已完成 2 张，剩余 2 张待压缩") {
 		t.Fatalf("retry completion without remaining failures must report neutral progress: failed=%v msg=%q", s.failed, s.message)
 	}
 	s.batch.items[brokenIdx].status = batchFailed

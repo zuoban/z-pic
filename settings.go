@@ -196,6 +196,35 @@ func (s *application) addPreset() {
 	editor.message, editor.confirmDelete = "", false
 }
 
+func (s *application) duplicatePreset() {
+	if s.busy || s.editor == nil {
+		return
+	}
+	editor := s.editor
+	source := editor.selectedPreset()
+	if source == nil {
+		return
+	}
+	preset := *source
+	preset.builtin = false
+	sourceName := []rune(strings.TrimSpace(source.name))
+	for number := 1; ; number++ {
+		suffix := " 副本"
+		if number > 1 {
+			suffix = fmt.Sprintf(" 副本 %d", number)
+		}
+		preset.name = string(sourceName[:min(len(sourceName), 40-len([]rune(suffix)))]) + suffix
+		if !slices.ContainsFunc(editor.presets, func(existing compressionPreset) bool {
+			return strings.TrimSpace(existing.name) == strings.TrimSpace(preset.name)
+		}) {
+			break
+		}
+	}
+	editor.presets = append(editor.presets, preset)
+	editor.selected = len(editor.presets) - 1
+	editor.message, editor.confirmDelete = "", false
+}
+
 func (s *application) requestDeletePreset() {
 	if s.busy || s.editor == nil || s.editor.selectedBuiltin() || len(s.editor.presets) <= 1 {
 		return

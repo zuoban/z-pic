@@ -305,7 +305,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			ui.Button(c.Key("batch-retry-item"), "重试").Height(32).
 				Disabled(s.busy).
 				Tooltip("重新压缩此失败图片").
-				OnClick(func() { s.retryBatchItem(selected) })
+				OnClick(func() { s.compressBatchItem(selected) })
 		}
 		if outPath := batchItemOutputPath(item); outPath != "" {
 			ui.Button(c.Key("batch-reveal-item"), "定位文件").Height(32).
@@ -398,11 +398,19 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 					ui.Text(c, meta).FontSize(12).FontFeatures("tnum").TextColor(metaColor).
 						SingleLine().TruncateMiddle().Tooltip(metaTooltip)
 				})
-				if previewItem != nil && previewItem.status == batchFailed && !previewItem.invalidInput {
-					ui.Button(c.Key("batch-preview-retry"), "重试").Height(32).
-						Disabled(s.busy).
-						Tooltip("重新压缩此失败图片").
-						OnClick(func() { s.retryBatchItem(previewIdx) })
+				if previewItem != nil && !previewItem.invalidInput {
+					switch previewItem.status {
+					case batchPending:
+						ui.Button(c.Key("batch-preview-compress"), "压缩此张").Height(32).
+							Disabled(s.busy).
+							Tooltip("仅压缩此图片，完成后可在队列中预览结果").
+							OnClick(func() { s.compressBatchItem(previewIdx) })
+					case batchFailed:
+						ui.Button(c.Key("batch-preview-retry"), "重试").Height(32).
+							Disabled(s.busy).
+							Tooltip("重新压缩此失败图片").
+							OnClick(func() { s.compressBatchItem(previewIdx) })
+					}
 				}
 				if previewItem != nil {
 					if outPath := batchItemOutputPath(*previewItem); outPath != "" {

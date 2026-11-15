@@ -859,7 +859,7 @@ func (s *application) retryFailedBatchItems() {
 	s.beginBatchRunMode(batchRunRetryFailed, -1)
 }
 
-func (s *application) retryBatchItem(index int) {
+func (s *application) compressBatchItem(index int) {
 	s.beginBatchRunMode(batchRunSingle, index)
 }
 
@@ -887,7 +887,7 @@ func itemMatchesBatchRunMode(index int, item batchItem, mode batchRunMode, singl
 	case batchRunRetryFailed:
 		return item.status == batchFailed
 	case batchRunSingle:
-		return index == singleIndex && item.status == batchFailed
+		return index == singleIndex && (item.status == batchPending || item.status == batchFailed)
 	default:
 		return item.status == batchPending
 	}
@@ -1236,7 +1236,7 @@ func (s *application) completeBatchRun(ctx context.Context) {
 			s.setMessage(fmt.Sprintf("当前已完成 %d 张，失败 %d 张，剩余 %d 张待压缩。", done, failed, pending), true)
 			return
 		}
-		s.setMessage(fmt.Sprintf("重试完成，当前已完成 %d 张，剩余 %d 张待压缩。", done, pending), false)
+		s.setMessage(fmt.Sprintf("当前已完成 %d 张，剩余 %d 张待压缩。", done, pending), false)
 		return
 	}
 	if failed > 0 && done == 0 {
