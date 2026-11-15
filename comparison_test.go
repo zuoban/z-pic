@@ -404,3 +404,74 @@ func TestComparisonSharesImageGeometry(t *testing.T) {
 			red, green, blue)
 	}
 }
+
+func TestComparisonZoomShortcutsAndGuards(t *testing.T) {
+	s := testLargeComparisonApplication()
+	tester := ui.NewTester(s.view, 880, 660)
+	canvas := comparisonCanvas(t, tester)
+	fitScale := s.previewScale(canvas.Bounds)
+
+	for _, label := range []string{"缩小", "放大", "适应", "1:1"} {
+		btn, ok := tester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.KeyShortcuts == "" {
+			t.Fatalf("%q must expose shortcut metadata: %+v", label, btn)
+		}
+	}
+
+	tester.Key(ui.Cmd, ui.KeyEqual)
+	zoomed := s.comparison.scale
+	if zoomed <= fitScale {
+		t.Fatalf("Cmd+= must zoom in above fit scale: zoomed=%.4f fit=%.4f", zoomed, fitScale)
+	}
+
+	tester.Key(ui.Cmd|ui.Shift, ui.KeyEqual)
+	zoomedMore := s.comparison.scale
+	if zoomedMore <= zoomed {
+		t.Fatalf("Cmd+Shift+= must also zoom in: before=%.4f after=%.4f", zoomed, zoomedMore)
+	}
+
+	tester.Key(ui.Cmd, ui.KeyMinus)
+	if s.comparison.scale >= zoomedMore {
+		t.Fatalf("Cmd+- must zoom out: before=%.4f after=%.4f", zoomedMore, s.comparison.scale)
+	}
+
+	tester.Key(ui.Cmd, ui.Key1)
+	if s.comparison.scale != 1 || !tester.HasText("100%") {
+		t.Fatalf("Cmd+1 must zoom to 100%%, got scale=%.4f", s.comparison.scale)
+	}
+
+	s.comparison.offset = ui.Point{X: 24, Y: -18}
+	tester.Key(ui.Cmd, ui.Key0)
+	if s.comparison.scale != 0 || s.comparison.offset != (ui.Point{}) {
+		t.Fatalf("Cmd+0 must reset to fit and center offset, got scale=%.4f offset=%+v", s.comparison.scale, s.comparison.offset)
+	}
+
+	for _, state := range []string{"busy", "settings", "confirmation"} {
+		t.Run(state, func(t *testing.T) {
+			s.busy = state == "busy"
+			s.settingsOpen = state == "settings"
+			s.confirmOverwrite = state == "confirmation"
+			s.comparison.scale = 0.75
+			s.comparison.offset = ui.Point{X: 10, Y: -5}
+			tester.Frame()
+
+			for _, modKey := range []struct {
+				mods ui.Modifiers
+				key  ui.Key
+			}{
+				{ui.Cmd, ui.KeyEqual},
+				{ui.Cmd | ui.Shift, ui.KeyEqual},
+				{ui.Cmd, ui.KeyMinus},
+				{ui.Cmd, ui.Key0},
+				{ui.Cmd, ui.Key1},
+			} {
+				tester.Key(modKey.mods, modKey.key)
+			}
+			if s.comparison.scale != 0.75 || s.comparison.offset != (ui.Point{X: 10, Y: -5}) {
+				t.Fatalf("guarded zoom shortcuts must not alter scale or offset during %s: scale=%.4f offset=%+v",
+					state, s.comparison.scale, s.comparison.offset)
+			}
+			s.busy, s.settingsOpen, s.confirmOverwrite = false, false, false
+		})
+	}
+}

@@ -76,21 +76,49 @@ func (s *application) zoomPreview(scale float64, anchor ui.Point) {
 	s.clampPreviewOffset()
 }
 
+func (s *application) previewViewportCenter() ui.Point {
+	return ui.Point{X: s.comparison.viewport.W / 2, Y: s.comparison.viewport.H / 2}
+}
+
+func (s *application) zoomPreviewBy(factor float64) {
+	if s.previewLocked() || s.preview == nil || s.file == nil {
+		return
+	}
+	s.zoomPreview(s.previewScale(s.comparison.viewport)*factor, s.previewViewportCenter())
+}
+
+func (s *application) resetPreviewFit() {
+	if s.previewLocked() || s.preview == nil {
+		return
+	}
+	s.comparison.scale, s.comparison.offset = 0, ui.Point{}
+}
+
+func (s *application) zoomPreviewActual() {
+	if s.previewLocked() || s.preview == nil || s.file == nil {
+		return
+	}
+	s.zoomPreview(1, s.previewViewportCenter())
+}
+
 func (s *application) previewToolbar(c *ui.Context) {
 	t := c.Theme()
 	locked := s.previewLocked()
 	bounds := s.comparison.viewport
 	scale := s.previewScale(bounds)
-	center := ui.Point{X: bounds.W / 2, Y: bounds.H / 2}
 	ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 		for _, action := range []struct {
 			key, label string
+			keyCode    ui.Key
+			hintKey    string
 			factor     float64
 		}{
-			{"zoom-out", "缩小", 0.8},
-			{"zoom-in", "放大", 1.25},
+			{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
+			{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
 		} {
-			button := ui.Button(c.Key(action.key), "").Label(action.label).Tooltip(action.label).
+			button := ui.Button(c.Key(action.key), "").Label(action.label).
+				KeyShortcuts(ui.Cmd, action.keyCode).
+				Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
 				Size(32, 32).Disabled(locked || (action.factor < 1 && scale <= 0.01) ||
 				(action.factor > 1 && scale >= 16))
 			button.DrawOver(func(p *ui.Painter, r ui.Rect) {
@@ -99,19 +127,19 @@ func (s *application) previewToolbar(c *ui.Context) {
 					p.Line(r.X+r.W/2, r.Y+11, r.X+r.W/2, r.Y+r.H-11, 1.5, t.Text)
 				}
 			}).OnClick(func() {
-				bounds := s.comparison.viewport
-				s.zoomPreview(s.previewScale(bounds)*action.factor,
-					ui.Point{X: bounds.W / 2, Y: bounds.H / 2})
+				s.zoomPreviewBy(action.factor)
 			})
 		}
 		ui.Textf(c, "%.0f%%", scale*100).Width(52).FontSize(12).
 			FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted)
 		ui.Button(c.Key("preview-fit"), "适应").Height(32).Disabled(locked).
-			Tooltip("完整显示图片，重置缩放和位置").
-			OnClick(func() { s.comparison.scale, s.comparison.offset = 0, ui.Point{} })
+			KeyShortcuts(ui.Cmd, ui.Key0).
+			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
+			OnClick(s.resetPreviewFit)
 		ui.Button(c.Key("preview-actual"), "1:1").Height(32).Disabled(locked).
-			Tooltip("按原始尺寸查看（100%）").
-			OnClick(func() { s.zoomPreview(1, center) })
+			KeyShortcuts(ui.Cmd, ui.Key1).
+			Tooltip("按原始尺寸查看（100%） · " + shortcutLabel("1")).
+			OnClick(s.zoomPreviewActual)
 		ui.Box(c).Grow(1)
 		hint := "滚轮缩放"
 		if s.comparing() {

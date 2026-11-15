@@ -12,8 +12,10 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -1065,6 +1067,15 @@ func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
 				searchField.Bounds.X+searchField.Bounds.W > 880 || searchField.Bounds.Y+searchField.Bounds.H > 660 {
 				t.Fatalf("search field must fit comfortably inside minimum window: %+v", searchField)
 			}
+			filterGroup, ok := tt.AccessByRole(ui.RoleRadioGroup, "队列筛选")
+			if !ok || filterGroup.Offscreen || filterGroup.Bounds.X+filterGroup.Bounds.W > 880 {
+				t.Fatalf("filter group must fit inside minimum window: %+v", filterGroup)
+			}
+			sortBtn, ok := tt.AccessByRole(ui.RoleMenuButton, "队列排序")
+			if !ok || sortBtn.Offscreen || sortBtn.Bounds.X < filterGroup.Bounds.X+filterGroup.Bounds.W ||
+				sortBtn.Bounds.X+sortBtn.Bounds.W > 880 || sortBtn.Bounds.Y+sortBtn.Bounds.H > 660 {
+				t.Fatalf("sort menu button must sit beside filter without overlap inside 880x660: filter=%+v sort=%+v", filterGroup, sortBtn)
+			}
 			for _, label := range []string{"重试失败项", "重试", "预览", "移除"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Offscreen || button.Bounds.H < 24 ||
@@ -1278,5 +1289,295 @@ func TestBatchPreviewQuickActionsAndMinimumWindowLayout(t *testing.T) {
 				t.Fatalf("clicking 移除 in preview must remove previewed item and close preview: %+v", s.batch)
 			}
 		})
+	}
+}
+
+func TestBatchDonePreviewWithComparisonFitsMinimumWindow(t *testing.T) {
+	srcImg := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 24, 16)))
+	outImg := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 24, 16)))
+	for _, dark := range []bool{false, true} {
+		name := "light"
+		if dark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			items := make([]batchItem, 100)
+			for i := range items {
+				items[i] = batchItem{
+					path: "/p/img.jpg", absPath: "/p/img-" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".jpg",
+					relPath: "img.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048,
+					status: batchDone, savedPath: "/out/img.jpg",
+				}
+			}
+			s := newApplication()
+			s.batch = newBatchState(items)
+			s.completeBatchPreview(context.Background(), 99, s.batch.items[99],
+				&selectedImage{path: s.batch.items[99].path, format: "jpeg", width: 24, height: 16, size: 4096, preview: srcImg},
+				&compress.Result{SourcePath: s.batch.items[99].path, Format: "jpeg", Width: 24, Height: 16, OriginalSize: 4096, OutputSize: 2048},
+				outImg, nil)
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.LightTheme()
+				if dark {
+					theme = ui.DarkTheme()
+				}
+				c.SetTheme(theme)
+				s.view(c)
+			}, 880, 660)
+			if !tt.HasText("100 / 100") {
+				t.Fatalf("preview header must show 100 / 100 counter, texts=%v", tt.Texts())
+			}
+			for _, label := range []string{"返回列表", "上一张", "下一张", "缩小", "放大", "适应", "1:1", "移除"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Offscreen || button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
+					t.Fatalf("preview button %q must fit inside 880x660: %+v", label, button)
+				}
+			}
+			modeGroup, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
+			if !ok || modeGroup.Offscreen || modeGroup.Bounds.X+modeGroup.Bounds.W > 880 {
+				t.Fatalf("comparison mode control must fit inside 880x660: %+v", modeGroup)
+			}
+			nextBtn, _ := tt.AccessByRole(ui.RoleButton, "下一张")
+			if nextBtn.Bounds.X+nextBtn.Bounds.W > modeGroup.Bounds.X {
+				t.Fatalf("preview controls must not overlap mode switch: next=%+v mode=%+v", nextBtn, modeGroup)
+			}
+		})
+	}
+}
+
+func TestBatchQueueSortingAndSelection(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/p/sub/B.jpg", absPath: "/p/sub/B.jpg", relPath: filepath.Join("sub", "B.jpg"), format: "jpeg", width: 40, height: 40, originalSize: 4000, outputSize: 1000, status: batchDone, savedPath: "/out/sub/B.jpg"},
+		{path: "/p/a.jpg", absPath: "/p/a.jpg", relPath: "a.jpg", format: "jpeg", width: 40, height: 40, originalSize: 2000, outputSize: 1000, status: batchDone, savedPath: "/out/a.jpg"},
+		{path: "/p/c.png", absPath: "/p/c.png", relPath: "c.png", format: "png", width: 40, height: 40, originalSize: 4000, outputSize: 2000, status: batchDone, savedPath: "/out/c.png"},
+		{path: "/p/d.png", absPath: "/p/d.png", relPath: "d.png", format: "png", width: 40, height: 40, originalSize: 3000, outputSize: 3000, unchanged: true, status: batchDone, savedPath: "/out/d.png"},
+		{path: "/p/e.jpg", absPath: "/p/e.jpg", relPath: "e.jpg", format: "jpeg", width: 40, height: 40, originalSize: 5000, status: batchPending},
+		{path: "/p/f.jpg", absPath: "/p/f.jpg", relPath: "f.jpg", format: "jpeg", width: 40, height: 40, originalSize: 1500, status: batchFailed, errMsg: "写入失败"},
+		{path: "/p/broken.jpg", absPath: "/p/broken.jpg", relPath: "broken.jpg", status: batchFailed, invalidInput: true, errMsg: "无法识别"},
+	})
+	tt := ui.NewTester(s.view, 980, 720)
+
+	if !tt.HasText("默认顺序") {
+		t.Fatal("batch queue must default to 默认顺序 sort")
+	}
+
+	chooseSort := func(menuLabel, expectedBtnLabel string) {
+		t.Helper()
+		if err := tt.Click("队列排序"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.ChooseMenuItem(menuLabel); err != nil {
+			t.Fatal(err)
+		}
+		if !tt.HasText(expectedBtnLabel) {
+			t.Fatalf("sort button must update to %q after choosing %q", expectedBtnLabel, menuLabel)
+		}
+	}
+
+	// 1. Name (A-Z), case-insensitive relative path order.
+	chooseSort("按名称 (A–Z)", "按名称")
+	if got, want := s.filteredBatchIndices(), []int{1, 6, 2, 3, 4, 5, 0}; !slices.Equal(got, want) {
+		t.Fatalf("name sort order mismatch: got=%v want=%v", got, want)
+	}
+
+	// Select c.png (index 2) and verify selection follows item across sort changes.
+	if err := tt.Click("c.png"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.selected != 2 {
+		t.Fatalf("expected c.png (index 2) selected, got %d", s.batch.selected)
+	}
+
+	// 2. Original size descending (name tie-break for equal 4000B: c.png before sub/B.jpg; invalidInput 0B last).
+	chooseSort("原大小（从大到小）", "原大小 ↓")
+	if got, want := s.filteredBatchIndices(), []int{4, 2, 0, 3, 1, 5, 6}; !slices.Equal(got, want) {
+		t.Fatalf("original size sort order mismatch: got=%v want=%v", got, want)
+	}
+	if s.batch.selected != 2 {
+		t.Fatalf("selected item must stay c.png (index 2) after size sort, got %d", s.batch.selected)
+	}
+
+	// 3. Savings ratio descending: 75% (0: sub/B.jpg), 50% w/ 2000B saved (2: c.png),
+	//    50% w/ 1000B saved (1: a.jpg), unchanged done (3: d.png), pending (4: e.jpg), failed (5, 6).
+	chooseSort("节省比例（从高到低）", "节省率 ↓")
+	if got, want := s.filteredBatchIndices(), []int{0, 2, 1, 3, 4, 5, 6}; !slices.Equal(got, want) {
+		t.Fatalf("savings sort order mismatch: got=%v want=%v", got, want)
+	}
+	if s.batch.selected != 2 {
+		t.Fatalf("selected item must stay c.png (index 2) after savings sort, got %d", s.batch.selected)
+	}
+
+	// Filter + search compose with active sort; resetting filter keeps sort mode.
+	if err := tt.Click("已完成"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := s.filteredBatchIndices(), []int{0, 2, 1, 3}; !slices.Equal(got, want) {
+		t.Fatalf("已完成 filter with savings sort mismatch: got=%v want=%v", got, want)
+	}
+	s.batch.query = "no-match"
+	tt.Frame()
+	if err := tt.Click("显示全部"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.sort != batchSortSavings || !tt.HasText("节省率 ↓") {
+		t.Fatalf("resetting filter must preserve active sort mode: sort=%d", s.batch.sort)
+	}
+
+	// Removing c.png (visual position 1 under savings sort) advances selection to a.jpg (next visual item).
+	if err := tt.Click("c.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("移除"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.selected < 0 || s.batch.items[s.batch.selected].relPath != "a.jpg" {
+		t.Fatalf("removing sorted item must advance selection to next visible item a.jpg, got selected=%d (%+v)", s.batch.selected, s.batch.items)
+	}
+
+	// 4. Default insertion order restores original indices.
+	chooseSort("按添加顺序", "默认顺序")
+	if got, want := s.filteredBatchIndices(), []int{0, 1, 2, 3, 4, 5}; !slices.Equal(got, want) {
+		t.Fatalf("default sort order mismatch: got=%v want=%v", got, want)
+	}
+}
+
+func TestBatchSearchFocusAndPreviewShortcuts(t *testing.T) {
+	dir := t.TempDir()
+	zPath := filepath.Join(dir, "z.jpg")
+	aPath := filepath.Join(dir, "a.jpg")
+	mPath := filepath.Join(dir, "m.jpg")
+	writeTestJPEG(t, zPath, 80, 60, 90)
+	writeTestJPEG(t, aPath, 80, 60, 90)
+	writeTestJPEG(t, mPath, 80, 60, 90)
+
+	updates := make(chan func(), 4)
+	s := newApplication()
+	s.dispatchUpdate = func(fn func()) { updates <- fn }
+	scan, err := scanBatchPaths(context.Background(), []string{zPath, aPath, mPath}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.completeBatchScan(context.Background(), scan, false, nil)
+	// Set alphabetical sort so visible order is a.jpg (idx 1), m.jpg (idx 2), z.jpg (idx 0).
+	s.batch.sort = batchSortName
+	tt := ui.NewTester(s.view, 980, 720)
+
+	// Cmd+F focuses search field without clicking it; typing filters immediately; Esc clears query.
+	tt.Key(ui.Cmd, ui.KeyF)
+	searchField, ok := tt.AccessByRole(ui.RoleTextField, "筛选文件名")
+	if !ok || !searchField.Focused {
+		t.Fatalf("Cmd+F must focus batch search field: %+v", searchField)
+	}
+	tt.Type("m.jpg")
+	if !tt.HasText("批量队列 · 1 / 3 张") || s.batch.query != "m.jpg" {
+		t.Fatalf("typing after Cmd+F must filter queue: query=%q", s.batch.query)
+	}
+	tt.Key(0, ui.KeyEscape)
+	if s.batch.query != "" || !tt.HasText("批量队列 · 3 张") {
+		t.Fatalf("Escape in non-empty search field must clear query: query=%q", s.batch.query)
+	}
+
+	// Move focus away from search field, then verify modal guards block Cmd+F.
+	if err := tt.Click("z.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	s.confirmBatchOverwrite = true
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyF)
+	if sf, _ := tt.AccessByRole(ui.RoleTextField, "筛选文件名"); sf.Focused {
+		t.Fatal("Cmd+F must not focus search field while overwrite confirmation is open")
+	}
+	tt.Key(0, ui.KeyEscape)
+	if s.confirmBatchOverwrite {
+		t.Fatal("Escape must dismiss batch overwrite confirmation")
+	}
+	s.settingsOpen = true
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyF)
+	if sf, _ := tt.AccessByRole(ui.RoleTextField, "筛选文件名"); sf.Focused {
+		t.Fatal("Cmd+F must not focus search field while settings modal is open")
+	}
+	s.settingsOpen = false
+	tt.Frame()
+
+	// Enter preview on first sorted item (a.jpg, index 1).
+	if err := tt.Click("a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("预览"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial batch preview load")
+	}
+	tt.Frame()
+	if !s.batch.previewOpen || !tt.HasText("1 / 3") || !tt.HasText("a.jpg") {
+		t.Fatalf("expected preview open on a.jpg (1 / 3), previewOpen=%v idx=%d", s.batch.previewOpen, s.batch.previewIndex)
+	}
+	prevBtn, _ := tt.AccessByRole(ui.RoleButton, "上一张")
+	nextBtn, _ := tt.AccessByRole(ui.RoleButton, "下一张")
+	if prevBtn.KeyShortcuts == "" || nextBtn.KeyShortcuts == "" {
+		t.Fatalf("preview prev/next buttons must expose shortcut metadata: prev=%q next=%q", prevBtn.KeyShortcuts, nextBtn.KeyShortcuts)
+	}
+
+	// Cmd+[ at first item must be a no-op.
+	tt.Key(ui.Cmd, ui.KeyBracketLeft)
+	if s.busy || filepath.Base(s.file.path) != "a.jpg" {
+		t.Fatalf("Cmd+[ at first preview item must do nothing: busy=%v path=%s", s.busy, s.file.path)
+	}
+
+	// Cmd+] steps to m.jpg (2 / 3) following sorted order.
+	tt.Key(ui.Cmd, ui.KeyBracketRight)
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for next batch preview load")
+	}
+	tt.Frame()
+	if filepath.Base(s.file.path) != "m.jpg" || !tt.HasText("2 / 3") {
+		t.Fatalf("Cmd+] must step to m.jpg (2 / 3), got %s", s.file.path)
+	}
+
+	// Preview zoom shortcuts work inside batch preview.
+	fitScale := s.previewScale(s.comparison.viewport)
+	tt.Key(ui.Cmd, ui.KeyEqual)
+	if s.comparison.scale <= fitScale {
+		t.Fatalf("Cmd+= in batch preview must zoom in: scale=%.4f fit=%.4f", s.comparison.scale, fitScale)
+	}
+	tt.Key(ui.Cmd, ui.Key1)
+	if s.comparison.scale != 1 {
+		t.Fatalf("Cmd+1 in batch preview must zoom to 100%%, got %.4f", s.comparison.scale)
+	}
+	tt.Key(ui.Cmd, ui.Key0)
+	if s.comparison.scale != 0 {
+		t.Fatalf("Cmd+0 in batch preview must reset to fit, got %.4f", s.comparison.scale)
+	}
+
+	// Modal guard blocks Cmd+[ / Cmd+] / zoom / Esc behind confirmation.
+	s.confirmBatchOverwrite = true
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyBracketLeft)
+	tt.Key(ui.Cmd, ui.Key1)
+	if s.busy || s.comparison.scale != 0 || !s.batch.previewOpen {
+		t.Fatal("modal confirmation must suppress preview navigation and zoom shortcuts")
+	}
+	s.confirmBatchOverwrite = false
+	tt.Frame()
+
+	// Cmd+[ steps back to a.jpg (1 / 3).
+	tt.Key(ui.Cmd, ui.KeyBracketLeft)
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for previous batch preview load")
+	}
+	tt.Frame()
+	if filepath.Base(s.file.path) != "a.jpg" || !tt.HasText("1 / 3") {
+		t.Fatalf("Cmd+[ must return to a.jpg (1 / 3), got %s", s.file.path)
 	}
 }

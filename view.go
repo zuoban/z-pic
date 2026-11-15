@@ -41,8 +41,21 @@ func (s *application) view(c *ui.Context) {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveActiveAction)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyComma, func() { s.setSettingsOpen(true) })
-		if s.batch != nil && s.batch.previewOpen {
-			c.OnWindowShortcut(0, ui.KeyEscape, s.closeBatchPreview)
+		if s.batch != nil {
+			if s.batch.previewOpen {
+				c.OnWindowShortcut(0, ui.KeyEscape, s.closeBatchPreview)
+				c.OnWindowShortcut(ui.Cmd, ui.KeyBracketLeft, func() { s.stepBatchPreview(-1) })
+				c.OnWindowShortcut(ui.Cmd, ui.KeyBracketRight, func() { s.stepBatchPreview(1) })
+			} else {
+				c.OnWindowShortcut(ui.Cmd, ui.KeyF, func() { s.batchSearchRef.Focus(c) })
+			}
+		}
+		if (s.batch == nil || s.batch.previewOpen) && s.preview != nil && !s.previewLocked() {
+			c.OnWindowShortcut(ui.Cmd, ui.KeyMinus, func() { s.zoomPreviewBy(0.8) })
+			c.OnWindowShortcut(ui.Cmd, ui.KeyEqual, func() { s.zoomPreviewBy(1.25) })
+			c.OnWindowShortcut(ui.Cmd|ui.Shift, ui.KeyEqual, func() { s.zoomPreviewBy(1.25) })
+			c.OnWindowShortcut(ui.Cmd, ui.Key0, s.resetPreviewFit)
+			c.OnWindowShortcut(ui.Cmd, ui.Key1, s.zoomPreviewActual)
 		}
 	}
 	ui.Column(c).Fill().Padding(24).Gap(20).Background(theme.Background).Children(func() {

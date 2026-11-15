@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,13 @@ const (
 	batchFilterPending
 	batchFilterDone
 	batchFilterFailed
+)
+
+const (
+	batchSortDefault = iota
+	batchSortName
+	batchSortOriginalSize
+	batchSortSavings
 )
 
 type batchRunMode int
@@ -74,6 +82,7 @@ type batchState struct {
 	outputMode      int
 	outputDir       string
 	filter          int
+	sort            int
 	query           string
 	list            ui.ListState
 	selected        int
@@ -548,7 +557,84 @@ func (s *application) filteredBatchIndices() []int {
 			visible = append(visible, i)
 		}
 	}
+	sortBatchIndices(s.batch.items, visible, s.batch.sort)
 	return visible
+}
+
+func sortBatchIndices(items []batchItem, indices []int, sortMode int) {
+	if sortMode == batchSortDefault || len(indices) < 2 {
+		return
+	}
+	slices.SortFunc(indices, func(a, b int) int {
+		switch sortMode {
+		case batchSortName:
+			return compareBatchItemsByName(items, a, b)
+		case batchSortOriginalSize:
+			if c := cmp.Compare(items[b].originalSize, items[a].originalSize); c != 0 {
+				return c
+			}
+			return compareBatchItemsByName(items, a, b)
+		case batchSortSavings:
+			rankA, rankB := batchSavingsRank(items[a]), batchSavingsRank(items[b])
+			if c := cmp.Compare(rankA, rankB); c != 0 {
+				return c
+			}
+			if rankA == 0 {
+				if c := compareBatchSavingsRatioDesc(items[a], items[b]); c != 0 {
+					return c
+				}
+				return compareBatchItemsByName(items, a, b)
+			}
+			if rankA == 1 {
+				return compareBatchItemsByName(items, a, b)
+			}
+			return cmp.Compare(a, b)
+		default:
+			return cmp.Compare(a, b)
+		}
+	})
+}
+
+func compareBatchItemsByName(items []batchItem, a, b int) int {
+	aRel, bRel := filepath.ToSlash(items[a].relPath), filepath.ToSlash(items[b].relPath)
+	if c := cmp.Compare(strings.ToLower(aRel), strings.ToLower(bRel)); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(aRel, bRel); c != 0 {
+		return c
+	}
+	return cmp.Compare(a, b)
+}
+
+func batchSavingsRank(item batchItem) int {
+	switch item.status {
+	case batchDone:
+		if !item.unchanged && item.originalSize > 0 && item.outputSize < item.originalSize {
+			return 0
+		}
+		return 1
+	case batchPending, batchProcessing:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func compareBatchSavingsRatioDesc(a, b batchItem) int {
+	aSaved := a.originalSize - a.outputSize
+	bSaved := b.originalSize - b.outputSize
+	if a.originalSize <= 1<<30 && b.originalSize <= 1<<30 {
+		if c := cmp.Compare(bSaved*a.originalSize, aSaved*b.originalSize); c != 0 {
+			return c
+		}
+	} else {
+		aRatio := float64(aSaved) / float64(a.originalSize)
+		bRatio := float64(bSaved) / float64(b.originalSize)
+		if c := cmp.Compare(bRatio, aRatio); c != 0 {
+			return c
+		}
+	}
+	return cmp.Compare(bSaved, aSaved)
 }
 
 func (s *application) resetBatchFilter() {

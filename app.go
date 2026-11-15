@@ -68,7 +68,9 @@ type application struct {
 	pendingBatchRestart   bool
 	pendingBatchRun       batchRunMode
 	pendingBatchIndex     int
+	batchSearchRef        ui.Handle
 	batchOutputDir        string
+	dispatchUpdate        func(func())
 }
 
 func newApplication() *application {
@@ -89,6 +91,13 @@ func (s *application) modalOpen() bool {
 }
 
 func (s *application) update(fn func()) {
+	if s.dispatchUpdate != nil {
+		s.dispatchUpdate(fn)
+		return
+	}
+	if s.window == nil {
+		return
+	}
 	s.window.Update(func() {
 		if !s.closed {
 			fn()

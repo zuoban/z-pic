@@ -36,9 +36,19 @@ func (s *application) batchListPanel(c *ui.Context) {
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 			filterChanged := ui.Segmented(c.Key("batch-filter"), &s.batch.filter, "全部", "待处理", "已完成", "失败").
 				Label("队列筛选").Height(32).Changed()
+			ui.Box(c).Grow(1)
+			sortChanged := s.batchSortControl(c)
+			if filterChanged || sortChanged {
+				visible = s.filteredBatchIndices()
+			}
+		})
+		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 			queryChanged := ui.SearchField(c.Key("batch-search"), &s.batch.query).
-				Label("筛选文件名").Placeholder("搜索文件名").Height(32).Grow(1).Changed()
-			if filterChanged || queryChanged {
+				Bind(&s.batchSearchRef).
+				Label("筛选文件名").Placeholder("搜索文件名").
+				Tooltip("搜索相对路径或文件名 · " + shortcutLabel("F")).
+				Height(32).Grow(1).Changed()
+			if queryChanged {
 				visible = s.filteredBatchIndices()
 			}
 		})
@@ -97,7 +107,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 				s.batch.selected < len(s.batch.items) && !s.batch.items[s.batch.selected].invalidInput {
 				s.openBatchPreview(s.batch.selected)
 			}
-			if !s.modalOpen() && s.batch.selected >= 0 {
+			if !s.modalOpen() && !c.FocusTakesText() && s.batch.selected >= 0 {
 				backspace := s.batch.list.Shortcut(c, 0, ui.KeyBackspace)
 				del := s.batch.list.Shortcut(c, 0, ui.KeyDelete)
 				if backspace || del {
@@ -114,6 +124,47 @@ func (s *application) batchListPanel(c *ui.Context) {
 		}
 		s.batchSelectedBar(c)
 	})
+}
+
+type batchSortOption struct {
+	mode      int
+	label     string
+	menuLabel string
+}
+
+var batchSortOptions = []batchSortOption{
+	{batchSortDefault, "默认顺序", "按添加顺序"},
+	{batchSortName, "按名称", "按名称 (A–Z)"},
+	{batchSortOriginalSize, "原大小 ↓", "原大小（从大到小）"},
+	{batchSortSavings, "节省率 ↓", "节省比例（从高到低）"},
+}
+
+func batchSortOptionFor(mode int) batchSortOption {
+	for _, opt := range batchSortOptions {
+		if opt.mode == mode {
+			return opt
+		}
+	}
+	return batchSortOptions[0]
+}
+
+func (s *application) batchSortControl(c *ui.Context) bool {
+	current := batchSortOptionFor(s.batch.sort)
+	changed := false
+	ui.PopoverMenuButton(c.Key("batch-sort"), current.label, func(m *ui.Menu) {
+		for _, opt := range batchSortOptions {
+			if m.Item(opt.menuLabel).Radio(s.batch.sort == opt.mode).Chosen() {
+				if s.batch.sort != opt.mode {
+					s.batch.sort = opt.mode
+					changed = true
+				}
+			}
+		}
+	}, ui.PopoverMenuButtonOptions{
+		At:   ui.AnchorBottomEnd,
+		Self: ui.AnchorTopEnd,
+	}).Label("队列排序").Height(32).Tooltip("排序方式：" + current.menuLabel)
+	return changed
 }
 
 func (s *application) emptyBatchFilterMessage() string {
@@ -268,11 +319,15 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				posCurrent, posTotal = pos+1, len(visible)
 			}
 			ui.Textf(c, "%d / %d", posCurrent, posTotal).
-				FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).Grow(1)
+				FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).SingleLine().Grow(1)
 			ui.Button(c.Key("batch-prev"), "上一张").Height(32).
+				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
+				Tooltip("上一张 · " + shortcutLabel("[")).
 				Disabled(s.busy || !s.hasAdjacentBatchPreview(-1)).
 				OnClick(func() { s.stepBatchPreview(-1) })
 			ui.Button(c.Key("batch-next"), "下一张").Height(32).
+				KeyShortcuts(ui.Cmd, ui.KeyBracketRight).
+				Tooltip("下一张 · " + shortcutLabel("]")).
 				Disabled(s.busy || !s.hasAdjacentBatchPreview(1)).
 				OnClick(func() { s.stepBatchPreview(1) })
 			if s.result != nil && !s.overwritten {
