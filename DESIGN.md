@@ -7,6 +7,7 @@
 - Surface: Z Pic main compression window and a separate native settings dialog, built with MyGo native UI.
 - Evidence: existing MyGo application, native-window screenshots, PNG compression tools, and behavior tests. The current request specifies a settings popup with compression-scheme maintenance, explicit saving, and persistence across application restarts; the main window only selects saved schemes.
 - Defaults: one image at a time, JPEG and PNG, Chinese interface, local processing.
+- Defaults: single-image or batch JPEG and PNG, Chinese interface, local processing.
 
 ## Brand
 
@@ -51,9 +52,10 @@ Workflow reference: unslop by Damir Sokolovsky (@heydamir), CC BY 4.0.
 ## Product goals
 
 - Select a JPEG or PNG, compress it, compare file sizes, and save a copy or explicitly overwrite the source.
+- Support both single-image inspection and sequential batch compression for multi-file and folder selections without inflating idle memory.
 - Do not resize images; normalize JPEG EXIF orientation so photos retain their displayed direction. Preserve the source until the user confirms an overwrite.
 - Keep the smaller of the original and re-encoded data.
-- Non-goals: batch processing, format conversion, resizing, watermarking, accounts, cloud services, and target-file-size search.
+- Non-goals: format conversion, resizing, watermarking, accounts, cloud services, and target-file-size search.
 - Success: a first-time user can produce a compressed copy without guessing the next action.
 
 ## Personas and jobs
@@ -65,6 +67,7 @@ People preparing photographs and screenshots for sharing or uploading. They need
 One main window and one modal child settings window:
 
 - Main window: product header with a “设置” entry; image/empty preview and file details; scrollable saved compression-scheme choices; result summary; primary compress or save action. No parameter sliders or advanced disclosure.
+- Main window: product header with a “设置” entry; empty, single-image preview, or batch queue / item preview on the left; scrollable saved compression-scheme choices, batch output-mode toggle (“保存到文件夹 / 覆盖原图”), result summary, and primary compress/continue/save actions on the right. No parameter sliders or advanced disclosure.
 - Settings dialog: “设置” heading and a “压缩方案” section; a scheme list with add/delete actions on the left; a scrollable editor for the name, JPEG quality, PNG parameters, and advanced settings on the right; fixed “取消” / “保存” actions and inline feedback.
 - The dialog is a parented native modal window (a sheet on macOS). Reopening focuses the existing dialog without resetting edits. Both formats can be configured before selecting an image.
 - Save validates and persists the draft list before applying it. Cancel, Escape, and native window close discard edits. The main window remains on screen and resumes after dismissal.
@@ -111,6 +114,8 @@ Desktop-first: main window defaults to 980 × 720 points, minimum 880 × 660; se
 ## Interaction states
 
 - Empty: supported formats, privacy note, select-image action. Scheme selection and maintenance are usable before an image is selected.
+- Empty: supported formats, privacy note, select-image and select-folder actions, plus drag-and-drop for single files, multi-files, or folders. Scheme selection and maintenance are usable before an image is selected.
+- Batch queue: virtualized list (`ui.List`) with add-image, add-folder, clear, remove, and item preview navigation (`预览` / double-click / Enter / `Esc` return). Header-only validation (`compress.Inspect`) during directory scans limits memory; valid items are processed sequentially on one background worker and saved immediately with collision-free naming (`保存到文件夹`) or confirmed atomic overwrite (`覆盖原图`, skipping non-smaller results). Canceling mid-batch preserves completed items and allows continuing remaining pending items or restarting. Switching active scheme parameters or output mode invalidates prior results.
 - Selected: image preview, dimensions, original size, scheme selection.
 - Settings: opening clones saved schemes into a draft; modifications, additions, and deletions stay in that draft until Save. Deletion requires inline confirmation and cannot remove the last scheme. Cancel, Escape, and native close discard changes. Reopening does not duplicate the dialog or reset an in-progress draft.
 - Save settings: validate every name and parameter; atomically replace the saved configuration before applying it. Failure keeps the dialog, draft, active schemes, and existing result intact and shows an actionable error. Saving edits to another scheme or renaming the active scheme preserves the current result. Changed active compression parameters invalidate it.
@@ -157,3 +162,4 @@ Concise Chinese. Use “压缩图片”, “JPEG 质量”, “另存副本”, 
 
 - [ ] Owner: user. Which operating systems should receive release installers? The first build and runtime check target the available macOS machine.
 - [ ] Owner: user. Is batch processing needed next? It is excluded from this first release.
+- [x] Batch processing implemented: multi-file/folder/CLI/drag-drop entry, sequential execution, collision-free folder export and confirmed atomic overwrite, mid-batch cancel/resume, and single-item preview.

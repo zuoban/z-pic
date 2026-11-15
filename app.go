@@ -61,8 +61,11 @@ type application struct {
 	closed         bool
 	saves          sync.WaitGroup
 
-	confirmOverwrite bool
-	overwritten      bool
+	confirmOverwrite      bool
+	overwritten           bool
+	batch                 *batchState
+	confirmBatchOverwrite bool
+	pendingBatchRestart   bool
 }
 
 func newApplication() *application {
@@ -77,6 +80,10 @@ func (s *application) setMessage(message string, failed bool) {
 	s.message, s.failed = message, failed
 }
 
+func (s *application) modalOpen() bool {
+	return s.busy || s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
+}
+
 func (s *application) update(fn func()) {
 	s.window.Update(func() {
 		if !s.closed {
@@ -86,7 +93,7 @@ func (s *application) update(fn func()) {
 }
 
 func (s *application) chooseFile() {
-	if s.busy || s.settingsOpen {
+	if s.modalOpen() {
 		return
 	}
 	s.busy, s.phase = true, "正在选择图片"
@@ -95,6 +102,7 @@ func (s *application) chooseFile() {
 			Parent:      s.window,
 			Title:       "选择要压缩的图片",
 			ButtonLabel: "选择图片",
+			Multiple:    true,
 			Filters: []mygo.FileFilter{
 				{Name: "JPEG / PNG 图片", Extensions: []string{"jpg", "jpeg", "png"}},
 			},
@@ -104,25 +112,43 @@ func (s *application) chooseFile() {
 			if err != nil {
 				s.setMessage("无法打开文件选择器："+err.Error(), true)
 			} else if len(paths) != 0 {
-				s.load(paths[0])
+				s.openPaths(paths)
 			}
 		})
 	}()
 }
 
 func (s *application) dropFiles(paths []string) {
-	if s.busy || s.confirmOverwrite || s.settingsOpen {
+	if s.modalOpen() {
 		return
 	}
-	if len(paths) != 1 {
-		s.setMessage("请一次选择一张图片。", true)
+	s.openPaths(paths)
+}
+
+func (s *application) shouldOpenAsBatch(paths []string) bool {
+	if s.batch != nil || len(paths) > 1 {
+		return true
+	}
+	if len(paths) == 1 {
+		info, err := os.Stat(paths[0])
+		return err == nil && info.IsDir()
+	}
+	return false
+}
+
+func (s *application) openPaths(paths []string) {
+	if len(paths) == 0 {
 		return
 	}
-	s.load(paths[0])
+	if !s.shouldOpenAsBatch(paths) {
+		s.load(paths[0])
+		return
+	}
+	s.loadBatch(paths, s.batch != nil)
 }
 
 func (s *application) load(path string) {
-	if s.busy || s.confirmOverwrite || s.settingsOpen {
+	if s.modalOpen() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -146,6 +172,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 		s.reportError(err, "读取图片失败")
 		return
 	}
+	s.batch = nil
 	s.file, s.preview, s.result = selected, selected.preview, nil
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
@@ -215,15 +242,29 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 func (s *application) invalidateResult() {
 	s.result = nil
 	s.comparison = comparisonView{split: 50}
-	s.confirmOverwrite, s.overwritten = false, false
+	s.confirmOverwrite, s.confirmBatchOverwrite, s.overwritten = false, false, false
+	if s.batch != nil {
+		s.invalidateBatchResults()
+		return
+	}
 	if s.file != nil {
 		s.preview = s.file.preview
 		s.setMessage("参数已更新，请重新压缩。", false)
 	}
 }
 
+func (s *application) startActiveCompression() {
+	if s.batch != nil {
+		if !s.batch.previewOpen {
+			s.startBatchCompression()
+		}
+		return
+	}
+	s.startCompression()
+}
+
 func (s *application) startCompression() {
-	if s.busy || s.settingsOpen || s.file == nil {
+	if s.modalOpen() || s.batch != nil || s.file == nil {
 		return
 	}
 	path, data, options := s.file.path, s.file.data, s.compressionOptions()
@@ -284,8 +325,18 @@ func (s *application) reportError(err error, prefix string) {
 	s.setMessage(prefix+"："+err.Error(), true)
 }
 
+func (s *application) saveActiveAction() {
+	if s.batch != nil {
+		if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
+			s.chooseOutputDir()
+		}
+		return
+	}
+	s.saveCopy()
+}
+
 func (s *application) saveCopy() {
-	if s.busy || s.settingsOpen || s.result == nil {
+	if s.modalOpen() || s.batch != nil || s.result == nil {
 		return
 	}
 	result := s.result
@@ -345,7 +396,8 @@ func (s *application) writeCopy(result *compress.Result, path string) {
 }
 
 func (s *application) canOverwrite() bool {
-	return !s.busy && !s.settingsOpen && s.file != nil && s.result != nil &&
+	return !s.busy && !s.settingsOpen && !s.confirmBatchOverwrite && s.batch == nil &&
+		s.file != nil && s.result != nil &&
 		!s.result.Unchanged && s.result.OutputSize > 0 &&
 		s.result.OutputSize < s.result.OriginalSize && !s.overwritten
 }

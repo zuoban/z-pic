@@ -52,7 +52,7 @@ func (s *application) restoreSettings() {
 }
 
 func (s *application) setSettingsOpen(open bool) {
-	if s.busy || s.confirmOverwrite {
+	if s.busy || s.confirmOverwrite || s.confirmBatchOverwrite {
 		return
 	}
 	if !open {

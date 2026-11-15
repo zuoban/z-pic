@@ -21,7 +21,7 @@ type comparisonView struct {
 }
 
 func (s *application) previewLocked() bool {
-	return s.busy || s.settingsOpen || s.confirmOverwrite
+	return s.modalOpen()
 }
 
 func (s *application) comparing() bool {

@@ -30,8 +30,8 @@ func main() {
 		app.window.OnFileDrop(func(e *mygo.FileDropEvent) {
 			app.dropFiles(e.Paths)
 		})
-		if len(os.Args) == 2 {
-			app.load(os.Args[1])
+		if len(os.Args) > 1 {
+			app.loadStartupPaths(os.Args[1:])
 		}
 	})
 	err := mygo.App.Run()

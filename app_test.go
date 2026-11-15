@@ -33,7 +33,7 @@ func TestEmptyViewCannotCompress(t *testing.T) {
 	if !ok || !button.Disabled {
 		t.Fatalf("compression must be disabled without an image: %+v", button)
 	}
-	if !tt.HasText("选择图片") || !tt.HasText("从一张图片开始") {
+	if !tt.HasText("选择图片") || !tt.HasText("选择文件夹") || !tt.HasText("选择或拖入图片") {
 		t.Fatalf("the empty view must explain how to start: %q", tt.Texts())
 	}
 }

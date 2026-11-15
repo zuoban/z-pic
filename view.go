@@ -36,11 +36,14 @@ func applyTheme(c *ui.Context) {
 func (s *application) view(c *ui.Context) {
 	applyTheme(c)
 	theme := c.Theme()
-	if !s.busy && !s.confirmOverwrite && !s.settingsOpen {
+	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
-		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startCompression)
-		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveCopy)
+		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
+		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveActiveAction)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyComma, func() { s.setSettingsOpen(true) })
+		if s.batch != nil && s.batch.previewOpen {
+			c.OnWindowShortcut(0, ui.KeyEscape, s.closeBatchPreview)
+		}
 	}
 	ui.Column(c).Fill().Padding(24).Gap(20).Background(theme.Background).Children(func() {
 		ui.Row(c).Height(48).Gap(16).AlignItems(ui.Center).Children(func() {
@@ -54,7 +57,7 @@ func (s *application) view(c *ui.Context) {
 			ui.Button(c.Key("open-settings"), "设置").Height(36).
 				KeyShortcuts(ui.Cmd, ui.KeyComma).
 				Tooltip("打开设置（" + shortcutLabel(",") + "）").
-				Disabled(s.busy || s.confirmOverwrite).
+				Disabled(s.busy || s.confirmOverwrite || s.confirmBatchOverwrite).
 				OnClick(func() { s.setSettingsOpen(true) })
 		})
 		ui.Row(c).Grow(1).FillWidth().Gap(20).AlignItems(ui.Stretch).Children(func() {
@@ -71,6 +74,7 @@ func (s *application) view(c *ui.Context) {
 		})
 	})
 	s.overwriteConfirmation(c)
+	s.batchOverwriteConfirmation(c)
 }
 
 func shortcutLabel(key string) string {
@@ -93,6 +97,14 @@ func shortcutHint(c *ui.Context, label, key string) {
 }
 
 func (s *application) previewPanel(c *ui.Context) {
+	if s.batch != nil {
+		if s.batch.previewOpen {
+			s.batchPreviewPanel(c)
+			return
+		}
+		s.batchListPanel(c)
+		return
+	}
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(340).Padding(16).Gap(12).
 		Radius(16).Background(t.Surface).Border(1, t.Border).Children(func() {
@@ -127,12 +139,17 @@ func (s *application) previewPanel(c *ui.Context) {
 							{bounds.X + 38, bounds.Y + 36},
 						}, 1.5, t.TextMuted)
 					})
-					ui.Text(c, "从一张图片开始").FontSize(20).FontWeight(500)
-					ui.Text(c, "把图片拖到这里，或从文件中选择").FontSize(13).TextColor(t.TextMuted)
-					ui.PrimaryButton(c.Key("select"), "选择图片").Height(40).Margin(4, 0).
-						KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择图片 · " + shortcutLabel("O")).
-						Disabled(s.busy).OnClick(s.chooseFile)
-					ui.Text(c, "JPEG / PNG · 最大 64 MiB / 3200 万像素").
+					ui.Text(c, "选择或拖入图片").FontSize(20).FontWeight(500)
+					ui.Text(c, "把单张、多张图片或文件夹拖到这里，或从文件中选择").FontSize(13).TextColor(t.TextMuted)
+					ui.Row(c).Gap(8).Margin(4, 0).Children(func() {
+						ui.PrimaryButton(c.Key("select"), "选择图片").Height(40).
+							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
+							Disabled(s.busy).OnClick(s.chooseFile)
+						ui.Button(c.Key("select-folder"), "选择文件夹").Height(40).
+							Tooltip("选择包含图片的文件夹").
+							Disabled(s.busy).OnClick(s.chooseFolder)
+					})
+					ui.Text(c, "JPEG / PNG · 支持多张或文件夹 · 单张最大 64 MiB / 3200 万像素").
 						FontSize(12).TextColor(t.TextMuted)
 				})
 				return
@@ -149,8 +166,8 @@ func (s *application) previewPanel(c *ui.Context) {
 			})
 		} else {
 			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "预览细节，再决定如何保存").FontSize(13).FontWeight(500)
-				ui.Text(c, "保留图片尺寸，支持另存副本或确认覆盖").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "预览细节，或批量处理多张图片").FontSize(13).FontWeight(500)
+				ui.Text(c, "保留图片尺寸，支持另存副本、批量输出到文件夹或确认覆盖").FontSize(12).TextColor(t.TextMuted)
 			})
 		}
 	})
@@ -165,9 +182,13 @@ func (s *application) controlsPanel(c *ui.Context) {
 		})
 		ui.Text(c, "在「设置」中新增或编辑压缩方案。").
 			FontSize(12).TextColor(t.TextMuted).Margin(4, 0)
-		ui.Scroll(c.Key("schemes")).Grow(1).MinHeight(80).Children(func() {
+		ui.Scroll(c.Key("schemes")).Grow(1).MinHeight(68).Children(func() {
 			s.presetControl(c)
 		})
+		if s.batch != nil {
+			s.batchControls(c)
+			return
+		}
 		if s.file != nil && s.file.format == "png" {
 			ui.Text(c, "PNG 使用有损压缩，渐变与半透明边缘可能变化。").
 				FontSize(12).TextColor(t.TextMuted)
@@ -409,14 +430,19 @@ func (s *application) resultSummary(c *ui.Context) {
 			label, color = "未减小（0.0%）", t.TextMuted
 		}
 	}
+	summaryCard(c, "压缩结果", label, color, "原始大小", original, "输出大小", output)
+}
+
+func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue string) {
+	t := c.Theme()
 	ui.Column(c).Padding(12).Gap(8).Radius(12).Background(t.Background).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "压缩结果").FontSize(12).TextColor(t.TextMuted).Grow(1)
-			ui.Text(c, label).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(color)
+			ui.Text(c, title).FontSize(12).TextColor(t.TextMuted).Grow(1)
+			ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(statusColor)
 		})
 		ui.Row(c).Gap(16).AlignItems(ui.End).Children(func() {
 			for index, row := range []struct{ label, value string }{
-				{"原始大小", original}, {"输出大小", output},
+				{firstLabel, firstValue}, {secondLabel, secondValue},
 			} {
 				ui.Column(c).Grow(1).Gap(4).Children(func() {
 					ui.Text(c, row.label).FontSize(12).TextColor(t.TextMuted)
