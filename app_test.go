@@ -42,9 +42,6 @@ func TestChangingQualityInvalidatesSavedResult(t *testing.T) {
 	s := testSelectedApplication()
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	tt := ui.NewTester(s.view, 980, 720)
-	if err := tt.Click("均衡"); err != nil {
-		t.Fatal(err)
-	}
 	if err := tt.Click("体积优先"); err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +63,11 @@ func TestBusyViewCannotChangeQuality(t *testing.T) {
 			t.Errorf("%q must be disabled while processing: %+v", label, button)
 		}
 	}
-	scheme, ok := tt.AccessByRole(ui.RolePopUpButton, "压缩方案")
-	if !ok || !scheme.Disabled {
-		t.Fatalf("scheme must be disabled while processing: %+v", scheme)
+	for _, preset := range compressionPresets {
+		scheme, ok := tt.AccessByRole(ui.RoleRadio, preset.name)
+		if !ok || !scheme.Disabled {
+			t.Fatalf("scheme must be disabled while processing: %+v", scheme)
+		}
 	}
 	slider, ok := tt.AccessByRole(ui.RoleSlider, "JPEG 质量")
 	if !ok || !slider.Disabled {
@@ -292,9 +291,150 @@ func TestPNGControlsInvalidateAndClampQualityRange(t *testing.T) {
 	if s.result != nil || s.preview != s.file.preview || tt.HasText("另存副本") {
 		t.Fatal("PNG parameter changes must discard the old export and preview")
 	}
-	scheme, ok := tt.AccessByRole(ui.RolePopUpButton, "压缩方案")
-	if !ok || scheme.Value != "自定义" {
-		t.Fatalf("scheme must reflect custom settings: %+v", scheme)
+	if !tt.HasText("自定义") {
+		t.Fatal("scheme must reflect custom settings")
+	}
+	for _, preset := range compressionPresets {
+		scheme, ok := tt.AccessByRole(ui.RoleRadio, preset.name)
+		if !ok || scheme.Checked {
+			t.Fatalf("a custom scheme must not select a preset: %+v", scheme)
+		}
+	}
+}
+
+func TestPreviewComparisonKeepsCompressionResult(t *testing.T) {
+	s := testSelectedApplication()
+	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	compressed := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+	s.completeCompression(context.Background(), result, compressed, nil)
+	tt := ui.NewTester(s.view, 880, 660)
+	for _, label := range []string{"原图", "压缩后", "原图"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		imageLabel := "原图预览"
+		if label == "压缩后" {
+			imageLabel = "压缩后预览"
+		}
+		if _, ok := tt.AccessByRole(ui.RoleImage, imageLabel); !ok {
+			t.Fatalf("comparison must display %s", imageLabel)
+		}
+		if s.result != result || s.preview != compressed || !tt.HasText("另存副本") {
+			t.Fatal("comparison must preserve the result bitmap and export")
+		}
+	}
+	s.setQuality(60)
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式"); ok {
+		t.Fatal("invalidating a result must remove comparison")
+	}
+	if s.preview != s.file.preview || s.result != nil {
+		t.Fatal("invalidating comparison must restore the source")
+	}
+	s.completeCompression(context.Background(), result, compressed, nil)
+	tt.Frame()
+	after, ok := tt.AccessByRole(ui.RoleRadio, "压缩后")
+	if !ok || !after.Checked {
+		t.Fatal("a new result must default to the compressed preview")
+	}
+}
+
+func TestComparisonUnavailableAfterOverwrite(t *testing.T) {
+	s := testSelectedApplication()
+	result := &compress.Result{
+		OriginalSize: 4096, OutputSize: 2048, Format: "jpeg", Width: 20, Height: 12,
+	}
+	compressed := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+	s.completeCompression(context.Background(), result, compressed, nil)
+	tt := ui.NewTester(s.view, 880, 660)
+	if err := tt.Click("原图"); err != nil {
+		t.Fatal(err)
+	}
+	s.completeOverwrite(result, nil)
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式"); ok {
+		t.Fatal("comparison must not present an overwritten file as the old original")
+	}
+	if s.file.preview != compressed || s.preview != compressed {
+		t.Fatal("overwrite must retain the compressed snapshot even when viewing the original")
+	}
+}
+
+func TestPresetSelectionSupportsArrowKeys(t *testing.T) {
+	s := testSelectedApplication()
+	tt := ui.NewTester(s.view, 880, 660)
+	if err := tt.Click("均衡"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyRight)
+	if s.scheme != "画质优先" || s.quality != 92 {
+		t.Fatal("arrow keys must select and apply the adjacent preset")
+	}
+}
+
+func TestWindowShortcutsRespectUnavailableActions(t *testing.T) {
+	for _, state := range []string{"empty", "busy", "confirmation"} {
+		t.Run(state, func(t *testing.T) {
+			s := newApplication()
+			if state != "empty" {
+				s = testSelectedApplication()
+			}
+			if state == "busy" {
+				s.busy = true
+			}
+			if state == "confirmation" {
+				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+				s.confirmOverwrite = true
+			}
+			tt := ui.NewTester(s.view, 880, 660)
+			keys := []ui.Key{ui.KeyEnter, ui.KeyS}
+			if state != "empty" {
+				keys = append(keys, ui.KeyO)
+			}
+			for _, key := range keys {
+				tt.Key(ui.Cmd, key)
+			}
+			if s.busy != (state == "busy") || s.confirmOverwrite != (state == "confirmation") {
+				t.Fatal("unavailable shortcuts must not start work or dismiss confirmation")
+			}
+		})
+	}
+}
+
+func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		for _, format := range []string{"jpeg", "png"} {
+			name := format
+			if dark {
+				name += "-dark"
+			}
+			t.Run(name, func(t *testing.T) {
+				s := testSelectedApplication()
+				s.file.format, s.advanced = format, true
+				s.file.path = "/photos/" + strings.Repeat("很长的图片文件名", 12) + "." + format
+				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+				s.message = "已保存：" + strings.Repeat("very-long-folder/", 20) + "compressed." + format
+				tt := ui.NewTester(func(c *ui.Context) {
+					theme := ui.LightTheme()
+					if dark {
+						theme = ui.DarkTheme()
+					}
+					c.SetTheme(theme)
+					s.view(c)
+				}, 880, 660)
+				for _, label := range []string{"更换图片", "重新压缩", "另存副本", "覆盖原图"} {
+					button, ok := tt.AccessByRole(ui.RoleButton, label)
+					if !ok || button.Offscreen || button.Bounds.H < 28 ||
+						button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > 880 {
+						t.Fatalf("%s must fit in the minimum window: %+v", label, button)
+					}
+				}
+				compare, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
+				if !ok || compare.Bounds.W > 160 || compare.Bounds.X+compare.Bounds.W > 880 {
+					t.Fatalf("comparison must share the toolbar with replace: %+v", compare)
+				}
+			})
+		}
 	}
 }
 

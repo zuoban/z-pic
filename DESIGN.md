@@ -5,12 +5,48 @@
 - Status: Active
 - Date: 2026-11-15
 - Surface: Z Pic desktop window, built with MyGo native UI.
-- Evidence: existing MyGo application, PNG compression tools, and native-window tests. The user requested configurable compression schemes and an explicit overwrite-original action.
+- Evidence: existing MyGo application, a fresh native-window screenshot, PNG compression tools, and 282 passing baseline tests. The user requested a more current visual treatment and easier operation through `$unslop`.
 - Defaults: one image at a time, JPEG and PNG, Chinese interface, local processing.
 
 ## Brand
 
 Quiet, precise, and practical. Show actual file sizes and explicit processing results. Avoid decorative gradients, emoji, fabricated savings, and unrelated tools.
+
+### Polish direction and audit
+
+- Product: local JPEG/PNG compression for people preparing images to share or upload.
+- Character: calm, exact, and convenient.
+- World: a graphite image workbench, with neutral surfaces and the existing blue accent.
+- Moments: the selected image and the measured output size. Do not generate decorative imagery.
+- Signature: a restrained transparency checkerboard, paired with small keyboard keycaps.
+
+This is a polish pass, retaining the product, blue accent, system type, two-column layout, and section order.
+
+Observed issues in `view.go` and the native screenshot:
+
+- Heading, filename, parameter values, and result labels all use weight 700, weakening hierarchy.
+- Settings use 10-point gaps while neighboring sections use 12/24, and the bottom caution falls to 11-point text.
+- The scheme selector hides the three common choices behind a popup.
+- Parameter values compete with the primary action through repeated accent color.
+- Output size has no stronger hierarchy than its surrounding labels.
+- The preview offers no direct way to compare the selected source with the compressed result.
+- Frequent open/compress/save actions expose no keyboard shortcuts.
+
+Implementation plan, in the unslop pass order:
+
+1. Normalize spacing and panel density on a four-point grid.
+2. Quiet the surfaces and borders, retaining system light/dark preferences and the blue accent.
+3. Keep icons restrained; use one native line illustration only in the empty preview.
+4. Shorten supporting copy without removing format or overwrite warnings.
+5. Use system type at weights 400–600, with tabular figures for values.
+6. Preserve the preview/settings/result/action order; expose presets directly and keep actions outside the settings scroll.
+7. Add source/result comparison and discoverable open/compress/save shortcuts, preserving all existing operation guards.
+8. Keep visual richness in the actual image and actual output size.
+9. Retain only native feedback motion; add no decorative animation.
+
+Validation: existing behavior tests before edits; targeted tests for preset selection, comparison and guarded shortcuts; minimum-window, keyboard, light/dark layout checks; full tests/race/vet/MyGo vet; fresh native-window smoke checks and screenshots.
+
+Workflow reference: unslop by Damir Sokolovsky (@heydamir), CC BY 4.0.
 
 ## Product goals
 
@@ -43,14 +79,16 @@ One window: product header; image/empty preview and file details; compression co
 
 - Follow the desktop's light/dark theme using MyGo's semantic theme colors.
 - Use the system font with a restrained hierarchy: window heading, section title, body, secondary labels.
-- Spacing: 8, 12, 16, 24, and 32 points; cards with modest rounding.
-- A single blue accent for the primary action and quality control.
+- Spacing: a four-point grid, with 8/12-point control gaps, 16/20-point panel padding, and 24-point page edges.
+- A single blue accent for the primary action, active controls, and keyboard focus. Parameter numbers use neutral tabular figures.
+- Controls use 8-point corners; panels use 16-point corners. Surfaces and hairlines remain neutral.
+- Text weights are 400–600; output size gets a stronger scale than supporting labels.
 - Images are contained without cropping. Transparency uses a checkerboard preview.
 - No nonessential animation.
 
 ## Components
 
-Use MyGo's built-in select, collapsible, scroll, text, row, column, buttons, slider, progress indicator, image, and panels. Application state owns the selected path, scheme, JPEG quality, PNG parameters, processing status, result, and message. JPEG quality does not control PNG. Styling constants live with the window view; no additional component framework.
+Use MyGo's built-in radio group, segmented control, collapsible, scroll, text, row, column, buttons, slider, progress indicator, image, and panels. Show the three schemes as keyboard-operable radio segments; when parameters are custom, none is selected and the heading states “自定义”. Application state owns the selected path, scheme, JPEG quality, PNG parameters, processing status, result, and message. JPEG quality does not control PNG. Styling stays with the window view; no additional component framework.
 
 Preset settings: size first = JPEG 60, PNG quality 40–65 / 128 colors / speed 3; balanced = JPEG 80, PNG 65–85 / 256 / 3; quality first = JPEG 92, PNG 85–100 / 256 / 1. Custom values persist within the session; disk persistence is outside the current scope.
 
@@ -58,16 +96,19 @@ Preset settings: size first = JPEG 60, PNG quality 40–65 / 128 colors / speed 
 
 Use built-in keyboard-operable widgets, visible focus, descriptive text labels, and semantic theme colors. Show status in text rather than color alone. Make processing and save actions identifiable without icons. Full screen-reader behavior remains subject to platform verification.
 
+Command/Ctrl+O selects or replaces an image, Command/Ctrl+Enter compresses, and Command/Ctrl+S saves a copy. Expose shortcut metadata and visible keycaps. Busy operations and overwrite confirmation suppress window shortcuts. Radio groups support arrow keys and one Tab stop.
+
 ## Responsive behavior
 
 Desktop-first, default 980 × 720 points, minimum 880 × 660. Keep the scheme selector, result summary, status, and actions outside the scrolling parameter region. Advanced settings scroll without pushing save/compress below the window. Prefer filling available space and wrapping long file names. No mobile target.
 
 ## Interaction states
 
-- Empty: supported formats, privacy note, select-image action.
+- Empty: supported formats, privacy note, select-image action. Format-specific parameters wait until an image is selected.
 - Selected: image preview, dimensions, original size, relevant controls.
 - Processing: status and cancel action; prevent concurrent work.
 - Result: original/output sizes, reduction, save-copy action, and a distinct overwrite-original action.
+- Result comparison: “原图 / 压缩后” switches the displayed bitmap without changing the selected bytes, compression settings, export result, or result bitmap. New results default to “压缩后”. Parameter changes restore the source preview. Once the source is overwritten, hide comparison because the previous source is no longer the selected original.
 - No reduction: show “未减小（0.0%）”, both sizes, and explain that the original data has been retained.
 - Error: inline actionable message; retain a valid previous selection where possible.
 - Save copy: native save dialog; cancellation is neutral. The copy API continues to reject the source path and existing files.

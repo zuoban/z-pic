@@ -37,22 +37,23 @@ type selectedImage struct {
 // Application state is read and changed on MyGo's main thread. Background work
 // receives immutable values and delivers its result through Window.Update.
 type application struct {
-	window    *mygo.Window
-	file      *selectedImage
-	quality   float64
-	scheme    string
-	png       compress.PNGOptions
-	advanced  bool
-	result    *compress.Result
-	preview   *ui.Bitmap
-	busy      bool
-	phase     string
-	message   string
-	failed    bool
-	cancel    context.CancelFunc
-	canceling bool
-	closed    bool
-	saves     sync.WaitGroup
+	window       *mygo.Window
+	file         *selectedImage
+	quality      float64
+	scheme       string
+	png          compress.PNGOptions
+	advanced     bool
+	result       *compress.Result
+	preview      *ui.Bitmap
+	showOriginal bool
+	busy         bool
+	phase        string
+	message      string
+	failed       bool
+	cancel       context.CancelFunc
+	canceling    bool
+	closed       bool
+	saves        sync.WaitGroup
 
 	confirmOverwrite bool
 	overwritten      bool
@@ -125,6 +126,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 		return
 	}
 	s.file, s.preview, s.result = selected, selected.preview, nil
+	s.showOriginal = false
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("图片已就绪，可以开始压缩。", false)
 }
@@ -191,6 +193,7 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 
 func (s *application) invalidateResult() {
 	s.result = nil
+	s.showOriginal = false
 	s.confirmOverwrite, s.overwritten = false, false
 	if s.file != nil {
 		s.preview = s.file.preview
@@ -215,6 +218,7 @@ func (s *application) startCompression() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
 	s.result, s.preview = nil, s.file.preview
+	s.showOriginal = false
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 	go func() {
@@ -243,6 +247,7 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 		return
 	}
 	s.result, s.preview = result, preview
+	s.showOriginal = false
 	s.confirmOverwrite, s.overwritten = false, false
 	if result.Unchanged {
 		s.setMessage("没有得到更小的文件，已保留原始数据。", false)
@@ -370,6 +375,7 @@ func (s *application) completeOverwrite(result *compress.Result, err error) {
 		size: result.OutputSize, data: result.Data, preview: s.preview,
 	}
 	s.overwritten = true
+	s.showOriginal = false
 	s.setMessage("已覆盖原图："+s.file.path, false)
 }
 
