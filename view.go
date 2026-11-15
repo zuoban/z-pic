@@ -99,15 +99,9 @@ func (s *application) previewPanel(c *ui.Context) {
 		ui.Row(c).Height(32).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "图片预览").FontSize(14).FontWeight(500).Grow(1)
 			if s.result != nil && !s.overwritten {
-				mode := 1
-				if s.showOriginal {
-					mode = 0
-				}
-				if ui.Segmented(c.Key("preview-mode"), &mode, "原图", "压缩后").
-					Label("预览模式").FillEqually().Width(152).Height(32).
-					Disabled(s.busy).Changed() {
-					s.showOriginal = mode == 0
-				}
+				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+					Label("预览模式").FillEqually().Width(192).Height(32).
+					Disabled(s.previewLocked())
 			}
 			if s.file != nil {
 				ui.Button(c.Key("replace"), "更换图片").Height(32).
@@ -115,7 +109,10 @@ func (s *application) previewPanel(c *ui.Context) {
 					Disabled(s.busy).OnClick(s.chooseFile)
 			}
 		})
-		ui.Box(c).Grow(1).FillWidth().MinHeight(260).Radius(8).
+		if s.preview != nil {
+			s.previewToolbar(c)
+		}
+		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(8).
 			Background(t.Background).Clip().Children(func() {
 			if s.preview == nil {
 				ui.Column(c).Fill().Center().Gap(12).Padding(20).Children(func() {
@@ -140,25 +137,7 @@ func (s *application) previewPanel(c *ui.Context) {
 				})
 				return
 			}
-			ui.Box(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) {
-				const tile = float32(16)
-				for row, y := 0, r.Y; y < r.Y+r.H; row, y = row+1, y+tile {
-					for col, x := 0, r.X; x < r.X+r.W; col, x = col+1, x+tile {
-						if (row+col)%2 == 0 {
-							p.Fill(ui.Rect{X: x, Y: y, W: tile, H: tile}, t.Border.Alpha(0.35), 0)
-						}
-					}
-				}
-			}).Children(func() {
-				preview, label := s.preview, "原图预览"
-				if s.result != nil {
-					label = "压缩后预览"
-					if s.showOriginal && !s.overwritten {
-						preview, label = s.file.preview, "原图预览"
-					}
-				}
-				ui.Image(c, preview).Fill().Fit(ui.Contain).Label(label)
-			})
+			s.previewCanvas(c)
 		})
 		if s.file != nil {
 			ui.Column(c).Gap(4).Children(func() {

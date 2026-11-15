@@ -18,7 +18,7 @@ Quiet, precise, and practical. Show actual file sizes and explicit processing re
 - Character: calm, exact, and convenient.
 - World: a graphite image workbench, with neutral surfaces and the existing blue accent.
 - Moments: the selected image and the measured output size. Do not generate decorative imagery.
-- Signature: a restrained transparency checkerboard, paired with small keyboard keycaps.
+- Signature: a quiet image canvas, paired with small keyboard keycaps.
 
 This is a polish pass, retaining the product, blue accent, system type, two-column layout, and section order.
 
@@ -89,7 +89,7 @@ One main window and one modal child settings window:
 - A single blue accent for the primary action, active controls, and keyboard focus. Parameter numbers use neutral tabular figures.
 - Controls use 8-point corners; panels use 16-point corners. Surfaces and hairlines remain neutral.
 - Text weights are 400–600; output size gets a stronger scale than supporting labels.
-- Images are contained without cropping. Transparency uses a checkerboard preview.
+- Images are contained without cropping. Transparent pixels and unused canvas space show the plain theme background.
 - No nonessential animation.
 
 ## Components
@@ -118,7 +118,9 @@ Desktop-first: main window defaults to 980 × 720 points, minimum 880 × 660; se
 - Main-window file drops and image/compression actions are ignored while settings is open, so the dialog cannot discard an edit or start hidden work.
 - Processing: status and cancel action; prevent concurrent work.
 - Result: original/output sizes, reduction, save-copy action, and a distinct overwrite-original action.
-- Result comparison: “原图 / 压缩后” switches the displayed bitmap without changing the selected bytes, compression settings, export result, or result bitmap. New results default to “压缩后”. Parameter changes restore the source preview. Once the source is overwritten, hide comparison because the previous source is no longer the selected original.
+- Result comparison: “对比 / 原图 / 结果” switches the preview without changing the selected bytes, compression settings, export result, or result bitmap. New results default to a centered draggable split, original on the left and output on the right, with measured file-size labels. Both bitmaps share one destination rectangle and use complementary clips so transparent pixels reveal the plain background without showing the other image. The divider supports pointer capture, arrow keys, Home (all output), and End (all original), with native slider accessibility and visible keyboard focus.
+- Preview inspection: zoom buttons, mouse wheel, and touchpad pinch share a 1%–1600% scale; “1:1” shows the original dimensions and “适应” resets scale and pan to fit. Touchpad scrolling pans both images together; single-image modes also allow dragging to pan. Pinch and wheel zoom retain the image point under the pointer. Mode changes retain the split, scale, and pan. New selections/results and parameter changes restore fit; busy work, settings, and overwrite confirmation disable preview controls.
+- Parameter changes restore the source preview. Once the source is overwritten, hide comparison because the previous source is no longer the selected original; keep the output preview and its camera.
 - No reduction: show “未减小（0.0%）”, both sizes, and explain that the original data has been retained.
 - Error: inline actionable message; retain a valid previous selection where possible.
 - Save copy: native save dialog; cancellation is neutral. The copy API continues to reject the source path and existing files.

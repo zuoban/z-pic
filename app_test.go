@@ -315,12 +315,12 @@ func TestPreviewComparisonKeepsCompressionResult(t *testing.T) {
 	compressed := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
 	s.completeCompression(context.Background(), result, compressed, nil)
 	tt := ui.NewTester(s.view, 880, 660)
-	for _, label := range []string{"原图", "压缩后", "原图"} {
+	for _, label := range []string{"原图", "结果", "原图"} {
 		if err := tt.Click(label); err != nil {
 			t.Fatal(err)
 		}
 		imageLabel := "原图预览"
-		if label == "压缩后" {
+		if label == "结果" {
 			imageLabel = "压缩后预览"
 		}
 		if _, ok := tt.AccessByRole(ui.RoleImage, imageLabel); !ok {
@@ -340,9 +340,9 @@ func TestPreviewComparisonKeepsCompressionResult(t *testing.T) {
 	}
 	s.completeCompression(context.Background(), result, compressed, nil)
 	tt.Frame()
-	after, ok := tt.AccessByRole(ui.RoleRadio, "压缩后")
+	after, ok := tt.AccessByRole(ui.RoleRadio, "对比")
 	if !ok || !after.Checked {
-		t.Fatal("a new result must default to the compressed preview")
+		t.Fatal("a new result must default to the split comparison")
 	}
 }
 
@@ -419,7 +419,7 @@ func TestSettingsShortcutOpensWithoutChangingCompressionState(t *testing.T) {
 			if state == "result" {
 				s = testSelectedApplication()
 				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
-				s.showOriginal = true
+				s.comparison.mode = previewOriginal
 			}
 			file, result, preview, options := s.file, s.result, s.preview, s.compressionOptions()
 			tt := ui.NewTester(s.view, 880, 660)
@@ -442,7 +442,7 @@ func TestSettingsShortcutOpensWithoutChangingCompressionState(t *testing.T) {
 				t.Fatal("repeating the shortcut must retain the open settings draft")
 			}
 			if s.file != file || s.result != result || s.preview != preview ||
-				s.compressionOptions() != options || s.showOriginal != (state == "result") || s.busy {
+				s.compressionOptions() != options || (s.comparison.mode == previewOriginal) != (state == "result") || s.busy {
 				t.Fatal("opening settings by shortcut must preserve the image and compression state")
 			}
 		})
@@ -478,7 +478,7 @@ func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
 					}
 				}
 				compare, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
-				if !ok || compare.Bounds.W > 160 || compare.Bounds.X+compare.Bounds.W > 880 {
+				if !ok || compare.Bounds.W > 200 || compare.Bounds.X+compare.Bounds.W > 880 {
 					t.Fatalf("comparison must share the toolbar with replace: %+v", compare)
 				}
 			})
@@ -602,7 +602,7 @@ func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
 			result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 			preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
 			s.completeCompression(context.Background(), result, preview, nil)
-			s.showOriginal = true
+			s.comparison.mode = previewOriginal
 			file, options, message := s.file, s.compressionOptions(), s.message
 			tt := ui.NewTester(s.view, 880, 660)
 			if err := tt.Click("设置"); err != nil {
@@ -622,7 +622,7 @@ func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
 				t.Fatal(err)
 			}
 			if s.settingsOpen || s.file != file || s.result != result || s.preview != preview ||
-				!s.showOriginal || s.compressionOptions() != options || s.message != message {
+				s.comparison.mode != previewOriginal || s.compressionOptions() != options || s.message != message {
 				t.Fatal("opening and closing settings without edits must preserve image, result, preview, settings and message")
 			}
 			tt.Frame()
