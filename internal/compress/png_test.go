@@ -480,3 +480,20 @@ func TestValidatePNGOutput(t *testing.T) {
 		t.Fatalf("expected canceled output validation, got %v", err)
 	}
 }
+
+func TestIsAnimatedPNGAndSameBytesBacking(t *testing.T) {
+	data := pngFixture(t, image.NewGray(image.Rect(0, 0, 2, 2)), png.BestCompression)
+	if IsAnimatedPNG(data) {
+		t.Fatal("static PNG reported as animated")
+	}
+	if !IsAnimatedPNG(insertPNGChunk(data, "acTL", make([]byte, 8))) {
+		t.Fatal("animated PNG was not detected")
+	}
+	if IsAnimatedPNG(jpegFixture(t, 80)) {
+		t.Fatal("JPEG bytes mistaken for animated PNG")
+	}
+	copied := append([]byte(nil), data...)
+	if !sameBytesBacking(data, data) || sameBytesBacking(data, copied) {
+		t.Fatal("sameBytesBacking must distinguish identical slice backing from copies")
+	}
+}

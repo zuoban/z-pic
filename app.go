@@ -66,13 +66,16 @@ type application struct {
 	batch                 *batchState
 	confirmBatchOverwrite bool
 	pendingBatchRestart   bool
+	pendingBatchRun       batchRunMode
+	pendingBatchIndex     int
 }
 
 func newApplication() *application {
 	return &application{
 		quality: 80, scheme: "均衡", png: compress.DefaultPNGOptions(),
-		presets:    slices.Clone(compressionPresets),
-		comparison: comparisonView{split: 50},
+		presets:           slices.Clone(compressionPresets),
+		comparison:        comparisonView{split: 50},
+		pendingBatchIndex: -1,
 	}
 }
 
@@ -222,6 +225,9 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
 		return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
 	}
+	if format == "png" && compress.IsAnimatedPNG(data) {
+		return nil, errors.New("不支持动画 PNG，仅支持静态 JPEG/PNG")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -243,6 +249,7 @@ func (s *application) invalidateResult() {
 	s.result = nil
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.confirmBatchOverwrite, s.overwritten = false, false, false
+	s.clearPendingBatchConfirmation()
 	if s.batch != nil {
 		s.invalidateBatchResults()
 		return

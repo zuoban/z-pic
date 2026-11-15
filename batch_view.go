@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -10,10 +11,15 @@ import (
 
 func (s *application) batchListPanel(c *ui.Context) {
 	t := c.Theme()
+	visible := s.filteredBatchIndices()
 	ui.Column(c).Grow(1).MinWidth(340).Padding(16).Gap(12).
 		Radius(16).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "批量队列 · %d 张", len(s.batch.items)).
+			headerText := fmt.Sprintf("批量队列 · %d 张", len(s.batch.items))
+			if s.batchFilterActive() {
+				headerText = fmt.Sprintf("批量队列 · %d / %d 张", len(visible), len(s.batch.items))
+			}
+			ui.Text(c, headerText).
 				FontSize(14).FontWeight(500).FontFeatures("tnum").
 				SingleLine().Grow(1)
 			ui.Button(c.Key("batch-add-files"), "添加图片").Height(32).
@@ -27,16 +33,66 @@ func (s *application) batchListPanel(c *ui.Context) {
 				Tooltip("清空当前批量队列").
 				Disabled(s.busy).OnClick(s.clearBatch)
 		})
-		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(8).
+		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+			filterChanged := ui.Segmented(c.Key("batch-filter"), &s.batch.filter, "全部", "待处理", "已完成", "失败").
+				Label("队列筛选").Height(32).Changed()
+			queryChanged := ui.SearchField(c.Key("batch-search"), &s.batch.query).
+				Label("筛选文件名").Placeholder("搜索文件名").Height(32).Grow(1).Changed()
+			if filterChanged || queryChanged {
+				visible = s.filteredBatchIndices()
+			}
+		})
+		if retryFailed := s.retryableFailedCount(); retryFailed > 0 {
+			ui.Row(c).Height(36).Padding(0, 12).Gap(8).Radius(8).
+				Background(t.Background).AlignItems(ui.Center).Children(func() {
+				ui.Textf(c, "%d 张图片处理失败，可重新压缩", retryFailed).
+					FontSize(12).FontFeatures("tnum").TextColor(t.Danger).
+					SingleLine().Grow(1)
+				ui.Button(c.Key("batch-retry-failed"), "重试失败项").Height(28).
+					Disabled(s.busy).
+					Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
+					OnClick(s.retryFailedBatchItems)
+			})
+		}
+		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(8).
 			Background(t.Background).Clip().Children(func() {
-			s.batch.list.Selected = &s.batch.selected
-			s.batch.list.Key = func(i int) any { return s.batch.items[i].absPath }
-			s.batch.list.Label = func(i int) string { return s.batch.items[i].relPath }
-			list := ui.List(c, &s.batch.list, len(s.batch.items)).
+			if len(visible) == 0 {
+				s.batch.selected = -1
+				s.batch.listSelected = -1
+				s.batch.listSelectedKey = ""
+				ui.Column(c).Fill().Center().Gap(8).Padding(20).Children(func() {
+					ui.Text(c, s.emptyBatchFilterMessage()).
+						FontSize(13).FontWeight(500).TextColor(t.TextMuted)
+					if s.batchFilterActive() {
+						ui.Button(c.Key("batch-reset-filter"), "显示全部").Height(32).
+							OnClick(s.resetBatchFilter)
+					}
+				})
+				return
+			}
+			var wantKey string
+			if s.batch.selected >= 0 && s.batch.selected < len(s.batch.items) {
+				wantKey = s.batch.items[s.batch.selected].absPath
+			}
+			row := slices.Index(visible, s.batch.selected)
+			s.batch.list.Selected = &s.batch.listSelected
+			if row != s.batch.listSelected || (row >= 0 && wantKey != s.batch.listSelectedKey) {
+				s.batch.list.Choose(row)
+			}
+			s.batch.list.Key = func(i int) any { return s.batch.items[visible[i]].absPath }
+			s.batch.list.Label = func(i int) string { return s.batch.items[visible[i]].relPath }
+			list := ui.List(c, &s.batch.list, len(visible)).
 				Label("批量图片列表").Fill().Padding(4)
 			list.Rows(func(r ui.ListRow) {
-				s.batchListRow(r)
+				s.batchListRow(r, visible[r.Index])
 			})
+			if s.batch.listSelected >= 0 && s.batch.listSelected < len(visible) {
+				s.batch.selected = visible[s.batch.listSelected]
+				s.batch.listSelectedKey = s.batch.items[s.batch.selected].absPath
+			} else {
+				s.batch.selected = -1
+				s.batch.listSelectedKey = ""
+			}
 			if list.Submitted() && !s.modalOpen() && s.batch.selected >= 0 &&
 				s.batch.selected < len(s.batch.items) && !s.batch.items[s.batch.selected].invalidInput {
 				s.openBatchPreview(s.batch.selected)
@@ -46,9 +102,28 @@ func (s *application) batchListPanel(c *ui.Context) {
 	})
 }
 
-func (s *application) batchListRow(r ui.ListRow) {
+func (s *application) emptyBatchFilterMessage() string {
+	if strings.TrimSpace(s.batch.query) != "" {
+		return "没有找到匹配的图片"
+	}
+	switch s.batch.filter {
+	case batchFilterPending:
+		return "没有待处理的图片"
+	case batchFilterDone:
+		return "没有已完成压缩的图片"
+	case batchFilterFailed:
+		if s.busy {
+			return "处理中，当前没有失败的图片"
+		}
+		return "没有失败的图片"
+	default:
+		return "没有符合条件的图片"
+	}
+}
+
+func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 	t := r.Context.Theme()
-	item := s.batch.items[r.Index]
+	item := s.batch.items[itemIndex]
 	titleColor := t.Text
 	statusText, statusColor := batchItemStatus(item, t)
 	detailText, detailColor := batchItemDetail(item, t)
@@ -120,6 +195,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		return
 	}
 	item := s.batch.items[s.batch.selected]
+	selected := s.batch.selected
 	subText, subColor := batchItemDetail(item, t)
 	subTooltip := item.path
 	if item.status == batchDone && item.savedPath != "" {
@@ -135,10 +211,16 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			ui.Text(c, subText).FontSize(12).FontFeatures("tnum").TextColor(subColor).
 				SingleLine().TruncateMiddle().Tooltip(subTooltip)
 		})
+		if item.status == batchFailed && !item.invalidInput {
+			ui.Button(c.Key("batch-retry-item"), "重试").Height(32).
+				Disabled(s.busy).
+				Tooltip("重新压缩此失败图片").
+				OnClick(func() { s.retryBatchItem(selected) })
+		}
 		ui.Button(c.Key("batch-preview"), "预览").Height(32).
 			Disabled(s.busy || item.invalidInput).
 			Tooltip("查看或对比选中图片").
-			OnClick(func() { s.openBatchPreview(s.batch.selected) })
+			OnClick(func() { s.openBatchPreview(selected) })
 		ui.Button(c.Key("batch-remove"), "移除").Height(32).
 			Disabled(s.busy).
 			Tooltip("从批量队列移除此图片").
@@ -147,15 +229,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 }
 
 func (s *application) hasAdjacentBatchPreview(delta int) bool {
-	if s.batch == nil || !s.batch.previewOpen {
-		return false
-	}
-	for next := s.batch.previewIndex + delta; next >= 0 && next < len(s.batch.items); next += delta {
-		if !s.batch.items[next].invalidInput {
-			return true
-		}
-	}
-	return false
+	return s.adjacentBatchPreviewIndex(delta) >= 0
 }
 
 func (s *application) batchPreviewPanel(c *ui.Context) {
@@ -166,7 +240,12 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 			ui.Button(c.Key("batch-back"), "返回列表").Height(32).
 				KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
 				Disabled(s.busy).OnClick(s.closeBatchPreview)
-			ui.Textf(c, "%d / %d", s.batch.previewIndex+1, len(s.batch.items)).
+			visible := s.filteredBatchIndices()
+			posCurrent, posTotal := s.batch.previewIndex+1, len(s.batch.items)
+			if pos := slices.Index(visible, s.batch.previewIndex); pos >= 0 {
+				posCurrent, posTotal = pos+1, len(visible)
+			}
+			ui.Textf(c, "%d / %d", posCurrent, posTotal).
 				FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).Grow(1)
 			ui.Button(c.Key("batch-prev"), "上一张").Height(32).
 				Disabled(s.busy || !s.hasAdjacentBatchPreview(-1)).
@@ -303,20 +382,29 @@ func (s *application) batchOutputCard(c *ui.Context) {
 func (s *application) batchResultSummary(c *ui.Context) {
 	t := c.Theme()
 	total, pending, done, failed, origTotal, outTotal, _ := s.batchStats()
-	original := formatSize(origTotal)
-	output := "—"
+	var doneOrig int64
+	for _, item := range s.batch.items {
+		if item.status == batchDone {
+			doneOrig += item.originalSize
+		}
+	}
+	firstLabel, original := "原始总计", formatSize(origTotal)
+	secondLabel, output := "输出总计", "—"
 	label, color := fmt.Sprintf("等待压缩 · %d 张", total), t.TextMuted
 	switch {
 	case s.busy && s.batch.total > 0:
 		label, color = fmt.Sprintf("处理中 %d / %d", s.batch.done, s.batch.total), t.Accent
-	case done > 0:
-		var doneOrig int64
-		for _, item := range s.batch.items {
-			if item.status == batchDone {
-				doneOrig += item.originalSize
+		if done > 0 {
+			output = formatSize(outTotal)
+			if pending > 0 || failed > 0 {
+				firstLabel, original = "已完成原大小", formatSize(doneOrig)
 			}
 		}
+	case done > 0:
 		output = formatSize(outTotal)
+		if pending > 0 || failed > 0 {
+			firstLabel, original = "已完成原大小", formatSize(doneOrig)
+		}
 		if doneOrig > 0 && outTotal < doneOrig {
 			saved := float64(doneOrig-outTotal) / float64(doneOrig) * 100
 			label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
@@ -330,9 +418,14 @@ func (s *application) batchResultSummary(c *ui.Context) {
 			label += fmt.Sprintf(" · 余 %d", pending)
 		}
 	case failed > 0:
-		label, color = fmt.Sprintf("%d 张失败", failed), t.Danger
+		if pending > 0 {
+			label = fmt.Sprintf("等待压缩 · %d 张 · %d 失败", pending, failed)
+		} else {
+			label = fmt.Sprintf("%d 张失败", failed)
+		}
+		color = t.Danger
 	}
-	summaryCard(c, "批量结果", label, color, "原始总计", original, "输出总计", output)
+	summaryCard(c, "批量结果", label, color, firstLabel, original, secondLabel, output)
 }
 
 func (s *application) batchOverwriteConfirmation(c *ui.Context) {
@@ -341,17 +434,16 @@ func (s *application) batchOverwriteConfirmation(c *ui.Context) {
 	}
 	if s.busy || s.settingsOpen || s.confirmOverwrite {
 		s.confirmBatchOverwrite = false
+		s.clearPendingBatchConfirmation()
 		return
 	}
-	targetCount := 0
-	for _, item := range s.batch.items {
-		if !item.invalidInput && (s.pendingBatchRestart || item.status == batchPending) {
-			targetCount++
-		}
-	}
+	mode, index := s.effectivePendingBatchRun()
+	targetCount := s.batchRunTargetCount(mode, index)
 	message := fmt.Sprintf("将压缩 %d 张图片；体积减小的文件会直接替换原文件，未减小的文件将保持不变。\n\n覆盖后无法通过本工具恢复原文件。", targetCount)
 	if ui.AlertDialog(c.Key("batch-overwrite-confirmation"), &s.confirmBatchOverwrite,
 		"确认批量覆盖原图？", message, "覆盖原图", "取消") == 0 {
 		s.executeConfirmedBatchOverwrite()
+	} else if !s.confirmBatchOverwrite {
+		s.clearPendingBatchConfirmation()
 	}
 }

@@ -444,12 +444,13 @@ func TestBatchSchemeAndOutputSwitchInvalidateResults(t *testing.T) {
 	// Switching output mode in UI resets completed results.
 	s.batch.items[0].status = batchDone
 	s.batch.items[0].outputSize = 2000
+	s.batch.filter = batchFilterDone
 	tt := ui.NewTester(s.view, 880, 660)
 	if err := tt.Click("覆盖原图"); err != nil {
 		t.Fatal(err)
 	}
-	if s.batch.outputMode != batchOutputOverwrite || s.batch.items[0].status != batchPending {
-		t.Fatalf("switching output mode must reset processed batch items: mode=%d item=%+v", s.batch.outputMode, s.batch.items[0])
+	if s.batch.outputMode != batchOutputOverwrite || s.batch.items[0].status != batchPending || s.batch.filter != batchFilterAll {
+		t.Fatalf("switching output mode must reset processed batch items and emptied filter: mode=%d filter=%d item=%+v", s.batch.outputMode, s.batch.filter, s.batch.items[0])
 	}
 }
 
@@ -606,5 +607,461 @@ func TestDropFilesRoutesSingleAndBatchModes(t *testing.T) {
 	s.completeBatchScan(context.Background(), batchScanResult{}, false, nil)
 	if s.batch != nil || s.file != existing || !s.failed {
 		t.Fatal("empty batch scan must retain existing selection and report error")
+	}
+}
+
+func TestAppendingFoldersPreservesDistinctRelativePaths(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "tripA")
+	dirB := filepath.Join(root, "tripB")
+	dirC := filepath.Join(root, "tripC")
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestJPEG(t, filepath.Join(dirA, "one.jpg"), 64, 48, 95)
+	writeTestJPEG(t, filepath.Join(dirB, "one.jpg"), 64, 48, 95)
+	writeTestJPEG(t, filepath.Join(dirC, "one.jpg"), 64, 48, 95)
+
+	// Step 1: load single folder dirA.
+	scanA, err := scanBatchPathsWithDirs(context.Background(), []string{dirA}, nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newApplication()
+	s.completeBatchScan(context.Background(), scanA, false, nil)
+	if len(s.batch.items) != 1 || s.batch.items[0].relPath != "one.jpg" {
+		t.Fatalf("single folder must keep unprefixed relPath, got %+v", s.batch.items)
+	}
+
+	// Re-appending the same folder (with a newly added file) keeps unprefixed relPath.
+	writeTestJPEG(t, filepath.Join(dirA, "two.jpg"), 64, 48, 95)
+	existing := map[string]bool{s.batch.items[0].absPath: true}
+	existingDirs := map[string]bool{s.batch.items[0].sourceDir: true}
+	scanA2, err := scanBatchPathsWithDirs(context.Background(), []string{dirA}, existing, existingDirs, len(s.batch.items))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.completeBatchScan(context.Background(), scanA2, true, nil)
+	if len(s.batch.items) != 2 || s.batch.items[1].relPath != "two.jpg" {
+		t.Fatalf("re-appending same folder must keep unprefixed relPaths, got %+v", s.batch.items)
+	}
+
+	// Step 2: append dirB before running -> promotes dirA items and prefixes dirB.
+	existing = map[string]bool{}
+	existingDirs = map[string]bool{}
+	for _, item := range s.batch.items {
+		existing[item.absPath] = true
+		if item.sourceDir != "" {
+			existingDirs[item.sourceDir] = true
+		}
+	}
+	scanB, err := scanBatchPathsWithDirs(context.Background(), []string{dirB}, existing, existingDirs, len(s.batch.items))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.completeBatchScan(context.Background(), scanB, true, nil)
+	if len(s.batch.items) != 3 {
+		t.Fatalf("expected 3 items after appending dirB, got %d", len(s.batch.items))
+	}
+	if s.batch.items[0].relPath != filepath.Join("tripA", "one.jpg") ||
+		s.batch.items[1].relPath != filepath.Join("tripA", "two.jpg") ||
+		s.batch.items[2].relPath != filepath.Join("tripB", "one.jpg") {
+		t.Fatalf("appending second folder must organize each folder under its root name: %+v", s.batch.items)
+	}
+
+	// Step 3: if existing items already completed and saved, appending dirC leaves existing relPaths intact
+	// while prefixing dirC to avoid output collisions.
+	s.batch.items[0].status = batchDone
+	s.batch.items[0].savedPath = filepath.Join(outDir, s.batch.items[0].relPath)
+	existing[s.batch.items[2].absPath] = true
+	existingDirs[s.batch.items[2].sourceDir] = true
+	scanC, err := scanBatchPathsWithDirs(context.Background(), []string{dirC}, existing, existingDirs, len(s.batch.items))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.completeBatchScan(context.Background(), scanC, true, nil)
+	if s.batch.items[0].relPath != filepath.Join("tripA", "one.jpg") ||
+		s.batch.items[3].relPath != filepath.Join("tripC", "one.jpg") {
+		t.Fatalf("post-run folder append must keep existing relPath and prefix new folder: %+v", s.batch.items)
+	}
+}
+
+func TestBatchResultSummaryMatchesCompletedScope(t *testing.T) {
+	// Case 1: pending queue with an invalid item shows waiting count + failure count.
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", originalSize: 2048, status: batchPending},
+		{path: "/bad.jpg", absPath: "/bad.jpg", relPath: "bad.jpg", status: batchFailed, invalidInput: true, errMsg: "损坏"},
+	})
+	tt := ui.NewTester(s.view, 980, 720)
+	if !tt.HasText("等待压缩 · 1 张 · 1 失败") || !tt.HasText("原始总计") {
+		t.Fatal("initial mixed queue must report pending and invalid counts under 原始总计")
+	}
+
+	// Case 2: partially completed queue displays completed original size alongside output total.
+	s.batch.items = []batchItem{
+		{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", originalSize: 2048, outputSize: 1024, status: batchDone},
+		{path: "/b.jpg", absPath: "/b.jpg", relPath: "b.jpg", originalSize: 10240, status: batchPending},
+	}
+	tt.Frame()
+	if !tt.HasText("已完成原大小") || !tt.HasText("2.0 KiB") || !tt.HasText("1.0 KiB") || !tt.HasText("减少 50.0% · 余 1") {
+		t.Fatal("partially completed summary must compare completed original size against output total")
+	}
+
+	// Case 3: fully completed queue restores 原始总计.
+	s.batch.items[1].status = batchDone
+	s.batch.items[1].outputSize = 5120
+	tt.Frame()
+	if !tt.HasText("原始总计") || tt.HasText("已完成原大小") || !tt.HasText("12.0 KiB") || !tt.HasText("6.0 KiB") {
+		t.Fatal("fully completed summary must display full 原始总计 and 输出总计")
+	}
+}
+
+func TestBatchQueueFilterSearchAndRemoval(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/p/done.jpg", absPath: "/p/done.jpg", relPath: "done.jpg", format: "jpeg", width: 100, height: 100, originalSize: 4096, outputSize: 2048, status: batchDone, savedPath: "/out/done.jpg"},
+		{path: "/p/sub/wait.png", absPath: "/p/sub/wait.png", relPath: filepath.Join("sub", "wait.png"), format: "png", width: 80, height: 60, originalSize: 3072, status: batchPending},
+		{path: "/p/fail-a.jpg", absPath: "/p/fail-a.jpg", relPath: "fail-a.jpg", format: "jpeg", width: 64, height: 64, originalSize: 2048, status: batchFailed, errMsg: "写入失败"},
+		{path: "/p/broken.jpg", absPath: "/p/broken.jpg", relPath: "broken.jpg", status: batchFailed, invalidInput: true, errMsg: "无法识别图片"},
+		{path: "/p/fail-b.png", absPath: "/p/fail-b.png", relPath: "fail-b.png", format: "png", width: 64, height: 64, originalSize: 1024, status: batchFailed, errMsg: "权限不足"},
+	})
+	tt := ui.NewTester(s.view, 980, 720)
+
+	if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "队列筛选"); !ok {
+		t.Fatal("batch view must expose status filter segmented control")
+	}
+	if !tt.HasText("批量队列 · 5 张") {
+		t.Fatal("unfiltered header must display total batch count")
+	}
+	if s.retryableFailedCount() != 2 {
+		t.Fatalf("retryableFailedCount must exclude invalidInput items: got %d", s.retryableFailedCount())
+	}
+
+	// Filter to pending items.
+	if err := tt.Click("待处理"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("批量队列 · 1 / 5 张") || !tt.HasText(filepath.Join("sub", "wait.png")) || tt.HasText("done.jpg") {
+		t.Fatal("待处理 filter must show only pending item")
+	}
+	if s.batch.selected != -1 {
+		t.Fatalf("selected item hidden by filter must reset to -1, got %d", s.batch.selected)
+	}
+
+	// Filter to failed items (shows both retryable failures and invalidInput).
+	if err := tt.Click("失败"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("批量队列 · 3 / 5 张") || !tt.HasText("fail-a.jpg") || !tt.HasText("broken.jpg") || !tt.HasText("fail-b.png") {
+		t.Fatal("失败 filter must show all failed items")
+	}
+
+	// Selecting fail-a.jpg and removing it advances selection within the filtered view, not hidden items.
+	if err := tt.Click("fail-a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.selected != 2 {
+		t.Fatalf("clicking fail-a.jpg must select item 2, got %d", s.batch.selected)
+	}
+	if err := tt.Click("移除"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.batch.items) != 4 || s.batch.selected != 2 || s.batch.items[s.batch.selected].relPath != "broken.jpg" {
+		t.Fatalf("removing filtered item must advance selection to next filtered item: selected=%d items=%+v", s.batch.selected, s.batch.items)
+	}
+
+	// Search query filters within active status filter and supports empty-state reset.
+	searchField, ok := tt.AccessByRole(ui.RoleTextField, "筛选文件名")
+	if !ok {
+		t.Fatal("batch view must expose search field")
+	}
+	tt.ClickAt(searchField.Bounds.X+searchField.Bounds.W/2, searchField.Bounds.Y+searchField.Bounds.H/2)
+	tt.Type("fail-b")
+	if !tt.HasText("批量队列 · 1 / 4 张") || !tt.HasText("fail-b.png") || tt.HasText("broken.jpg") {
+		t.Fatal("search query must narrow visible queue rows")
+	}
+
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("no-such-file")
+	if !tt.HasText("没有找到匹配的图片") {
+		t.Fatal("empty search match must show clear empty-filter message")
+	}
+	if err := tt.Click("显示全部"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.filter != batchFilterAll || s.batch.query != "" || !tt.HasText("批量队列 · 4 张") {
+		t.Fatalf("clicking 显示全部 must reset filter and search: filter=%d query=%q", s.batch.filter, s.batch.query)
+	}
+
+	// Appending new files while viewing 已完成 switches back to 全部 so newly added items appear.
+	s.batch.filter = batchFilterDone
+	s.batch.query = "done"
+	s.completeBatchScan(context.Background(), batchScanResult{
+		items: []batchItem{{path: "/p/new.jpg", absPath: "/p/new.jpg", relPath: "new.jpg", status: batchPending}},
+	}, true, nil)
+	if s.batch.filter != batchFilterAll || s.batch.query != "" {
+		t.Fatalf("appending items must clear finished/failed filter and query: filter=%d query=%q", s.batch.filter, s.batch.query)
+	}
+
+	// Appending an invalid item while viewing 待处理 switches back to 全部 so the failure is visible.
+	s.batch.filter = batchFilterPending
+	s.completeBatchScan(context.Background(), batchScanResult{
+		items: []batchItem{{path: "/p/bad2.jpg", absPath: "/p/bad2.jpg", relPath: "bad2.jpg", status: batchFailed, invalidInput: true, errMsg: "损坏"}},
+	}, true, nil)
+	if s.batch.filter != batchFilterAll {
+		t.Fatalf("appending invalid item under 待处理 filter must reset filter to 全部, got %d", s.batch.filter)
+	}
+}
+
+func TestBatchFilteredPreviewNavigation(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", format: "jpeg", width: 20, height: 12, originalSize: 4096, outputSize: 2048, status: batchDone},
+		{path: "/b.jpg", absPath: "/b.jpg", relPath: "b.jpg", format: "jpeg", width: 20, height: 12, originalSize: 4096, status: batchPending},
+		{path: "/c.jpg", absPath: "/c.jpg", relPath: "c.jpg", format: "jpeg", width: 20, height: 12, originalSize: 4096, outputSize: 1024, status: batchDone},
+	})
+	s.batch.filter = batchFilterDone
+
+	img := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+	s.completeBatchPreview(context.Background(), 0, s.batch.items[0],
+		&selectedImage{path: "/a.jpg", format: "jpeg", width: 20, height: 12, size: 4096, preview: img},
+		&compress.Result{SourcePath: "/a.jpg", Format: "jpeg", Width: 20, Height: 12, OriginalSize: 4096, OutputSize: 2048},
+		img, nil)
+
+	tt := ui.NewTester(s.view, 980, 720)
+	if !tt.HasText("1 / 2") {
+		t.Fatal("filtered preview must display position within filtered items")
+	}
+	if prev := s.adjacentBatchPreviewIndex(-1); prev != -1 {
+		t.Fatalf("first filtered item must have no previous item, got %d", prev)
+	}
+	if next := s.adjacentBatchPreviewIndex(1); next != 2 {
+		t.Fatalf("next preview item under 已完成 filter must skip pending item 1 and jump to 2, got %d", next)
+	}
+}
+
+func TestBatchRetryFailedItemsAndSingleItemRetry(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	okPath := filepath.Join(root, "ok.jpg")
+	retryPath := filepath.Join(root, "retry.jpg")
+	pendingPath := filepath.Join(root, "pending.jpg")
+	brokenPath := filepath.Join(root, "broken.jpg")
+
+	writeTestJPEG(t, okPath, 160, 120, 100)
+	retryOrig := writeTestJPEG(t, retryPath, 160, 120, 100)
+	writeTestJPEG(t, pendingPath, 120, 90, 95)
+	if err := os.WriteFile(brokenPath, []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scan, err := scanBatchPaths(context.Background(), []string{okPath, retryPath, pendingPath, brokenPath}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newApplication()
+	s.setScheme("体积优先")
+	s.batch = newBatchState(scan.items)
+	s.batch.outputMode = batchOutputFolder
+	s.batch.outputDir = outDir
+
+	findIndex := func(name string) int {
+		for i, item := range s.batch.items {
+			if filepath.Base(item.path) == name {
+				return i
+			}
+		}
+		t.Fatalf("missing item %s", name)
+		return -1
+	}
+	okIdx := findIndex("ok.jpg")
+	retryIdx := findIndex("retry.jpg")
+	pendingIdx := findIndex("pending.jpg")
+	brokenIdx := findIndex("broken.jpg")
+
+	okSaved := filepath.Join(outDir, "ok.jpg")
+	if err := os.WriteFile(okSaved, []byte("already-saved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.batch.items[okIdx].status = batchDone
+	s.batch.items[okIdx].outputSize = 500
+	s.batch.items[okIdx].savedPath = okSaved
+	s.batch.items[retryIdx].status = batchFailed
+	s.batch.items[retryIdx].errMsg = "磁盘空间不足"
+	s.batch.items[pendingIdx].status = batchPending
+	if !s.batch.items[brokenIdx].invalidInput {
+		t.Fatal("broken.jpg must be marked invalidInput")
+	}
+
+	s.batch.selected = okIdx
+	tt := ui.NewTester(s.view, 980, 720)
+	if _, ok := tt.AccessByRole(ui.RoleButton, "重试失败项"); !ok {
+		t.Fatal("toolbar must show 重试失败项 when retryable failed items exist")
+	}
+	if _, ok := tt.AccessByRole(ui.RoleButton, "重试"); ok {
+		t.Fatal("selected bar must not show 重试 for completed item")
+	}
+	s.batch.selected = brokenIdx
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleButton, "重试"); ok {
+		t.Fatal("selected bar must not show 重试 for invalidInput item")
+	}
+	s.batch.selected = retryIdx
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleButton, "重试"); !ok {
+		t.Fatal("selected bar must show 重试 for retryable failed item")
+	}
+
+	tasks, used := s.prepareBatchTasks(batchRunRetryFailed, -1)
+	if len(tasks) != 1 || tasks[0].index != retryIdx || !used[okSaved] {
+		t.Fatalf("prepareBatchTasks(retryFailed) must collect only retryIdx and retain usedPaths: tasks=%+v used=%+v", tasks, used)
+	}
+	s.batch.total = len(tasks)
+	s.runBatchTasks(context.Background(), tasks, s.compressionOptions(), s.batch.outputMode, s.batch.outputDir, used, func(fn func()) { fn() })
+	s.completeBatchRun(context.Background())
+
+	if s.batch.items[retryIdx].status != batchDone || s.batch.items[retryIdx].outputSize >= int64(len(retryOrig)) {
+		t.Fatalf("retried item must succeed with smaller output: %+v", s.batch.items[retryIdx])
+	}
+	if s.batch.items[okIdx].status != batchDone || s.batch.items[okIdx].savedPath != okSaved {
+		t.Fatalf("already completed item must stay untouched: %+v", s.batch.items[okIdx])
+	}
+	if s.batch.items[pendingIdx].status != batchPending {
+		t.Fatalf("pending item must remain pending after retrying failed items: %+v", s.batch.items[pendingIdx])
+	}
+	if s.batch.items[brokenIdx].status != batchFailed || !s.batch.items[brokenIdx].invalidInput {
+		t.Fatalf("invalidInput item must remain failed: %+v", s.batch.items[brokenIdx])
+	}
+	if !s.failed || !strings.Contains(s.message, "当前已完成 2 张，失败 1 张，剩余 1 张待压缩") {
+		t.Fatalf("retry completion with remaining pending items must report status: failed=%v msg=%q", s.failed, s.message)
+	}
+
+	// When no invalid/failed items remain while pending items exist, completion reports neutral retry status.
+	s.batch.items[brokenIdx].status = batchPending
+	s.batch.items[brokenIdx].invalidInput = false
+	s.completeBatchRun(context.Background())
+	if s.failed || !strings.Contains(s.message, "重试完成，当前已完成 2 张，剩余 2 张待压缩") {
+		t.Fatalf("retry completion without remaining failures must report neutral progress: failed=%v msg=%q", s.failed, s.message)
+	}
+	s.batch.items[brokenIdx].status = batchFailed
+	s.batch.items[brokenIdx].invalidInput = true
+
+	s.batch.items[retryIdx].status = batchFailed
+	s.batch.items[retryIdx].errMsg = "临时错误"
+	s.batch.items[pendingIdx].status = batchFailed
+	s.batch.items[pendingIdx].errMsg = "另一个错误"
+	singleTasks, _ := s.prepareBatchTasks(batchRunSingle, retryIdx)
+	if len(singleTasks) != 1 || singleTasks[0].index != retryIdx {
+		t.Fatalf("single retry must queue only selected item %d, got %+v", retryIdx, singleTasks)
+	}
+	if s.batch.items[pendingIdx].status != batchFailed {
+		t.Fatalf("single retry must leave other failed items untouched: %+v", s.batch.items[pendingIdx])
+	}
+
+	s.batch.items[retryIdx].status = batchDone
+	s.batch.items[pendingIdx].status = batchDone
+	tt.Frame()
+	if _, ok := tt.AccessByRole(ui.RoleButton, "重试失败项"); ok {
+		t.Fatal("重试失败项 must be hidden when only invalidInput failures remain")
+	}
+}
+
+func TestBatchRetryOverwriteRequiresConfirmationAndPreservesFailureOnCancel(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", format: "jpeg", originalSize: 4096, outputSize: 2048, status: batchDone, overwritten: true},
+		{path: "/b.jpg", absPath: "/b.jpg", relPath: "b.jpg", format: "jpeg", originalSize: 4096, status: batchFailed, errMsg: "权限错误"},
+		{path: "/c.jpg", absPath: "/c.jpg", relPath: "c.jpg", format: "jpeg", originalSize: 4096, status: batchFailed, errMsg: "磁盘已满"},
+		{path: "/bad.jpg", absPath: "/bad.jpg", relPath: "bad.jpg", status: batchFailed, invalidInput: true, errMsg: "损坏"},
+	})
+	s.batch.outputMode = batchOutputOverwrite
+	s.batch.selected = 1
+
+	tt := ui.NewTester(s.view, 980, 720)
+	if err := tt.Click("重试失败项"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.confirmBatchOverwrite || s.pendingBatchRun != batchRunRetryFailed {
+		t.Fatalf("retrying failed items in overwrite mode must require confirmation: confirm=%v mode=%v", s.confirmBatchOverwrite, s.pendingBatchRun)
+	}
+	if !tt.HasText("将压缩 2 张图片") {
+		t.Fatal("overwrite dialog must report exact count of retryable failed items (2)")
+	}
+	tt.Key(0, ui.KeyEscape)
+	if s.confirmBatchOverwrite || s.pendingBatchRun != batchRunPending || s.pendingBatchIndex != -1 ||
+		s.batch.items[1].status != batchFailed || s.batch.items[1].errMsg != "权限错误" ||
+		s.batch.items[2].status != batchFailed || s.batch.items[2].errMsg != "磁盘已满" {
+		t.Fatalf("canceling overwrite retry must leave failed items intact and clear pending state: confirm=%v mode=%v index=%d items=%+v",
+			s.confirmBatchOverwrite, s.pendingBatchRun, s.pendingBatchIndex, s.batch.items)
+	}
+
+	if err := tt.Click("重试"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.confirmBatchOverwrite || s.pendingBatchRun != batchRunSingle || s.pendingBatchIndex != 1 {
+		t.Fatalf("single-item retry in overwrite mode must require confirmation: confirm=%v mode=%v index=%d", s.confirmBatchOverwrite, s.pendingBatchRun, s.pendingBatchIndex)
+	}
+	if !tt.HasText("将压缩 1 张图片") {
+		t.Fatal("single-item overwrite dialog must report count 1")
+	}
+	tt.Key(0, ui.KeyEscape)
+	if s.confirmBatchOverwrite || s.pendingBatchRun != batchRunPending || s.pendingBatchIndex != -1 ||
+		s.batch.items[1].status != batchFailed || s.batch.items[1].errMsg != "权限错误" {
+		t.Fatalf("canceling single-item overwrite retry must preserve failure and reset confirmation: confirm=%v mode=%v index=%d item=%+v",
+			s.confirmBatchOverwrite, s.pendingBatchRun, s.pendingBatchIndex, s.batch.items[1])
+	}
+}
+
+func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		name := "light"
+		if dark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newApplication()
+			s.batch = newBatchState([]batchItem{
+				{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", format: "jpeg", width: 100, height: 100, originalSize: 4096, status: batchFailed, errMsg: "磁盘已满"},
+				{path: "/b.png", absPath: "/b.png", relPath: "b.png", format: "png", width: 100, height: 100, originalSize: 4096, outputSize: 2048, status: batchDone, savedPath: "/out/b.png"},
+			})
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.LightTheme()
+				if dark {
+					theme = ui.DarkTheme()
+				}
+				c.SetTheme(theme)
+				s.view(c)
+			}, 880, 660)
+
+			searchField, ok := tt.AccessByRole(ui.RoleTextField, "筛选文件名")
+			if !ok || searchField.Offscreen || searchField.Bounds.W < 120 ||
+				searchField.Bounds.X+searchField.Bounds.W > 880 || searchField.Bounds.Y+searchField.Bounds.H > 660 {
+				t.Fatalf("search field must fit comfortably inside minimum window: %+v", searchField)
+			}
+			for _, label := range []string{"重试失败项", "重试", "预览", "移除"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Offscreen || button.Bounds.H < 24 ||
+					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
+					t.Fatalf("%q must fit inside minimum window: %+v", label, button)
+				}
+			}
+
+			s.busy = true
+			s.phase = "正在重试 0 / 1"
+			s.batch.done, s.batch.total = 0, 1
+			tt.Frame()
+			for _, label := range []string{"重试失败项", "重试"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || !button.Disabled {
+					t.Fatalf("%q must be disabled while busy: %+v", label, button)
+				}
+			}
+		})
 	}
 }

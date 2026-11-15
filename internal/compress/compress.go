@@ -129,26 +129,30 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", err)
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
-	}
-	if format == "jpeg" {
-		img = normalizeOrientation(img, jpegOrientation(data))
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("压缩已取消：%w", err)
-	}
-	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+	width, height := config.Width, config.Height
 	var encoded []byte
 	if format == "jpeg" {
+		img, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+		}
+		img = normalizeOrientation(img, jpegOrientation(data))
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("压缩已取消：%w", err)
+		}
+		width, height = img.Bounds().Dx(), img.Bounds().Dy()
 		var output bytes.Buffer
 		err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
 		encoded = output.Bytes()
 	} else {
+		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("压缩已取消：%w", err)
+		}
 		// Quantize the original PNG directly so the tool can use its palette,
 		// color profile, and transparency when choosing the reduced colors.
-		img = nil
 		encoded, err = compressPNG(ctx, data, config, options.PNG)
 	}
 	if cancelErr := ctx.Err(); cancelErr != nil {
@@ -179,23 +183,35 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePNGOutput(ctx, quantized, config); err != nil {
-		return nil, fmt.Errorf("pngquant 输出无效：%w", err)
-	}
 	if len(quantized) < len(candidate) {
 		candidate = quantized
 	}
 	optimized, err := pngtools.Optimize(ctx, candidate)
 	if err != nil {
+		if !sameBytesBacking(candidate, data) {
+			if validateErr := validatePNGOutput(ctx, candidate, config); validateErr != nil {
+				return nil, fmt.Errorf("pngquant 输出无效：%w", validateErr)
+			}
+		}
 		return nil, err
-	}
-	if err := validatePNGOutput(ctx, optimized, config); err != nil {
-		return nil, fmt.Errorf("Oxipng 输出无效：%w", err)
 	}
 	if len(optimized) < len(candidate) {
 		candidate = optimized
 	}
+	if sameBytesBacking(candidate, data) {
+		return candidate, nil
+	}
+	if err := validatePNGOutput(ctx, candidate, config); err != nil {
+		if sameBytesBacking(candidate, quantized) {
+			return nil, fmt.Errorf("pngquant 输出无效：%w", err)
+		}
+		return nil, fmt.Errorf("Oxipng 输出无效：%w", err)
+	}
 	return candidate, nil
+}
+
+func sameBytesBacking(a, b []byte) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
 }
 
 func validatePNGOutput(ctx context.Context, data []byte, input image.Config) error {
@@ -271,10 +287,19 @@ func (r contextReader) Read(p []byte) (int, error) {
 	return r.reader.Read(p)
 }
 
+// IsAnimatedPNG reports whether data starts with a PNG signature and contains
+// an animation control (acTL) chunk.
+func IsAnimatedPNG(data []byte) bool {
+	return animatedPNG(data)
+}
+
 // The standard PNG decoder ignores APNG animation chunks. Walk chunk
 // boundaries so bytes inside a pixel payload cannot be mistaken for acTL.
 func animatedPNG(data []byte) bool {
-	for offset := 8; len(data)-offset >= 12; {
+	if len(data) < len(pngSignature) || !bytes.Equal(data[:len(pngSignature)], pngSignature[:]) {
+		return false
+	}
+	for offset := len(pngSignature); len(data)-offset >= 12; {
 		length := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
 		if length > uint64(len(data)-offset-12) {
 			return false // The decoder will report the truncated chunk.

@@ -24,6 +24,22 @@ const (
 	batchOutputOverwrite
 )
 
+const (
+	batchFilterAll = iota
+	batchFilterPending
+	batchFilterDone
+	batchFilterFailed
+)
+
+type batchRunMode int
+
+const (
+	batchRunPending batchRunMode = iota
+	batchRunRestart
+	batchRunRetryFailed
+	batchRunSingle
+)
+
 type batchStatus int
 
 const (
@@ -37,6 +53,9 @@ type batchItem struct {
 	path         string
 	absPath      string
 	relPath      string
+	sourceDir    string
+	sourceBase   string
+	prefixedDir  bool
 	format       string
 	width        int
 	height       int
@@ -51,16 +70,20 @@ type batchItem struct {
 }
 
 type batchState struct {
-	items        []batchItem
-	outputMode   int
-	outputDir    string
-	list         ui.ListState
-	selected     int
-	previewOpen  bool
-	previewIndex int
-	done         int
-	total        int
-	currentName  string
+	items           []batchItem
+	outputMode      int
+	outputDir       string
+	filter          int
+	query           string
+	list            ui.ListState
+	selected        int
+	listSelected    int
+	listSelectedKey string
+	previewOpen     bool
+	previewIndex    int
+	done            int
+	total           int
+	currentName     string
 }
 
 type batchScanResult struct {
@@ -100,6 +123,7 @@ func newBatchState(items []batchItem) *batchState {
 	return &batchState{
 		items:        items,
 		selected:     selected,
+		listSelected: -1,
 		previewIndex: -1,
 	}
 }
@@ -170,11 +194,16 @@ func (s *application) loadBatch(paths []string, appendMode bool) {
 		return
 	}
 	var existing map[string]bool
+	var existingDirs map[string]bool
 	existingCount := 0
 	if appendMode && s.batch != nil {
 		existing = make(map[string]bool, len(s.batch.items))
+		existingDirs = make(map[string]bool)
 		for _, item := range s.batch.items {
 			existing[item.absPath] = true
+			if item.sourceDir != "" {
+				existingDirs[item.sourceDir] = true
+			}
 		}
 		existingCount = len(s.batch.items)
 	}
@@ -182,7 +211,7 @@ func (s *application) loadBatch(paths []string, appendMode bool) {
 	s.busy, s.phase, s.cancel = true, "正在扫描图片文件", cancel
 	s.setMessage("", false)
 	go func() {
-		scan, err := scanBatchPaths(ctx, paths, existing, existingCount)
+		scan, err := scanBatchPathsWithDirs(ctx, paths, existing, existingDirs, existingCount)
 		s.update(func() {
 			defer cancel()
 			s.completeBatchScan(ctx, scan, appendMode, err)
@@ -209,6 +238,20 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 	}
 	if appendMode && s.batch != nil {
 		s.closeBatchPreview()
+		if len(scan.items) > 0 && hasMultipleBatchDirs(s.batch.items, scan.items) && !batchHasSavedOrDone(s.batch.items) {
+			promoteBatchFolderPrefixes(s.batch.items)
+		}
+		if len(scan.items) > 0 {
+			if s.batch.filter != batchFilterAll &&
+				slices.ContainsFunc(scan.items, func(item batchItem) bool {
+					return !matchesBatchFilter(item, s.batch.filter, "")
+				}) {
+				s.batch.filter = batchFilterAll
+			}
+			if strings.TrimSpace(s.batch.query) != "" {
+				s.batch.query = ""
+			}
+		}
 		s.batch.items = append(s.batch.items, scan.items...)
 		if s.batch.selected < 0 {
 			s.batch.selected = 0
@@ -238,20 +281,26 @@ func batchScanMessage(added, duplicates int, truncated, appendMode bool) string 
 }
 
 func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bool, existingCount int) (batchScanResult, error) {
+	return scanBatchPathsWithDirs(ctx, inputs, existing, nil, existingCount)
+}
+
+func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, existingDirs map[string]bool, existingCount int) (batchScanResult, error) {
 	var out batchScanResult
 	seen := make(map[string]bool, len(existing))
 	maps.Copy(seen, existing)
 
-	dirCount := 0
+	uniqueDirs := make(map[string]bool, len(existingDirs))
+	maps.Copy(uniqueDirs, existingDirs)
 	isDir := make([]bool, len(inputs))
 	for i, input := range inputs {
 		if info, err := os.Stat(input); err == nil && info.IsDir() {
 			isDir[i] = true
-			dirCount++
+			uniqueDirs[canonicalBatchKey(filepath.Clean(input))] = true
 		}
 	}
+	prefixRoot := len(uniqueDirs) > 1
 
-	addFile := func(path, relPath string, explicit bool) error {
+	addFile := func(path, relPath, sourceDir, sourceBase string, prefixedDir, explicit bool) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -278,6 +327,9 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 				path:         path,
 				absPath:      absPath,
 				relPath:      relPath,
+				sourceDir:    sourceDir,
+				sourceBase:   sourceBase,
+				prefixedDir:  prefixedDir,
 				status:       batchFailed,
 				invalidInput: true,
 				errMsg:       err.Error(),
@@ -288,6 +340,9 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 			path:         path,
 			absPath:      absPath,
 			relPath:      relPath,
+			sourceDir:    sourceDir,
+			sourceBase:   sourceBase,
+			prefixedDir:  prefixedDir,
 			format:       info.Format,
 			width:        info.Width,
 			height:       info.Height,
@@ -302,7 +357,7 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 			return out, err
 		}
 		if !isDir[i] {
-			if err := addFile(input, filepath.Base(input), true); err != nil {
+			if err := addFile(input, filepath.Base(input), "", "", false, true); err != nil {
 				if errors.Is(err, errBatchLimit) {
 					return out, nil
 				}
@@ -311,7 +366,8 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 			continue
 		}
 		rootClean := filepath.Clean(input)
-		rootBase := filepath.Base(rootClean)
+		canonDir := canonicalBatchKey(rootClean)
+		rootBase := dirBaseName(rootClean)
 		err := filepath.WalkDir(rootClean, func(p string, d fs.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -342,10 +398,10 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 			if relErr != nil {
 				rel = name
 			}
-			if dirCount > 1 {
+			if prefixRoot {
 				rel = filepath.Join(rootBase, rel)
 			}
-			return addFile(p, rel, false)
+			return addFile(p, rel, canonDir, rootBase, prefixRoot, false)
 		})
 		if err != nil {
 			if errors.Is(err, errBatchLimit) {
@@ -358,6 +414,59 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 		}
 	}
 	return out, nil
+}
+
+func dirBaseName(rootClean string) string {
+	base := filepath.Base(rootClean)
+	if base != "." && base != string(filepath.Separator) && base != "" {
+		return base
+	}
+	if abs, err := filepath.Abs(rootClean); err == nil {
+		base = filepath.Base(abs)
+		if base != "." && base != string(filepath.Separator) && base != "" {
+			return base
+		}
+	}
+	return "folder"
+}
+
+func hasMultipleBatchDirs(existing, added []batchItem) bool {
+	dirs := make(map[string]bool)
+	for _, item := range existing {
+		if item.sourceDir != "" {
+			dirs[item.sourceDir] = true
+		}
+	}
+	for _, item := range added {
+		if item.sourceDir != "" {
+			dirs[item.sourceDir] = true
+			if len(dirs) > 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func batchHasSavedOrDone(items []batchItem) bool {
+	return slices.ContainsFunc(items, func(item batchItem) bool {
+		return item.status == batchDone || item.savedPath != ""
+	})
+}
+
+func promoteBatchFolderPrefixes(items []batchItem) {
+	for i := range items {
+		item := &items[i]
+		if item.sourceDir == "" || item.prefixedDir {
+			continue
+		}
+		base := item.sourceBase
+		if base == "" {
+			base = dirBaseName(item.sourceDir)
+		}
+		item.relPath = sanitizeRelPath(filepath.Join(base, item.relPath), item.relPath)
+		item.prefixedDir = true
+	}
 }
 
 func canonicalBatchKey(path string) string {
@@ -396,8 +505,69 @@ func (s *application) clearBatch() {
 		return
 	}
 	s.closeBatchPreview()
+	s.clearPendingBatchConfirmation()
 	s.batch = nil
 	s.setMessage("", false)
+}
+
+func (s *application) batchFilterActive() bool {
+	return s.batch != nil && (s.batch.filter != batchFilterAll || strings.TrimSpace(s.batch.query) != "")
+}
+
+func matchesBatchFilter(item batchItem, filter int, query string) bool {
+	switch filter {
+	case batchFilterPending:
+		if item.status != batchPending && item.status != batchProcessing {
+			return false
+		}
+	case batchFilterDone:
+		if item.status != batchDone {
+			return false
+		}
+	case batchFilterFailed:
+		if item.status != batchFailed {
+			return false
+		}
+	}
+	q := strings.ToLower(strings.TrimSpace(filepath.ToSlash(query)))
+	if q == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(filepath.ToSlash(item.relPath)), q)
+}
+
+func (s *application) filteredBatchIndices() []int {
+	if s.batch == nil {
+		return nil
+	}
+	visible := make([]int, 0, len(s.batch.items))
+	for i, item := range s.batch.items {
+		if matchesBatchFilter(item, s.batch.filter, s.batch.query) {
+			visible = append(visible, i)
+		}
+	}
+	return visible
+}
+
+func (s *application) resetBatchFilter() {
+	if s.batch == nil {
+		return
+	}
+	s.batch.filter = batchFilterAll
+	s.batch.query = ""
+}
+
+func (s *application) retryableFailedCount() int {
+	if s.batch == nil {
+		return 0
+	}
+	count := 0
+	for _, item := range s.batch.items {
+		if item.status == batchFailed && !item.invalidInput {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *application) removeSelectedBatchItem() {
@@ -408,16 +578,23 @@ func (s *application) removeSelectedBatchItem() {
 	if index < 0 || index >= len(s.batch.items) {
 		return
 	}
+	visPos := slices.Index(s.filteredBatchIndices(), index)
 	if s.batch.previewOpen && s.batch.previewIndex == index {
 		s.closeBatchPreview()
 	}
 	s.batch.items = slices.Delete(s.batch.items, index, index+1)
 	if len(s.batch.items) == 0 {
+		s.clearPendingBatchConfirmation()
 		s.batch = nil
 		s.setMessage("", false)
 		return
 	}
-	s.batch.selected = min(index, len(s.batch.items)-1)
+	visible := s.filteredBatchIndices()
+	if visPos >= 0 && len(visible) > 0 {
+		s.batch.selected = visible[min(visPos, len(visible)-1)]
+	} else {
+		s.batch.selected = -1
+	}
 	if s.batch.previewOpen && s.batch.previewIndex > index {
 		s.batch.previewIndex--
 	}
@@ -436,21 +613,29 @@ func (s *application) resetBatchRunState() bool {
 	s.closeBatchPreview()
 	hadProcessed := false
 	for i := range s.batch.items {
-		item := &s.batch.items[i]
-		if item.invalidInput {
-			continue
-		}
-		if item.status != batchPending {
+		if resetBatchItemState(&s.batch.items[i]) {
 			hadProcessed = true
 		}
-		item.status = batchPending
-		item.outputSize = 0
-		item.unchanged = false
-		item.overwritten = false
-		item.savedPath = ""
-		item.errMsg = ""
 	}
 	s.batch.done, s.batch.total, s.batch.currentName = 0, 0, ""
+	if hadProcessed && (s.batch.filter == batchFilterDone || s.batch.filter == batchFilterFailed) &&
+		len(s.filteredBatchIndices()) == 0 {
+		s.batch.filter = batchFilterAll
+	}
+	return hadProcessed
+}
+
+func resetBatchItemState(item *batchItem) bool {
+	if item.invalidInput {
+		return false
+	}
+	hadProcessed := item.status != batchPending
+	item.status = batchPending
+	item.outputSize = 0
+	item.unchanged = false
+	item.overwritten = false
+	item.savedPath = ""
+	item.errMsg = ""
 	return hadProcessed
 }
 
@@ -478,14 +663,73 @@ func (s *application) batchStats() (total, pending, done, failed int, origTotal,
 }
 
 func (s *application) startBatchCompression() {
-	s.beginBatchRun(false)
+	s.beginBatchRunMode(batchRunPending, -1)
 }
 
 func (s *application) restartBatchCompression() {
-	s.beginBatchRun(true)
+	s.beginBatchRunMode(batchRunRestart, -1)
+}
+
+func (s *application) retryFailedBatchItems() {
+	s.beginBatchRunMode(batchRunRetryFailed, -1)
+}
+
+func (s *application) retryBatchItem(index int) {
+	s.beginBatchRunMode(batchRunSingle, index)
+}
+
+func (s *application) clearPendingBatchConfirmation() {
+	s.pendingBatchRestart = false
+	s.pendingBatchRun = batchRunPending
+	s.pendingBatchIndex = -1
+}
+
+func (s *application) effectivePendingBatchRun() (batchRunMode, int) {
+	mode := s.pendingBatchRun
+	if s.pendingBatchRestart && mode == batchRunPending {
+		mode = batchRunRestart
+	}
+	return mode, s.pendingBatchIndex
+}
+
+func itemMatchesBatchRunMode(index int, item batchItem, mode batchRunMode, singleIndex int) bool {
+	if item.invalidInput {
+		return false
+	}
+	switch mode {
+	case batchRunRestart:
+		return true
+	case batchRunRetryFailed:
+		return item.status == batchFailed
+	case batchRunSingle:
+		return index == singleIndex && item.status == batchFailed
+	default:
+		return item.status == batchPending
+	}
+}
+
+func (s *application) batchRunTargetCount(mode batchRunMode, singleIndex int) int {
+	if s.batch == nil {
+		return 0
+	}
+	count := 0
+	for i, item := range s.batch.items {
+		if itemMatchesBatchRunMode(i, item, mode, singleIndex) {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *application) beginBatchRun(restart bool) {
+	mode := batchRunPending
+	if restart {
+		mode = batchRunRestart
+	}
+	s.beginBatchRunMode(mode, -1)
+}
+
+func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 	if s.modalOpen() || s.batch == nil {
 		return
 	}
@@ -493,22 +737,27 @@ func (s *application) beginBatchRun(restart bool) {
 	if !canRun {
 		return
 	}
-	if !restart && pending == 0 {
-		restart = true
+	if mode == batchRunPending && pending == 0 {
+		mode = batchRunRestart
+	}
+	if s.batchRunTargetCount(mode, singleIndex) == 0 {
+		return
 	}
 	if s.batch.outputMode == batchOutputOverwrite {
-		s.pendingBatchRestart = restart
+		s.pendingBatchRun = mode
+		s.pendingBatchIndex = singleIndex
+		s.pendingBatchRestart = mode == batchRunRestart
 		s.confirmBatchOverwrite = true
 		return
 	}
 	if s.batch.outputDir == "" {
-		s.promptOutputDirAndStart(restart)
+		s.promptOutputDirAndStartMode(mode, singleIndex)
 		return
 	}
-	s.launchBatchWorker(restart)
+	s.launchBatchWorkerMode(mode, singleIndex)
 }
 
-func (s *application) promptOutputDirAndStart(restart bool) {
+func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex int) {
 	s.busy, s.phase = true, "请选择输出文件夹"
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -528,7 +777,7 @@ func (s *application) promptOutputDirAndStart(restart bool) {
 				return
 			}
 			s.batch.outputDir = paths[0]
-			s.launchBatchWorker(restart)
+			s.launchBatchWorkerMode(mode, singleIndex)
 		})
 	}()
 }
@@ -537,22 +786,25 @@ func (s *application) executeConfirmedBatchOverwrite() {
 	if s.busy || s.settingsOpen || s.confirmOverwrite || s.batch == nil {
 		return
 	}
-	restart := s.pendingBatchRestart
-	s.pendingBatchRestart = false
+	mode, index := s.effectivePendingBatchRun()
+	s.clearPendingBatchConfirmation()
 	s.confirmBatchOverwrite = false
-	s.launchBatchWorker(restart)
+	s.launchBatchWorkerMode(mode, index)
 }
 
 func (s *application) launchBatchWorker(restart bool) {
+	mode := batchRunPending
+	if restart {
+		mode = batchRunRestart
+	}
+	s.launchBatchWorkerMode(mode, -1)
+}
+
+func (s *application) launchBatchWorkerMode(mode batchRunMode, singleIndex int) {
 	if s.busy || s.batch == nil {
 		return
 	}
-	if restart {
-		s.resetBatchRunState()
-	} else {
-		s.closeBatchPreview()
-	}
-	tasks, usedPaths := s.collectBatchTasks()
+	tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
 	if len(tasks) == 0 {
 		return
 	}
@@ -579,13 +831,37 @@ func (s *application) launchBatchWorker(restart bool) {
 }
 
 func (s *application) collectBatchTasks() ([]batchTask, map[string]bool) {
+	return s.collectBatchTasksWhere(func(_ int, item batchItem) bool {
+		return item.status == batchPending
+	})
+}
+
+func (s *application) prepareBatchTasks(mode batchRunMode, singleIndex int) ([]batchTask, map[string]bool) {
+	if mode == batchRunRestart {
+		s.resetBatchRunState()
+		return s.collectBatchTasks()
+	}
+	s.closeBatchPreview()
+	if mode == batchRunPending {
+		return s.collectBatchTasks()
+	}
+	return s.collectBatchTasksWhere(func(i int, item batchItem) bool {
+		if !itemMatchesBatchRunMode(i, item, mode, singleIndex) {
+			return false
+		}
+		resetBatchItemState(&s.batch.items[i])
+		return true
+	})
+}
+
+func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) bool) ([]batchTask, map[string]bool) {
 	var tasks []batchTask
 	usedPaths := make(map[string]bool)
 	for i, item := range s.batch.items {
 		if item.savedPath != "" {
 			usedPaths[item.savedPath] = true
 		}
-		if item.status == batchPending {
+		if match(i, item) {
 			tasks = append(tasks, batchTask{index: i, path: item.path, relPath: item.relPath})
 		}
 	}
@@ -769,6 +1045,14 @@ func (s *application) completeBatchRun(ctx context.Context) {
 		s.setMessage(fmt.Sprintf("已取消，已完成 %d 张，剩余 %d 张。", done, pending), false)
 		return
 	}
+	if pending > 0 {
+		if failed > 0 {
+			s.setMessage(fmt.Sprintf("当前已完成 %d 张，失败 %d 张，剩余 %d 张待压缩。", done, failed, pending), true)
+			return
+		}
+		s.setMessage(fmt.Sprintf("重试完成，当前已完成 %d 张，剩余 %d 张待压缩。", done, pending), false)
+		return
+	}
 	if failed > 0 && done == 0 {
 		s.setMessage(fmt.Sprintf("批处理完成，%d 张图片处理失败。", failed), true)
 		return
@@ -911,15 +1195,34 @@ func (s *application) completeBatchPreview(
 	}
 }
 
-func (s *application) stepBatchPreview(delta int) {
-	if s.modalOpen() || s.batch == nil || !s.batch.previewOpen || len(s.batch.items) == 0 {
-		return
+func (s *application) adjacentBatchPreviewIndex(delta int) int {
+	if s.batch == nil || !s.batch.previewOpen || len(s.batch.items) == 0 {
+		return -1
+	}
+	visible := s.filteredBatchIndices()
+	if pos := slices.Index(visible, s.batch.previewIndex); pos >= 0 {
+		for next := pos + delta; next >= 0 && next < len(visible); next += delta {
+			idx := visible[next]
+			if !s.batch.items[idx].invalidInput {
+				return idx
+			}
+		}
+		return -1
 	}
 	for next := s.batch.previewIndex + delta; next >= 0 && next < len(s.batch.items); next += delta {
 		if !s.batch.items[next].invalidInput {
-			s.openBatchPreview(next)
-			return
+			return next
 		}
+	}
+	return -1
+}
+
+func (s *application) stepBatchPreview(delta int) {
+	if s.modalOpen() {
+		return
+	}
+	if next := s.adjacentBatchPreviewIndex(delta); next >= 0 {
+		s.openBatchPreview(next)
 	}
 }
 

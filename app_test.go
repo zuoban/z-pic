@@ -849,6 +849,24 @@ func TestReadSelectionRejectsNonFile(t *testing.T) {
 	}
 }
 
+func TestReadSelectionRejectsAnimatedPNGAndPreservesSelection(t *testing.T) {
+	apngPath := filepath.Join(t.TempDir(), "anim.png")
+	writeTestAnimatedPNG(t, apngPath)
+
+	if _, err := readSelection(context.Background(), apngPath); err == nil || !strings.Contains(err.Error(), "动画 PNG") {
+		t.Fatalf("expected animated PNG rejection in readSelection, got %v", err)
+	}
+
+	s := testSelectedApplication()
+	existing := s.file
+	_, err := readSelection(context.Background(), apngPath)
+	s.completeSelection(context.Background(), nil, err)
+	if s.file != existing || !s.failed || !strings.Contains(s.message, "动画 PNG") {
+		t.Fatalf("rejecting animated PNG must preserve existing selection and report error: file=%v failed=%v msg=%q",
+			s.file, s.failed, s.message)
+	}
+}
+
 func TestSuggestedPathAvoidsExistingCopies(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "photo.jpg")
