@@ -69,16 +69,16 @@ func TestBusyViewCannotChangeQuality(t *testing.T) {
 			t.Fatalf("scheme must be disabled while processing: %+v", scheme)
 		}
 	}
-	slider, ok := tt.AccessByRole(ui.RoleSlider, "JPEG 质量")
-	if !ok || !slider.Disabled {
-		t.Fatalf("quality slider must be disabled while processing: %+v", slider)
+	settings, ok := tt.AccessByRole(ui.RoleButton, "设置")
+	if !ok || !settings.Disabled {
+		t.Fatalf("settings navigation must be disabled while processing: %+v", settings)
 	}
 }
 
 func TestPNGViewExplainsLossyCompressionWithoutModeSelection(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format = "png"
-	tt := ui.NewTester(s.view, 980, 720)
+	tt := openTestSettings(t, s)
 	if !tt.HasText("PNG 有损压缩") ||
 		!tt.HasText("质量与颜色数越低，文件通常越小。支持透明度，但渐变、阴影与半透明边缘可能变化。") {
 		t.Fatal("PNG must explain its default lossy compression")
@@ -86,8 +86,10 @@ func TestPNGViewExplainsLossyCompressionWithoutModeSelection(t *testing.T) {
 	if tt.HasText("无损优化") || tt.HasText("PNG 压缩模式") || tt.HasText("更小体积（有损）") {
 		t.Fatal("PNG must not offer the removed mode selection")
 	}
-	if _, ok := tt.AccessByRole(ui.RoleSlider, "JPEG 质量"); ok {
-		t.Fatal("JPEG quality must not be offered for PNG")
+	for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数"} {
+		if _, ok := tt.AccessByRole(ui.RoleSlider, label); !ok {
+			t.Fatalf("settings must expose both formats independently of the selected image: %s", label)
+		}
 	}
 }
 
@@ -209,7 +211,7 @@ func TestSuccessfulOverwriteRefreshesSelectedSnapshot(t *testing.T) {
 		string(original.data) != "original snapshot" {
 		t.Fatal("selected snapshot must advance to the saved output without mutating the old snapshot")
 	}
-	s.setQuality(60)
+	s.setScheme("体积优先")
 	if s.result != nil || s.preview != preview || s.overwritten {
 		t.Fatal("future parameter changes must restore the new on-disk image")
 	}
@@ -232,7 +234,7 @@ func TestChangingParametersDismissesStaleOverwriteConfirmation(t *testing.T) {
 	s := testSelectedApplication()
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	s.requestOverwrite()
-	s.setQuality(60)
+	s.setScheme("体积优先")
 	if s.confirmOverwrite || s.result != nil {
 		t.Fatal("an invalidated result must not retain an overwrite confirmation")
 	}
@@ -263,7 +265,7 @@ func TestPresetsConfigureBothFormats(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s := testSelectedApplication()
-			s.setQuality(30)
+			s.quality = 30
 			s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 			s.setScheme(test.name)
 			if s.scheme != test.name || s.quality != test.quality || s.png != test.png || s.result != nil {
@@ -273,32 +275,37 @@ func TestPresetsConfigureBothFormats(t *testing.T) {
 	}
 }
 
-func TestPNGControlsInvalidateAndClampQualityRange(t *testing.T) {
+func TestPNGControlsClampDraftAndInvalidateOnlyAfterSaving(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format = "png"
-	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
-	s.preview = ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
-	tt := ui.NewTester(s.view, 980, 720)
+	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+	s.result, s.preview = result, preview
+	tt := openTestSettings(t, s)
 	slider, ok := tt.AccessByRole(ui.RoleSlider, "目标质量")
 	if !ok {
 		t.Fatal("PNG target quality must be adjustable")
 	}
 	tt.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
 	tt.Key(0, ui.KeyHome)
-	if s.png.MaxQuality != 1 || s.png.MinQuality != 1 || s.scheme != "自定义" {
-		t.Fatalf("lowering target must clamp minimum and mark custom: %+v %s", s.png, s.scheme)
+	draft := s.editor.presets[s.editor.selected]
+	if draft.png.MaxQuality != 1 || draft.png.MinQuality != 1 {
+		t.Fatalf("lowering target must clamp the draft minimum: %+v", draft.png)
 	}
-	if s.result != nil || s.preview != s.file.preview || tt.HasText("另存副本") {
-		t.Fatal("PNG parameter changes must discard the old export and preview")
+	if s.result != result || s.preview != preview || s.png != compress.DefaultPNGOptions() {
+		t.Fatal("editing a draft must preserve the active parameters, export and preview until saving")
 	}
-	if !tt.HasText("自定义") {
-		t.Fatal("scheme must reflect custom settings")
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
 	}
-	for _, preset := range compressionPresets {
-		scheme, ok := tt.AccessByRole(ui.RoleRadio, preset.name)
-		if !ok || scheme.Checked {
-			t.Fatalf("a custom scheme must not select a preset: %+v", scheme)
-		}
+	if s.settingsOpen || s.png.MaxQuality != 1 || s.png.MinQuality != 1 ||
+		s.result != nil || s.preview != s.file.preview {
+		t.Fatal("saving changed active parameters must discard the old export and restore the source")
+	}
+	main := ui.NewTester(s.view, 880, 660)
+	scheme, ok := main.AccessByRole(ui.RoleRadio, "均衡")
+	if !ok || !scheme.Checked {
+		t.Fatalf("editing a named scheme must keep that scheme selected: %+v", scheme)
 	}
 }
 
@@ -323,7 +330,7 @@ func TestPreviewComparisonKeepsCompressionResult(t *testing.T) {
 			t.Fatal("comparison must preserve the result bitmap and export")
 		}
 	}
-	s.setQuality(60)
+	s.setScheme("体积优先")
 	tt.Frame()
 	if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式"); ok {
 		t.Fatal("invalidating a result must remove comparison")
@@ -373,7 +380,7 @@ func TestPresetSelectionSupportsArrowKeys(t *testing.T) {
 }
 
 func TestWindowShortcutsRespectUnavailableActions(t *testing.T) {
-	for _, state := range []string{"empty", "busy", "confirmation"} {
+	for _, state := range []string{"empty", "busy", "confirmation", "settings"} {
 		t.Run(state, func(t *testing.T) {
 			s := newApplication()
 			if state != "empty" {
@@ -386,6 +393,10 @@ func TestWindowShortcutsRespectUnavailableActions(t *testing.T) {
 				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 				s.confirmOverwrite = true
 			}
+			if state == "settings" {
+				s.setSettingsOpen(true)
+				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+			}
 			tt := ui.NewTester(s.view, 880, 660)
 			keys := []ui.Key{ui.KeyEnter, ui.KeyS}
 			if state != "empty" {
@@ -396,6 +407,43 @@ func TestWindowShortcutsRespectUnavailableActions(t *testing.T) {
 			}
 			if s.busy != (state == "busy") || s.confirmOverwrite != (state == "confirmation") {
 				t.Fatal("unavailable shortcuts must not start work or dismiss confirmation")
+			}
+		})
+	}
+}
+
+func TestSettingsShortcutOpensWithoutChangingCompressionState(t *testing.T) {
+	for _, state := range []string{"empty", "result"} {
+		t.Run(state, func(t *testing.T) {
+			s := newApplication()
+			if state == "result" {
+				s = testSelectedApplication()
+				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+				s.showOriginal = true
+			}
+			file, result, preview, options := s.file, s.result, s.preview, s.compressionOptions()
+			tt := ui.NewTester(s.view, 880, 660)
+			settings, ok := tt.AccessByRole(ui.RoleButton, "设置")
+			if !ok || !strings.Contains(settings.KeyShortcuts, ",") || !tt.HasText(shortcutLabel(",")) {
+				t.Fatal("settings must expose its shortcut to users and assistive technology")
+			}
+			tt.Key(0, ui.KeyComma)
+			if s.settingsOpen {
+				t.Fatal("a comma without the command modifier must not open settings")
+			}
+			tt.Key(ui.Cmd, ui.KeyComma)
+			if !s.settingsOpen || s.editor == nil {
+				t.Fatal("the settings shortcut must open the editor with or without an image")
+			}
+			s.editQuality(35)
+			editor := s.editor
+			tt.Key(ui.Cmd, ui.KeyComma)
+			if s.editor != editor || editor.presets[editor.selected].quality != 35 {
+				t.Fatal("repeating the shortcut must retain the open settings draft")
+			}
+			if s.file != file || s.result != result || s.preview != preview ||
+				s.compressionOptions() != options || s.showOriginal != (state == "result") || s.busy {
+				t.Fatal("opening settings by shortcut must preserve the image and compression state")
 			}
 		})
 	}
@@ -441,7 +489,7 @@ func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
 func TestPNGAdvancedParametersAndBusyState(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format, s.advanced = "png", true
-	tt := ui.NewTester(s.view, 880, 660)
+	tt := openTestSettings(t, s)
 	for _, label := range []string{"目标质量", "最大颜色数", "最低质量", "处理速度"} {
 		if _, ok := tt.AccessByRole(ui.RoleSlider, label); !ok {
 			t.Errorf("missing PNG parameter %q", label)
@@ -457,49 +505,242 @@ func TestPNGAdvancedParametersAndBusyState(t *testing.T) {
 	}
 }
 
-func TestAdvancedKeyboardFocusScrollsWithoutHidingSave(t *testing.T) {
+func TestAdvancedKeyboardFocusScrollsWithoutHidingSettingsActions(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format, s.advanced = "png", true
-	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
-	tt := ui.NewTester(s.view, 880, 660)
-	for i := 0; i < 12 && !tt.Focused("处理速度"); i++ {
+	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	s.result = result
+	tt := openTestSettings(t, s)
+	for i := 0; i < 20 && !tt.Focused("处理速度"); i++ {
 		tt.Key(0, ui.KeyTab)
 	}
 	slider, ok := tt.AccessByRole(ui.RoleSlider, "处理速度")
 	if !ok || !slider.Focused || slider.Offscreen || slider.Bounds.H < 10 {
 		t.Fatalf("keyboard focus must scroll to advanced parameters: %+v", slider)
 	}
-	save, ok := tt.AccessByRole(ui.RoleButton, "另存副本")
-	if !ok || save.Offscreen || save.Bounds.H < 20 || save.Bounds.Y+save.Bounds.H > 660 {
-		t.Fatalf("scrolling advanced settings must keep save reachable: %+v", save)
+	save, ok := tt.AccessByRole(ui.RoleButton, "保存")
+	if !ok || save.Offscreen || save.Bounds.H < 28 || save.Bounds.Y+save.Bounds.H > 560 {
+		t.Fatalf("scrolling advanced settings must keep saving reachable: %+v", save)
 	}
 	tt.Key(0, ui.KeyRight)
-	if s.png.Speed != 4 || s.scheme != "自定义" || s.result != nil {
-		t.Fatal("advanced speed control must update settings and discard old result")
+	if s.editor.presets[s.editor.selected].png.Speed != 4 || s.png.Speed != 3 || s.result != result {
+		t.Fatal("advanced speed control must update only the draft before saving")
+	}
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	main := ui.NewTester(s.view, 880, 660)
+	if s.settingsOpen || s.png.Speed != 4 || s.result != nil || !main.HasText("开始压缩") {
+		t.Fatal("saving changed settings must close the dialog and require recompression")
+	}
+}
+
+func TestMainViewOnlyOffersSchemes(t *testing.T) {
+	for _, format := range []string{"jpeg", "png"} {
+		t.Run(format, func(t *testing.T) {
+			s := testSelectedApplication()
+			s.file.format, s.advanced = format, true
+			tt := ui.NewTester(s.view, 880, 660)
+			if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "压缩方案"); !ok {
+				t.Fatal("the main page must offer scheme selection")
+			}
+			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+				if _, ok := tt.AccessByRole(ui.RoleSlider, label); ok {
+					t.Fatalf("compression parameter %q must only appear in the settings window", label)
+				}
+			}
+			if tt.HasText("高级设置") {
+				t.Fatal("advanced settings must only appear in the settings window")
+			}
+		})
+	}
+}
+
+func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
+	s := newApplication()
+	tt := ui.NewTester(s.view, 880, 660)
+	if err := tt.Click("画质优先"); err != nil {
+		t.Fatal(err)
+	}
+	if s.scheme != "画质优先" || s.quality != 92 {
+		t.Fatal("scheme selection must work before choosing an image")
+	}
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	settings := ui.NewTester(s.settingsView, 760, 560)
+	for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数"} {
+		slider, ok := settings.AccessByRole(ui.RoleSlider, label)
+		if !ok || slider.Disabled {
+			t.Fatalf("%s must be editable without a selected image: %+v", label, slider)
+		}
+	}
+	slider, _ := settings.AccessByRole(ui.RoleSlider, "JPEG 质量")
+	settings.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
+	settings.Key(0, ui.KeyEnd)
+	if s.editor.presets[s.editor.selected].quality != 100 || s.quality != 92 {
+		t.Fatal("editing settings without an image must update only the draft")
+	}
+	if err := settings.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.settingsOpen || s.quality != 100 || s.scheme != "画质优先" || !tt.HasText("选择图片") {
+		t.Fatal("saving settings must preserve the named scheme and return to the unchanged main view")
+	}
+	button, ok := tt.AccessByRole(ui.RoleButton, "开始压缩")
+	if !ok || !button.Disabled {
+		t.Fatal("editing settings must not enable compression without an image")
+	}
+}
+
+func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
+	for _, exit := range []string{"取消", "保存", "Escape"} {
+		t.Run(exit, func(t *testing.T) {
+			s := testSelectedApplication()
+			result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+			preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+			s.completeCompression(context.Background(), result, preview, nil)
+			s.showOriginal = true
+			file, options, message := s.file, s.compressionOptions(), s.message
+			tt := ui.NewTester(s.view, 880, 660)
+			if err := tt.Click("设置"); err != nil {
+				t.Fatal(err)
+			}
+			if !s.settingsOpen || !tt.HasText("图片预览") || !tt.HasText("另存副本") {
+				t.Fatal("opening a separate settings window must keep the main view intact")
+			}
+			s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+			settings := ui.NewTester(s.settingsView, 760, 560)
+			if _, ok := settings.AccessByRole(ui.RoleDialog, "设置"); !ok {
+				t.Fatal("settings content must identify itself as a dialog")
+			}
+			if exit == "Escape" {
+				settings.Key(0, ui.KeyEscape)
+			} else if err := settings.Click(exit); err != nil {
+				t.Fatal(err)
+			}
+			if s.settingsOpen || s.file != file || s.result != result || s.preview != preview ||
+				!s.showOriginal || s.compressionOptions() != options || s.message != message {
+				t.Fatal("opening and closing settings without edits must preserve image, result, preview, settings and message")
+			}
+			tt.Frame()
+			save, ok := tt.AccessByRole(ui.RoleButton, "另存副本")
+			if !ok || save.Disabled || save.Offscreen || save.Bounds.Y+save.Bounds.H > 660 {
+				t.Fatalf("returning to the main page must keep saving reachable: %+v", save)
+			}
+		})
+	}
+}
+
+func TestSettingsNavigationRespectsBusyAndConfirmation(t *testing.T) {
+	for _, state := range []string{"busy", "confirmation"} {
+		t.Run(state, func(t *testing.T) {
+			s := testSelectedApplication()
+			s.busy = state == "busy"
+			s.confirmOverwrite = state == "confirmation"
+			if s.confirmOverwrite {
+				s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+			}
+			tt := ui.NewTester(s.view, 880, 660)
+			tt.Key(ui.Cmd, ui.KeyComma)
+			if s.settingsOpen || s.editor != nil {
+				t.Fatal("the settings shortcut must not open during work or overwrite confirmation")
+			}
+			s.setSettingsOpen(true)
+			if s.settingsOpen {
+				t.Fatal("settings must not open during work or overwrite confirmation")
+			}
+		})
+	}
+}
+
+func TestFileDropWhileSettingsAreOpenPreservesDraft(t *testing.T) {
+	s := testSelectedApplication()
+	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	s.result = result
+	s.setSettingsOpen(true)
+	editor := s.editor
+	s.editQuality(70)
+	s.dropFiles([]string{"/photos/first.jpg", "/photos/second.png"})
+	tt := ui.NewTester(s.view, 880, 660)
+	if !s.settingsOpen || s.editor != editor || s.editor.presets[s.editor.selected].quality != 70 ||
+		s.failed || s.message != "" {
+		t.Fatal("file drops while a modal settings editor is open must not close it or discard its draft")
+	}
+	if s.result != result || !tt.HasText("另存副本") {
+		t.Fatal("an invalid drop must preserve the selected image and valid compression result")
+	}
+}
+
+func TestFileDropPreservesBusyAndConfirmationState(t *testing.T) {
+	for _, state := range []string{"busy", "confirmation"} {
+		t.Run(state, func(t *testing.T) {
+			s := testSelectedApplication()
+			s.setSettingsOpen(true)
+			s.busy, s.confirmOverwrite = state == "busy", state == "confirmation"
+			s.dropFiles([]string{"/photos/first.jpg", "/photos/second.png"})
+			if !s.settingsOpen || s.message != "" || s.failed {
+				t.Fatal("a blocked file drop must not navigate or change status")
+			}
+		})
+	}
+}
+
+func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		t.Run(map[bool]string{false: "light", true: "dark"}[dark], func(t *testing.T) {
+			s := newApplication()
+			s.setSettingsOpen(true)
+			s.advanced = true
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.LightTheme()
+				if dark {
+					theme = ui.DarkTheme()
+				}
+				c.SetTheme(theme)
+				s.settingsView(c)
+			}, 760, 560)
+			for _, label := range []string{"取消", "保存", "新增方案", "删除方案"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Disabled || button.Offscreen || button.Bounds.H < 28 ||
+					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
+					t.Fatalf("%s must fit in the minimum window: %+v", label, button)
+				}
+			}
+			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
+				if !ok || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
+					slider.Bounds.X+slider.Bounds.W > 740 {
+					t.Fatalf("%s must fit the settings content width: %+v", label, slider)
+				}
+			}
+		})
 	}
 }
 
 func TestSettingsNoOpAndBusyKeepResult(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		s := testSelectedApplication()
+		s.setSettingsOpen(true)
+		draft := s.editor.presets[s.editor.selected]
 		s.busy = busy
 		result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 		s.result = result
 		original := s.compressionOptions()
 		if busy {
 			s.setScheme("体积优先")
-			s.setQuality(25)
-			s.setPNGOptions(compress.PNGOptions{MinQuality: 0, MaxQuality: 60, Colors: 16, Speed: 4})
+			s.editQuality(25)
+			s.editPNGOptions(compress.PNGOptions{MinQuality: 0, MaxQuality: 60, Colors: 16, Speed: 4})
 		} else {
-			s.setScheme("均衡")
-			s.setQuality(80)
-			s.setPNGOptions(s.png)
-			s.setPNGOptions(compress.PNGOptions{MaxQuality: 101})
+			s.editQuality(80)
+			s.editPNGOptions(s.png)
+			s.editPNGOptions(compress.PNGOptions{MaxQuality: 101})
 			s.setScheme("unknown")
-			s.setScheme("自定义")
 		}
-		if s.result != result || s.compressionOptions() != original {
-			t.Fatalf("no-op, invalid, or busy edits changed options/result (busy=%v)", busy)
+		if s.result != result || s.compressionOptions() != original || s.editor.presets[s.editor.selected] != draft {
+			t.Fatalf("no-op, invalid, or busy edits changed draft/options/result (busy=%v)", busy)
 		}
 	}
 }
@@ -514,9 +755,14 @@ func TestCompressionSettingsSnapshot(t *testing.T) {
 	options := s.png
 	options.Colors = 32
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
-	s.setPNGOptions(options)
-	if s.scheme != "自定义" || s.result != nil || s.png.Colors != 32 {
-		t.Fatal("custom color cap must be applied and invalidate the old result")
+	openTestSettings(t, s)
+	s.editPNGOptions(options)
+	if s.png.Colors == 32 || s.result == nil {
+		t.Fatal("draft changes must not change captured options or valid results")
+	}
+	s.savePresetEdits()
+	if s.result != nil || s.png.Colors != 32 || s.scheme != "体积优先" {
+		t.Fatal("saved custom color cap must update the named scheme and invalidate the old result")
 	}
 }
 

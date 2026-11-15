@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -37,30 +37,39 @@ type selectedImage struct {
 // Application state is read and changed on MyGo's main thread. Background work
 // receives immutable values and delivers its result through Window.Update.
 type application struct {
-	window       *mygo.Window
-	file         *selectedImage
-	quality      float64
-	scheme       string
-	png          compress.PNGOptions
-	advanced     bool
-	result       *compress.Result
-	preview      *ui.Bitmap
-	showOriginal bool
-	busy         bool
-	phase        string
-	message      string
-	failed       bool
-	cancel       context.CancelFunc
-	canceling    bool
-	closed       bool
-	saves        sync.WaitGroup
+	window         *mygo.Window
+	settingsWindow *mygo.Window
+	file           *selectedImage
+	quality        float64
+	scheme         string
+	png            compress.PNGOptions
+	advanced       bool
+	settingsOpen   bool
+	settingsFile   string
+	settingsError  string
+	presets        []compressionPreset
+	editor         *presetEditor
+	result         *compress.Result
+	preview        *ui.Bitmap
+	showOriginal   bool
+	busy           bool
+	phase          string
+	message        string
+	failed         bool
+	cancel         context.CancelFunc
+	canceling      bool
+	closed         bool
+	saves          sync.WaitGroup
 
 	confirmOverwrite bool
 	overwritten      bool
 }
 
 func newApplication() *application {
-	return &application{quality: 80, scheme: "均衡", png: compress.DefaultPNGOptions()}
+	return &application{
+		quality: 80, scheme: "均衡", png: compress.DefaultPNGOptions(),
+		presets: slices.Clone(compressionPresets),
+	}
 }
 
 func (s *application) setMessage(message string, failed bool) {
@@ -76,7 +85,7 @@ func (s *application) update(fn func()) {
 }
 
 func (s *application) chooseFile() {
-	if s.busy {
+	if s.busy || s.settingsOpen {
 		return
 	}
 	s.busy, s.phase = true, "正在选择图片"
@@ -100,8 +109,19 @@ func (s *application) chooseFile() {
 	}()
 }
 
+func (s *application) dropFiles(paths []string) {
+	if s.busy || s.confirmOverwrite || s.settingsOpen {
+		return
+	}
+	if len(paths) != 1 {
+		s.setMessage("请一次选择一张图片。", true)
+		return
+	}
+	s.load(paths[0])
+}
+
 func (s *application) load(path string) {
-	if s.busy || s.confirmOverwrite {
+	if s.busy || s.confirmOverwrite || s.settingsOpen {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,17 +221,8 @@ func (s *application) invalidateResult() {
 	}
 }
 
-func (s *application) setQuality(quality float64) {
-	quality = math.Round(min(100, max(1, quality)))
-	if s.busy || s.quality == quality {
-		return
-	}
-	s.quality, s.scheme = quality, "自定义"
-	s.invalidateResult()
-}
-
 func (s *application) startCompression() {
-	if s.busy || s.file == nil {
+	if s.busy || s.settingsOpen || s.file == nil {
 		return
 	}
 	path, data, options := s.file.path, s.file.data, s.compressionOptions()
@@ -273,7 +284,7 @@ func (s *application) reportError(err error, prefix string) {
 }
 
 func (s *application) saveCopy() {
-	if s.busy || s.result == nil {
+	if s.busy || s.settingsOpen || s.result == nil {
 		return
 	}
 	result := s.result
@@ -333,7 +344,7 @@ func (s *application) writeCopy(result *compress.Result, path string) {
 }
 
 func (s *application) canOverwrite() bool {
-	return !s.busy && s.file != nil && s.result != nil &&
+	return !s.busy && !s.settingsOpen && s.file != nil && s.result != nil &&
 		!s.result.Unchanged && s.result.OutputSize > 0 &&
 		s.result.OutputSize < s.result.OriginalSize && !s.overwritten
 }

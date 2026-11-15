@@ -4,8 +4,8 @@
 
 - Status: Active
 - Date: 2026-11-15
-- Surface: Z Pic desktop window, built with MyGo native UI.
-- Evidence: existing MyGo application, a fresh native-window screenshot, PNG compression tools, and 282 passing baseline tests. The user requested a more current visual treatment and easier operation through `$unslop`.
+- Surface: Z Pic main compression window and a separate native settings dialog, built with MyGo native UI.
+- Evidence: existing MyGo application, native-window screenshots, PNG compression tools, and behavior tests. The current request specifies a settings popup with compression-scheme maintenance, explicit saving, and persistence across application restarts; the main window only selects saved schemes.
 - Defaults: one image at a time, JPEG and PNG, Chinese interface, local processing.
 
 ## Brand
@@ -39,7 +39,7 @@ Implementation plan, in the unslop pass order:
 3. Keep icons restrained; use one native line illustration only in the empty preview.
 4. Shorten supporting copy without removing format or overwrite warnings.
 5. Use system type at weights 400–600, with tabular figures for values.
-6. Preserve the preview/settings/result/action order; expose presets directly and keep actions outside the settings scroll.
+6. Preserve preview, scheme selection, results, and actions on the main window; maintain named compression schemes in a separate native settings dialog.
 7. Add source/result comparison and discoverable open/compress/save shortcuts, preserving all existing operation guards.
 8. Keep visual richness in the actual image and actual output size.
 9. Retain only native feedback motion; add no decorative animation.
@@ -62,12 +62,18 @@ People preparing photographs and screenshots for sharing or uploading. They need
 
 ## Information architecture
 
-One window: product header; image/empty preview and file details; compression controls; result summary; primary compress or save action. No navigation sidebar.
+One main window and one modal child settings window:
+
+- Main window: product header with a “设置” entry; image/empty preview and file details; scrollable saved compression-scheme choices; result summary; primary compress or save action. No parameter sliders or advanced disclosure.
+- Settings dialog: “设置” heading and a “压缩方案” section; a scheme list with add/delete actions on the left; a scrollable editor for the name, JPEG quality, PNG parameters, and advanced settings on the right; fixed “取消” / “保存” actions and inline feedback.
+- The dialog is a parented native modal window (a sheet on macOS). Reopening focuses the existing dialog without resetting edits. Both formats can be configured before selecting an image.
+- Save validates and persists the draft list before applying it. Cancel, Escape, and native window close discard edits. The main window remains on screen and resumes after dismissal.
 
 ## Design principles
 
-- Expose the few parameters that affect compression.
-- Offer built-in “体积优先 / 均衡 / 画质优先” schemes and “自定义”, defaulting to “均衡”. Changing a parameter marks the scheme custom. Presets apply settings for both formats; each format shows only its relevant parameters.
+- Keep frequent compression actions on the main window and scheme maintenance in the settings dialog.
+- Start with “体积优先 / 均衡 / 画质优先”, defaulting to “均衡”. All schemes are named, editable, and deletable; at least one remains. Additions become selectable after saving. Restore saved schemes and the selected scheme on startup.
+- Each scheme stores JPEG and PNG parameters independently. Editing a draft does not change the active scheme or its compression result until Save succeeds. Names are trimmed, nonempty, unique, free of control characters, and at most 40 Unicode characters.
 - JPEG quality is 1–100. PNG exposes target quality 1–100 and maximum colors 2–256, with minimum quality 0–target and speed 1–11 under “高级设置”. Lowering the target clamps the minimum. Explain that PNG quality is a tool score, not a percentage of quality retained.
 - Do not offer a separate PNG lossless compression path. All schemes tune the same lossy pipeline.
 - PNG always uses pngquant, then Oxipng to optimize the candidate. Label it “PNG 有损压缩” and explain that colors may change, especially gradients and translucent edges. Accept 8/16-bit inputs without promising to retain channel precision or metadata.
@@ -88,24 +94,28 @@ One window: product header; image/empty preview and file details; compression co
 
 ## Components
 
-Use MyGo's built-in radio group, segmented control, collapsible, scroll, text, row, column, buttons, slider, progress indicator, image, and panels. Show the three schemes as keyboard-operable radio segments; when parameters are custom, none is selected and the heading states “自定义”. Application state owns the selected path, scheme, JPEG quality, PNG parameters, processing status, result, and message. JPEG quality does not control PNG. Styling stays with the window view; no additional component framework.
+Use MyGo's native modal child window and built-in radio group, segmented control, collapsible, scroll, text input, row, column, buttons, slider, progress indicator, image, and panels. Show saved schemes as keyboard-operable radio choices in a scrollable region. Application state owns the saved scheme list and selection, dialog draft and editing index, selected image, processing status, result, and message. JPEG quality does not control PNG. Reuse the same theme across both windows; no additional component framework.
 
-Preset settings: size first = JPEG 60, PNG quality 40–65 / 128 colors / speed 3; balanced = JPEG 80, PNG 65–85 / 256 / 3; quality first = JPEG 92, PNG 85–100 / 256 / 1. Custom values persist within the session; disk persistence is outside the current scope.
+Initial settings: size first = JPEG 60, PNG quality 40–65 / 128 colors / speed 3; balanced = JPEG 80, PNG 65–85 / 256 / 3; quality first = JPEG 92, PNG 85–100 / 256 / 1. Save persists the complete scheme list and selected scheme to versioned JSON in the system user configuration directory. Selecting a scheme on the main window also persists that selection.
 
 ## Accessibility
 
 Use built-in keyboard-operable widgets, visible focus, descriptive text labels, and semantic theme colors. Show status in text rather than color alone. Make processing and save actions identifiable without icons. Full screen-reader behavior remains subject to platform verification.
 
-Command/Ctrl+O selects or replaces an image, Command/Ctrl+Enter compresses, and Command/Ctrl+S saves a copy. Expose shortcut metadata and visible keycaps. Busy operations and overwrite confirmation suppress window shortcuts. Radio groups support arrow keys and one Tab stop.
+On the main window, Command/Ctrl+O selects or replaces an image, Command/Ctrl+Enter compresses, Command/Ctrl+S saves a copy, and Command/Ctrl+, opens settings. Expose shortcut metadata and visible keycaps; the settings button also shows its shortcut in a tooltip. Busy operations, overwrite confirmation, and the settings dialog suppress these main-window shortcuts. In settings, Command/Ctrl+S saves the scheme draft and Escape cancels. Radio groups support arrow keys and one Tab stop. Native modality confines interaction to the settings window while it is open.
 
 ## Responsive behavior
 
-Desktop-first, default 980 × 720 points, minimum 880 × 660. Keep the scheme selector, result summary, status, and actions outside the scrolling parameter region. Advanced settings scroll without pushing save/compress below the window. Prefer filling available space and wrapping long file names. No mobile target.
+Desktop-first: main window defaults to 980 × 720 points, minimum 880 × 660; settings defaults to 820 × 620, minimum 760 × 560. The main window keeps results and actions fixed while long scheme lists scroll. Settings keeps its header and Save/Cancel footer fixed; scheme list and parameter editor scroll independently. Advanced parameters remain keyboard reachable at minimum size. Long names are clipped or truncated with full-value tooltips where available. No mobile target.
 
 ## Interaction states
 
-- Empty: supported formats, privacy note, select-image action. Format-specific parameters wait until an image is selected.
-- Selected: image preview, dimensions, original size, relevant controls.
+- Empty: supported formats, privacy note, select-image action. Scheme selection and maintenance are usable before an image is selected.
+- Selected: image preview, dimensions, original size, scheme selection.
+- Settings: opening clones saved schemes into a draft; modifications, additions, and deletions stay in that draft until Save. Deletion requires inline confirmation and cannot remove the last scheme. Cancel, Escape, and native close discard changes. Reopening does not duplicate the dialog or reset an in-progress draft.
+- Save settings: validate every name and parameter; atomically replace the saved configuration before applying it. Failure keeps the dialog, draft, active schemes, and existing result intact and shows an actionable error. Saving edits to another scheme or renaming the active scheme preserves the current result. Changed active compression parameters invalidate it.
+- Startup: load saved schemes and selection. Missing configuration uses independent defaults. Invalid configuration reports an error, uses defaults, and leaves the original file intact until the user explicitly saves settings.
+- Main-window file drops and image/compression actions are ignored while settings is open, so the dialog cannot discard an edit or start hidden work.
 - Processing: status and cancel action; prevent concurrent work.
 - Result: original/output sizes, reduction, save-copy action, and a distinct overwrite-original action.
 - Result comparison: “原图 / 压缩后” switches the displayed bitmap without changing the selected bytes, compression settings, export result, or result bitmap. New results default to “压缩后”. Parameter changes restore the source preview. Once the source is overwritten, hide comparison because the previous source is no longer the selected original.
@@ -116,8 +126,8 @@ Desktop-first, default 980 × 720 points, minimum 880 × 660. Keep the scheme se
 - Before overwriting, compare the source with the compression snapshot. Reject missing, externally changed, nonregular, or symlink source paths. Write and sync a same-directory temporary file before replacement; preserve source permissions and clean up the temporary file on failure.
 - After overwriting, update the selected image bytes, size, and original preview to the saved output. Keep the last comparison and save-copy action, and disable repeated overwrite for that result. Parameter changes and recompression use the newly saved image.
 - An overwrite failure retains the result and preview so the user can still save a copy. There is no automatic backup or undo.
-- Changing any compression parameter or applying a preset with different values invalidates the previous result and restores the original preview. A no-op setting change retains the valid result.
-- Disable scheme and parameter changes during work. Snapshot all parameters on the main thread before compression.
+- Saving changed active compression parameters or selecting a scheme with different values invalidates the previous result and restores the original preview. A no-op save or rename retains the valid result.
+- Disable scheme maintenance during work. Block settings entry while overwrite confirmation is open. Snapshot all parameters on the main thread before compression.
 - PNG always attempts color quantization without requiring a mode choice.
 - A pngquant quality-gate refusal or a non-smaller result retains the original as the candidate for the final optimization step. Never export a larger result.
 - Compression uses the bytes captured during selection, so later edits by another application do not change the selected image.
@@ -132,6 +142,7 @@ Concise Chinese. Use “压缩图片”, “JPEG 质量”, “另存副本”, 
 ## Implementation constraints
 
 - MyGo native UI, pinned dependency and Go toolchain.
+- Settings use Go standard-library JSON and file APIs, with a size limit, validation, a synced same-directory temporary file, and atomic replacement. Failed writes preserve the previous file and clean up temporary files. Newly created configuration directories and files are private to the user.
 - Standard-library JPEG encoding and PNG validation; bundled Oxipng and pngquant CLI tools for PNG. No additional Go dependencies.
 - Native tools operate on an immutable byte snapshot through stdin/stdout, never the source path. Executables are bundled for the verified target, with pinned versions and third-party notices.
 - Maximum input: 64 MiB and 32 million pixels.
