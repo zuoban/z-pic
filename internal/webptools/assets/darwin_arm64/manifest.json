@@ -1,0 +1,24 @@
+{
+  "version": "1.6.0",
+  "source_url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+  "source_sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564",
+  "sha256": "9b492e45a08fd400aa4af330f21c1a4ebb1aa5fc0ba2aaf36abf899a04615171",
+  "configure_flags": [
+    "--disable-shared",
+    "--enable-static",
+    "--disable-png",
+    "--disable-jpeg",
+    "--disable-tiff",
+    "--disable-gif",
+    "--disable-sdl",
+    "--disable-gl",
+    "--disable-wic",
+    "--enable-libwebpdemux",
+    "--disable-libwebpmux",
+    "--enable-threading"
+  ],
+  "cflags": "-O2 -arch arm64 -mmacosx-version-min=11.0",
+  "ldflags": "-arch arm64 -mmacosx-version-min=11.0",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "sdk": "27.0"
+}

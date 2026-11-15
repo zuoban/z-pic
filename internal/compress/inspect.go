@@ -11,7 +11,7 @@ import (
 
 var pngSignature = [8]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 
-// ImageInfo describes validated static JPEG or PNG metadata read from headers.
+// ImageInfo describes validated static JPEG, PNG or WebP metadata read from headers.
 type ImageInfo struct {
 	Path   string
 	Format string
@@ -56,10 +56,10 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ImageInfo{}, fmt.Errorf("读取图片已取消：%w", ctxErr)
 		}
-		return ImageInfo{}, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG：%w", err)
+		return ImageInfo{}, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 	}
-	if format != "jpeg" && format != "png" {
-		return ImageInfo{}, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG", format)
+	if format != "jpeg" && format != "png" && format != "webp" {
+		return ImageInfo{}, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
 	}
 	if config.Width <= 0 || config.Height <= 0 ||
 		uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
@@ -71,7 +71,12 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 			return ImageInfo{}, err
 		}
 		if animated {
-			return ImageInfo{}, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG")
+			return ImageInfo{}, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+		}
+	}
+	if format == "webp" {
+		if err := validateWebPContainer(ctx, f, opened.Size()); err != nil {
+			return ImageInfo{}, err
 		}
 	}
 	if err := ctx.Err(); err != nil {

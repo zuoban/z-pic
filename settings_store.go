@@ -63,7 +63,7 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		names[preset.name] = true
 		if math.IsNaN(preset.quality) || math.IsInf(preset.quality, 0) ||
 			preset.quality < 1 || preset.quality > 100 || math.Trunc(preset.quality) != preset.quality {
-			return fmt.Errorf("方案「%s」的 JPEG 质量必须是 1 到 100 之间的整数", preset.name)
+			return fmt.Errorf("方案「%s」的 JPEG / WebP 质量必须是 1 到 100 之间的整数", preset.name)
 		}
 		if preset.png == (compress.PNGOptions{}) {
 			return fmt.Errorf("方案「%s」必须指定完整的 PNG 参数", preset.name)

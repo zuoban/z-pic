@@ -230,6 +230,7 @@ func (s *application) loadBatch(paths []string, appendMode bool) {
 }
 
 func (s *application) completeBatchScan(ctx context.Context, scan batchScanResult, appendMode bool, err error) {
+	defer s.completeDropScan()
 	if canceled := ctx.Err(); canceled != nil {
 		err = canceled
 	}
@@ -242,7 +243,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		if appendMode && scan.duplicates > 0 {
 			s.setMessage("所选图片均已在批量队列中。", false)
 		} else {
-			s.setMessage("未找到可处理的 JPEG 或 PNG 图片。", true)
+			s.setMessage("未找到可处理的 JPEG、PNG 或 WebP 图片。", true)
 		}
 		return
 	}
@@ -505,7 +506,7 @@ func sanitizeRelPath(rel, fallback string) string {
 
 func isSupportedImageExt(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".jpg", ".jpeg", ".png":
+	case ".jpg", ".jpeg", ".png", ".webp":
 		return true
 	default:
 		return false
@@ -745,6 +746,7 @@ func (s *application) deleteBatchItems(shouldRemove func(index int, item batchIt
 	removed := 0
 	for i, item := range s.batch.items {
 		if shouldRemove(i, item) {
+			s.invalidateBatchThumbnail(item.path)
 			newIndex[i] = -1
 			removed++
 			continue
@@ -1195,6 +1197,10 @@ func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 		return
 	}
 	item := &s.batch.items[update.index]
+	thumbnail := s.thumbnails.entries[item.path]
+	if update.overwritten || (update.status == batchDone && thumbnail != nil && thumbnail.failed) {
+		s.invalidateBatchThumbnail(item.path)
+	}
 	item.status = update.status
 	if update.format != "" {
 		item.format = update.format

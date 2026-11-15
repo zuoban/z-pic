@@ -1413,6 +1413,8 @@ func TestBatchQueueSortingAndSelection(t *testing.T) {
 	}
 
 	// Select c.png (index 2) and verify selection follows item across sort changes.
+	s.batch.list.ScrollIntoView(slices.Index(s.filteredBatchIndices(), 2))
+	tt.Frame()
 	if err := tt.Click("c.png"); err != nil {
 		t.Fatal(err)
 	}

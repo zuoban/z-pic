@@ -86,7 +86,7 @@ func TestPNGViewExplainsLossyCompressionWithoutModeSelection(t *testing.T) {
 	if tt.HasText("无损优化") || tt.HasText("PNG 压缩模式") || tt.HasText("更小体积（有损）") {
 		t.Fatal("PNG must not offer the removed mode selection")
 	}
-	for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数"} {
+	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数"} {
 		if _, ok := tt.AccessByRole(ui.RoleSlider, label); !ok {
 			t.Fatalf("settings must expose both formats independently of the selected image: %s", label)
 		}
@@ -549,7 +549,7 @@ func TestMainViewOnlyOffersSchemes(t *testing.T) {
 			if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "压缩方案"); !ok {
 				t.Fatal("the main page must offer scheme selection")
 			}
-			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+			for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 				if _, ok := tt.AccessByRole(ui.RoleSlider, label); ok {
 					t.Fatalf("compression parameter %q must only appear in the settings window", label)
 				}
@@ -578,13 +578,13 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	if err := settings.Click("新增方案"); err != nil {
 		t.Fatal(err)
 	}
-	for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数"} {
+	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数"} {
 		slider, ok := settings.AccessByRole(ui.RoleSlider, label)
 		if !ok || slider.Disabled {
 			t.Fatalf("%s must be editable without a selected image: %+v", label, slider)
 		}
 	}
-	slider, _ := settings.AccessByRole(ui.RoleSlider, "JPEG 质量")
+	slider, _ := settings.AccessByRole(ui.RoleSlider, "JPEG / WebP 质量")
 	settings.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
 	settings.Key(0, ui.KeyEnd)
 	if s.editor.presets[s.editor.selected].quality != 100 || s.quality != 92 {
@@ -725,7 +725,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 					t.Fatalf("%s must fit in the minimum window: %+v", label, button)
 				}
 			}
-			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+			for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
 				if !ok || !slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
 					slider.Bounds.X+slider.Bounds.W > 740 {
@@ -741,7 +741,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 					t.Fatalf("%s must fit and be enabled for custom schemes: %+v", label, button)
 				}
 			}
-			for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+			for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
 				if !ok || slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
 					slider.Bounds.X+slider.Bounds.W > 740 {

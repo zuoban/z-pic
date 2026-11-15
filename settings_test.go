@@ -527,7 +527,7 @@ func TestBuiltinPresetsCannotBeEditedOrDeleted(t *testing.T) {
 		if !ok || !deleteButton.Disabled {
 			t.Fatalf("built-in %q delete button must be disabled: %+v", expected.name, deleteButton)
 		}
-		for _, label := range []string{"JPEG 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+		for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 			slider, ok := tester.AccessByRole(ui.RoleSlider, label)
 			if !ok || !slider.Disabled {
 				t.Fatalf("built-in %q slider %q must be disabled: %+v", expected.name, label, slider)
@@ -535,7 +535,7 @@ func TestBuiltinPresetsCannotBeEditedOrDeleted(t *testing.T) {
 		}
 		tester.ClickAt(nameField.Bounds.X+nameField.Bounds.W/2, nameField.Bounds.Y+nameField.Bounds.H/2)
 		tester.Type("篡改名称")
-		qualitySlider, _ := tester.AccessByRole(ui.RoleSlider, "JPEG 质量")
+		qualitySlider, _ := tester.AccessByRole(ui.RoleSlider, "JPEG / WebP 质量")
 		tester.ClickAt(qualitySlider.Bounds.X+qualitySlider.Bounds.W/2, qualitySlider.Bounds.Y+qualitySlider.Bounds.H/2)
 		tester.Key(0, ui.KeyHome)
 		application.editQuality(15)

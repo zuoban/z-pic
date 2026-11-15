@@ -26,6 +26,11 @@ func main() {
 			if app.cancel != nil {
 				app.cancel()
 			}
+			if app.thumbnails.cancel != nil {
+				app.thumbnails.cancel()
+			}
+			app.dropQueue = nil
+			app.setFloatingOpen(false)
 		})
 		app.window.OnFileDrop(func(e *mygo.FileDropEvent) {
 			app.dropFiles(e.Paths)

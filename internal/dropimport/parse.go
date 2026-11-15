@@ -1,0 +1,257 @@
+// Package dropimport turns native drop representations into local image inputs.
+package dropimport
+
+import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	"path/filepath"
+	"strings"
+
+	"github.com/egoist/mygo/transfer"
+	"golang.org/x/net/html"
+)
+
+const (
+	maxItems    = 2000
+	maxText     = 1 << 20
+	maxImage    = 64 << 20
+	maxTransfer = 128 << 20
+)
+
+// Item describes one image. Parse sets exactly one of Path, URL, and Data.
+type Item struct {
+	Path string
+	URL  string
+	Data []byte
+}
+
+// Parse preserves item order and chooses one representation per native item.
+// Lists within a representation may yield multiple images. Unsupported items
+// and failed providers without a usable alternative produce joined errors
+// alongside valid items. Resource limits stop parsing and reject the whole drop.
+func Parse(data transfer.Data) ([]Item, error) {
+	native := data.Items()
+	if len(native) > maxItems {
+		return nil, itemLimit()
+	}
+	var result []Item
+	var failures []error
+	seen := make(map[string]bool)
+	budget := maxTransfer
+	for _, source := range native {
+		items, err := parseItem(source, &budget)
+		if err != nil {
+			failures = append(failures, err)
+			var limit resourceLimitError
+			if errors.As(err, &limit) {
+				return nil, errors.Join(failures...)
+			}
+			continue
+		}
+		for _, item := range items {
+			key := ""
+			if item.Path != "" {
+				key = "file:" + filepath.Clean(item.Path)
+			} else if item.URL != "" {
+				key = item.URL
+			}
+			if key != "" && seen[key] {
+				continue
+			}
+			if key != "" {
+				seen[key] = true
+			}
+			if len(result) == maxItems {
+				return nil, errors.Join(append(failures, itemLimit())...)
+			}
+			result = append(result, item)
+		}
+	}
+	if len(result) == 0 && len(failures) == 0 {
+		return nil, unsupported()
+	}
+	return result, errors.Join(failures...)
+}
+
+type resourceLimitError string
+
+func (err resourceLimitError) Error() string {
+	return string(err)
+}
+
+func itemLimit() error {
+	return resourceLimitError(fmt.Sprintf("一次最多导入 %d 张图片", maxItems))
+}
+
+func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
+	var readErrors []error
+	var resourceErr error
+	defer func() {
+		if resourceErr != nil {
+			items, err = nil, errors.Join(append(readErrors, resourceErr)...)
+		}
+	}()
+	read := func(format transfer.Format, limit int) []byte {
+		if resourceErr != nil {
+			return nil
+		}
+		value, err := source.Read(format)
+		if errors.Is(err, transfer.ErrFormat) {
+			return nil
+		}
+		if err != nil {
+			readErrors = append(readErrors, err)
+			return nil
+		}
+		if len(value) > limit || len(value) > *budget {
+			resourceErr = resourceLimitError("拖放数据过大：文本最多 1 MiB，图片最多 64 MiB，总计最多 128 MiB")
+			return nil
+		}
+		*budget -= len(value)
+		return value
+	}
+	files := read(transfer.FileList, maxText)
+	if items := localItems(string(files)); len(items) > 0 {
+		return items, nil
+	}
+	uris := read(transfer.URIList, maxText)
+	if items := localItems(string(uris)); len(items) > 0 {
+		return items, nil
+	}
+	markup := read(transfer.HTML, maxText)
+	var base *url.URL
+	for _, line := range lines(string(uris)) {
+		if parsed, err := httpURL(line); err == nil {
+			base = parsed
+			break
+		}
+	}
+	var images []Item
+	hadImage := false
+	tokenizer := html.NewTokenizer(strings.NewReader(string(markup)))
+	for {
+		tokenType := tokenizer.Next()
+		if tokenType == html.ErrorToken {
+			if err := tokenizer.Err(); err != io.EOF {
+				readErrors = append(readErrors, err)
+			}
+			break
+		}
+		if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
+			continue
+		}
+		token := tokenizer.Token()
+		if token.Data != "img" {
+			continue
+		}
+		hadImage = true
+		for _, attr := range token.Attr {
+			if attr.Key != "src" {
+				continue
+			}
+			raw := strings.TrimSpace(attr.Val)
+			if parsed, err := url.Parse(raw); err == nil && base != nil && raw != "" {
+				raw = base.ResolveReference(parsed).String()
+			}
+			if item, err := reference(raw); err == nil {
+				images = append(images, item)
+			}
+			break
+		}
+		if len(images) > maxItems {
+			return nil, itemLimit()
+		}
+	}
+	if len(images) > 0 {
+		return images, nil
+	}
+	text := read(transfer.Text, maxText)
+	if !hadImage {
+		if items := localItems(string(text)); len(items) > 0 {
+			return items, nil
+		}
+		for _, representation := range []string{string(uris), string(text)} {
+			var items []Item
+			for _, line := range lines(representation) {
+				if item, err := reference(line); err == nil {
+					items = append(items, item)
+				}
+				if len(items) > maxItems {
+					return nil, itemLimit()
+				}
+			}
+			if len(items) > 0 {
+				return items, nil
+			}
+		}
+	}
+	for _, format := range []transfer.Format{transfer.PNG, "image/jpeg", "image/webp"} {
+		if payload := read(format, maxImage); len(payload) > 0 {
+			return []Item{{Data: payload}}, nil
+		}
+	}
+	return nil, errors.Join(append([]error{unsupported()}, readErrors...)...)
+}
+
+func unsupported() error {
+	return fmt.Errorf("无法导入此拖放内容：请拖入本地 JPEG/PNG/WebP、图片的 HTTP(S) 直链或图片数据；blob 图片请先保存到本地再拖入")
+}
+
+func lines(text string) []string {
+	var result []string
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			result = append(result, line)
+		}
+	}
+	return result
+}
+
+func localItems(text string) []Item {
+	var result []Item
+	for _, line := range lines(text) {
+		path := line
+		if parsed, err := url.Parse(line); err == nil && parsed.Scheme == "file" {
+			if parsed.User != nil || (parsed.Host != "" && parsed.Host != "localhost") || parsed.RawQuery != "" || parsed.Fragment != "" {
+				continue
+			}
+			path = filepath.FromSlash(parsed.Path)
+		}
+		if filepath.IsAbs(path) && !strings.ContainsRune(path, 0) {
+			result = append(result, Item{Path: path})
+		}
+	}
+	return result
+}
+
+func httpURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
+		return nil, fmt.Errorf("仅支持不含登录凭据的 HTTP(S) 图片直链")
+	}
+	parsed.Fragment = ""
+	return parsed, nil
+}
+
+func reference(raw string) (Item, error) {
+	if strings.HasPrefix(raw, "data:") {
+		header, encoded, ok := strings.Cut(raw, ",")
+		if !ok || (header != "data:image/png;base64" && header != "data:image/jpeg;base64" && header != "data:image/webp;base64") {
+			return Item{}, unsupported()
+		}
+		payload, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(payload) == 0 || len(payload) > maxImage {
+			return Item{}, unsupported()
+		}
+		return Item{Data: payload}, nil
+	}
+	parsed, err := httpURL(raw)
+	if err != nil {
+		return Item{}, err
+	}
+	return Item{URL: parsed.String()}, nil
+}

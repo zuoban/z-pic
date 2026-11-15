@@ -1,4 +1,4 @@
-// Package compress compresses static JPEG and PNG images without scaling.
+// Package compress compresses static JPEG, PNG and WebP images without scaling.
 // JPEG pixels are normalized to their EXIF display orientation.
 package compress
 
@@ -15,7 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	_ "golang.org/x/image/webp"
+
 	"zpic/internal/pngtools"
+	"zpic/internal/webptools"
 )
 
 const (
@@ -24,7 +27,7 @@ const (
 )
 
 type Options struct {
-	Quality int // JPEG quality in [1, 100].
+	Quality int // JPEG and WebP quality in [1, 100].
 	PNG     PNGOptions
 }
 
@@ -113,10 +116,10 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG：%w", err)
+		return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP：%w", err)
 	}
-	if format != "jpeg" && format != "png" {
-		return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG", format)
+	if format != "jpeg" && format != "png" && format != "webp" {
+		return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
 	}
 	// Divide before multiplying so a malicious header cannot overflow.
 	if config.Width <= 0 || config.Height <= 0 ||
@@ -124,7 +127,12 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
 	}
 	if format == "png" && animatedPNG(data) {
-		return nil, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG")
+		return nil, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+	}
+	if format == "webp" {
+		if err := ValidateWebP(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", err)
@@ -144,6 +152,18 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		var output bytes.Buffer
 		err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
 		encoded = output.Bytes()
+	} else if format == "webp" {
+		if _, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); err != nil {
+			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+		}
+		if config.Width > 16383 || config.Height > 16383 {
+			encoded = data
+		} else {
+			encoded, err = webptools.Encode(ctx, data, options.Quality)
+			if err == nil {
+				err = validateWebPOutput(ctx, encoded, config)
+			}
+		}
 	} else {
 		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
 			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)

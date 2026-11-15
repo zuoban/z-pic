@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
@@ -64,6 +65,7 @@ type application struct {
 	confirmOverwrite      bool
 	overwritten           bool
 	batch                 *batchState
+	thumbnails            batchThumbnailCache
 	confirmBatchOverwrite bool
 	pendingBatchRestart   bool
 	pendingBatchRun       batchRunMode
@@ -73,6 +75,18 @@ type application struct {
 	lastSavedPath         string
 	dispatchUpdate        func(func())
 	showInFolder          func(string)
+	floatingWindow        *mygo.Window
+	floatingOpen          bool
+	floating              floatingState
+	dropQueue             []transfer.Data
+	dropImporting         bool
+	dropScanning          bool
+	dropMessage           string
+	dropFailed            bool
+	dropFailures          []string
+	dropImportErrors      string
+	downloadDir           string
+	downloadedURLs        map[string]string
 }
 
 func newApplication() *application {
@@ -93,8 +107,16 @@ func (s *application) modalOpen() bool {
 }
 
 func (s *application) update(fn func()) {
+	apply := func() {
+		if s.closed {
+			return
+		}
+		fn()
+		s.startNextDropImport()
+		s.invalidateFloatingWindow()
+	}
 	if s.dispatchUpdate != nil {
-		s.dispatchUpdate(fn)
+		s.dispatchUpdate(apply)
 		return
 	}
 	if s.window == nil {
@@ -102,7 +124,7 @@ func (s *application) update(fn func()) {
 	}
 	s.window.Update(func() {
 		if !s.closed {
-			fn()
+			apply()
 		}
 	})
 }
@@ -119,7 +141,7 @@ func (s *application) chooseFile() {
 			ButtonLabel: "选择图片",
 			Multiple:    true,
 			Filters: []mygo.FileFilter{
-				{Name: "JPEG / PNG 图片", Extensions: []string{"jpg", "jpeg", "png"}},
+				{Name: "JPEG / PNG / WebP 图片", Extensions: []string{"jpg", "jpeg", "png", "webp"}},
 			},
 		})
 		s.update(func() {
@@ -232,14 +254,19 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 	if err != nil {
 		return nil, errors.New("无法识别图片，文件可能已经损坏")
 	}
-	if format != "jpeg" && format != "png" {
-		return nil, errors.New("目前仅支持 JPEG 和 PNG 图片")
+	if format != "jpeg" && format != "png" && format != "webp" {
+		return nil, errors.New("目前仅支持 JPEG、PNG 和 WebP 图片")
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
 		return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
 	}
 	if format == "png" && compress.IsAnimatedPNG(data) {
-		return nil, errors.New("不支持动画 PNG，仅支持静态 JPEG/PNG")
+		return nil, errors.New("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+	}
+	if format == "webp" {
+		if err := compress.ValidateWebP(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -366,6 +393,8 @@ func (s *application) saveCopy() {
 		ext := ".jpg"
 		if result.Format == "png" {
 			ext = ".png"
+		} else if result.Format == "webp" {
+			ext = ".webp"
 		}
 		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
 			Parent:            s.window,

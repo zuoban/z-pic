@@ -35,6 +35,7 @@ func applyTheme(c *ui.Context) {
 
 func (s *application) view(c *ui.Context) {
 	applyTheme(c)
+	s.prepareBatchThumbnails()
 	theme := c.Theme()
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
@@ -64,9 +65,16 @@ func (s *application) view(c *ui.Context) {
 				ui.Text(c, "Z Pic").FontSize(24).FontWeight(600)
 				ui.Text(c, "图片压缩，尺寸不变").FontSize(12).TextColor(theme.TextMuted)
 			})
-			ui.Text(c, "JPEG / PNG").FontSize(12).TextColor(theme.TextMuted)
+			ui.Text(c, "JPEG / PNG / WebP").FontSize(12).TextColor(theme.TextMuted)
 			ui.Box(c).Size(1, 12).Background(theme.Border)
 			ui.Text(c, "本地处理").FontSize(12).TextColor(theme.TextMuted)
+			floatingLabel := "悬浮窗"
+			if s.floatingOpen {
+				floatingLabel = "收起悬浮窗"
+			}
+			ui.Button(c.Key("toggle-floating"), floatingLabel).Height(36).
+				Tooltip("打开置顶拖图窗口，接收本地或网页图片").
+				OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
 			ui.Button(c.Key("open-settings"), "设置").Height(36).
 				KeyShortcuts(ui.Cmd, ui.KeyComma).
 				Tooltip("打开设置（" + shortcutLabel(",") + "）").
@@ -78,7 +86,7 @@ func (s *application) view(c *ui.Context) {
 			s.controlsPanel(c)
 		})
 		ui.Row(c).Height(20).Gap(16).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "无需联网，图片不离开本机").FontSize(12).
+			ui.Text(c, "本机压缩，网页图片仅在下载时联网").FontSize(12).
 				TextColor(theme.TextMuted).Grow(1)
 			shortcutHint(c, "打开", "O")
 			shortcutHint(c, "压缩", "↵")
@@ -88,6 +96,11 @@ func (s *application) view(c *ui.Context) {
 	})
 	s.overwriteConfirmation(c)
 	s.batchOverwriteConfirmation(c)
+	if s.window != nil {
+		s.startNextBatchThumbnail()
+	}
+	s.startNextDropImport()
+	s.invalidateFloatingWindow()
 }
 
 func shortcutLabel(key string) string {
@@ -162,7 +175,7 @@ func (s *application) previewPanel(c *ui.Context) {
 							Tooltip("选择包含图片的文件夹").
 							Disabled(s.busy).OnClick(s.chooseFolder)
 					})
-					ui.Text(c, "JPEG / PNG · 支持多张或文件夹 · 单张最大 64 MiB / 3200 万像素").
+					ui.Text(c, "JPEG / PNG / WebP · 支持多张或文件夹 · 单张最大 64 MiB / 3200 万像素").
 						FontSize(12).TextColor(t.TextMuted)
 				})
 				return
@@ -364,13 +377,13 @@ func (s *application) settingsView(c *ui.Context) {
 						editor.message = ""
 					}
 				})
-				ui.Text(c, "JPEG").FontSize(14).FontWeight(500)
-				s.settingSlider(c, "quality", "JPEG 质量", preset.quality, 1, 100, locked, s.editQuality)
+				ui.Text(c, "JPEG / WebP").FontSize(14).FontWeight(500)
+				s.settingSlider(c, "quality", "JPEG / WebP 质量", preset.quality, 1, 100, locked, s.editQuality)
 				ui.Text(c, "较低质量通常带来更小体积，也会减少照片细节").
 					FontSize(12).TextColor(t.TextMuted)
 				ui.Divider(c)
 				s.pngSettings(c, locked)
-				ui.Text(c, "JPEG 与 PNG 有损压缩可能移除元数据，请保留原图").
+				ui.Text(c, "JPEG、PNG 与 WebP 有损压缩可能改变画质，请保留原图").
 					FontSize(12).TextColor(t.TextMuted)
 			})
 		})

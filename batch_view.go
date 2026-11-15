@@ -114,7 +114,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 			s.batch.list.Key = func(i int) any { return s.batch.items[visible[i]].absPath }
 			s.batch.list.Label = func(i int) string { return s.batch.items[visible[i]].relPath }
 			list := ui.List(c, &s.batch.list, len(visible)).
-				Label("批量图片列表").Fill().Padding(4)
+				Label("批量图片列表").Fill().Padding(8).Gap(8)
 			list.Rows(func(r ui.ListRow) {
 				s.batchListRow(r, visible[r.Index])
 			})
@@ -209,27 +209,72 @@ func (s *application) emptyBatchFilterMessage() string {
 }
 
 func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
-	t := r.Context.Theme()
+	c := r.Context
+	t := c.Theme()
 	item := s.batch.items[itemIndex]
-	titleColor := t.Text
 	statusText, statusColor := batchItemStatus(item, t)
 	detailText, detailColor := batchItemDetail(item, t)
+	background, border := t.Surface, t.Border
 	if r.Selected() {
-		titleColor = t.AccentText
-		statusColor = t.AccentText
-		detailColor = t.AccentText.Alpha(0.85)
+		background = t.Surface.Mix(t.Accent, 0.08)
+		if t.Dark {
+			background = t.Surface.Mix(t.Accent, 0.16)
+		}
+		border = t.Accent
+	} else if r.Hovered() {
+		background = t.SurfaceHover
 	}
-	ui.Column(r.Context).FillWidth().Padding(8, 12).Gap(4).Children(func() {
-		ui.Row(r.Context).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(r.Context, item.relPath).FontSize(13).FontWeight(500).
-				TextColor(titleColor).SingleLine().TruncateMiddle().
-				Grow(1).Tooltip(item.path)
-			ui.Text(r.Context, statusText).FontSize(12).FontWeight(500).
-				FontFeatures("tnum").TextColor(statusColor).
-				SingleLine().Shrink(0)
+	ui.Box(c).FillWidth().Background(t.Background).Children(func() {
+		ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
+			Radius(12).Background(background).Border(1, border).Children(func() {
+			s.batchThumbnailView(c, item)
+			ui.Column(c).Width(0).Grow(1).Gap(6).Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, item.relPath).FontSize(13).FontWeight(500).
+						TextColor(t.Text).SingleLine().TruncateMiddle().
+						Width(0).Grow(1).Tooltip(item.path)
+					ui.Text(c, statusText).FontSize(12).FontWeight(500).
+						FontFeatures("tnum").TextColor(statusColor).
+						SingleLine().Shrink(0)
+				})
+				meta := strings.ToUpper(item.format)
+				if item.width > 0 && item.height > 0 {
+					meta += fmt.Sprintf(" · %d × %d", item.width, item.height)
+				}
+				ui.Text(c, meta).FontSize(12).FontFeatures("tnum").
+					TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, batchItemSizeDetail(item)).FontSize(12).FontFeatures("tnum").
+					TextColor(detailColor).SingleLine().TruncateMiddle().
+					Tooltip(detailText)
+			})
 		})
-		ui.Text(r.Context, detailText).FontSize(12).FontFeatures("tnum").
-			TextColor(detailColor).SingleLine().Tooltip(detailText)
+	})
+}
+
+func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
+	t := c.Theme()
+	entry := s.batchThumbnail(item)
+	label := item.relPath + " 缩略图"
+	unavailable := item.invalidInput || entry == nil || entry.failed
+	ui.Box(c).Size(64, 64).Shrink(0).Radius(8).Background(t.Background).
+		Clip().Role(ui.RoleImage).Label(label).Children(func() {
+		if entry != nil && entry.bitmap != nil {
+			ui.Image(c, entry.bitmap).Fill().Fit(ui.Contain)
+			return
+		}
+		placeholder := "加载中"
+		if unavailable {
+			placeholder = "无预览"
+		}
+		ui.Column(c).Fill().Center().Gap(4).Children(func() {
+			ui.Box(c).Size(24, 20).Draw(func(p *ui.Painter, bounds ui.Rect) {
+				p.Stroke(bounds, t.TextMuted.Alpha(0.65), 3, 1)
+				p.Line(bounds.X+4, bounds.Y+15, bounds.X+10, bounds.Y+9, 1, t.TextMuted)
+				p.Line(bounds.X+10, bounds.Y+9, bounds.X+16, bounds.Y+15, 1, t.TextMuted)
+				p.Line(bounds.X+16, bounds.Y+15, bounds.X+20, bounds.Y+11, 1, t.TextMuted)
+			})
+			ui.Text(c, placeholder).FontSize(10).TextColor(t.TextMuted)
+		})
 	})
 }
 
@@ -255,21 +300,28 @@ func batchItemDetail(item batchItem, t *ui.Theme) (string, ui.Color) {
 		return item.errMsg, t.Danger
 	}
 	meta := fmt.Sprintf("%s · %d × %d", strings.ToUpper(item.format), item.width, item.height)
+	return fmt.Sprintf("%s · %s", meta, batchItemSizeDetail(item)), t.TextMuted
+}
+
+func batchItemSizeDetail(item batchItem) string {
+	if item.status == batchFailed {
+		return item.errMsg
+	}
 	if item.status == batchDone {
 		if item.unchanged {
 			note := "保留原数据"
 			if item.overwritten {
 				note = "未覆盖"
 			}
-			return fmt.Sprintf("%s · %s（%s）", meta, formatSize(item.originalSize), note), t.TextMuted
+			return fmt.Sprintf("%s（%s）", formatSize(item.originalSize), note)
 		}
 		suffix := ""
 		if item.overwritten {
 			suffix = " · 已覆盖"
 		}
-		return fmt.Sprintf("%s · %s → %s%s", meta, formatSize(item.originalSize), formatSize(item.outputSize), suffix), t.TextMuted
+		return fmt.Sprintf("%s → %s%s", formatSize(item.originalSize), formatSize(item.outputSize), suffix)
 	}
-	return fmt.Sprintf("%s · %s", meta, formatSize(item.originalSize)), t.TextMuted
+	return formatSize(item.originalSize)
 }
 
 func (s *application) batchSelectedBar(c *ui.Context) {
