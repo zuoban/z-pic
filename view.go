@@ -222,8 +222,19 @@ func (s *application) controlsPanel(c *ui.Context) {
 			if s.failed {
 				color, role = t.Danger, ui.RoleAlert
 			}
-			ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
-				MaxLines(2).Tooltip(s.message)
+			if !s.failed && s.lastSavedPath != "" {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
+						Width(0).Grow(1).MaxLines(2).Tooltip(s.message)
+					ui.Button(c.Key("reveal-saved"), "定位文件").Height(28).
+						Disabled(s.busy).
+						Tooltip("在文件夹中显示输出文件").
+						OnClick(func() { s.revealFileInFolder(s.lastSavedPath) })
+				})
+			} else {
+				ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
+					MaxLines(2).Tooltip(s.message)
+			}
 		}
 		if s.result != nil {
 			ui.Row(c).Gap(8).Children(func() {

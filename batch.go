@@ -268,6 +268,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		}
 	} else {
 		s.file, s.result, s.preview = nil, nil, nil
+		s.lastSavedPath = ""
 		s.comparison = comparisonView{split: 50}
 		s.confirmOverwrite, s.overwritten = false, false
 		s.batch = newBatchState(scan.items)
@@ -646,16 +647,38 @@ func (s *application) resetBatchFilter() {
 }
 
 func (s *application) retryableFailedCount() int {
+	retryable, _ := s.batchFailureCounts()
+	return retryable
+}
+
+func (s *application) batchFailureCounts() (retryable, invalid int) {
 	if s.batch == nil {
-		return 0
+		return 0, 0
 	}
-	count := 0
 	for _, item := range s.batch.items {
-		if item.status == batchFailed && !item.invalidInput {
-			count++
+		if item.status != batchFailed {
+			continue
+		}
+		if item.invalidInput {
+			invalid++
+		} else {
+			retryable++
 		}
 	}
-	return count
+	return retryable, invalid
+}
+
+func batchItemOutputPath(item batchItem) string {
+	if item.status != batchDone {
+		return ""
+	}
+	if item.savedPath != "" {
+		return item.savedPath
+	}
+	if item.overwritten {
+		return item.path
+	}
+	return ""
 }
 
 func (s *application) removeSelectedBatchItem() {
@@ -666,22 +689,92 @@ func (s *application) removeSelectedBatchItem() {
 }
 
 func (s *application) removeBatchItem(index int) {
+	if s.batch == nil || index < 0 || index >= len(s.batch.items) {
+		return
+	}
+	if removed := s.deleteBatchItems(func(i int, _ batchItem) bool { return i == index }); removed > 0 && s.batch == nil {
+		s.setMessage("", false)
+	}
+}
+
+func (s *application) removeInvalidBatchItems() {
+	removed := s.deleteBatchItems(func(_ int, item batchItem) bool {
+		return item.status == batchFailed && item.invalidInput
+	})
+	s.finishBulkFailureRemoval(removed, "无效")
+}
+
+func (s *application) removeFailedBatchItems() {
+	removed := s.deleteBatchItems(func(_ int, item batchItem) bool {
+		return item.status == batchFailed
+	})
+	s.finishBulkFailureRemoval(removed, "失败")
+}
+
+func (s *application) finishBulkFailureRemoval(removed int, kind string) {
+	if removed == 0 {
+		return
+	}
+	if s.batch == nil {
+		s.setMessage(fmt.Sprintf("已移除 %d 张%s图片，队列已清空。", removed, kind), false)
+		return
+	}
+	retryable, invalid := s.batchFailureCounts()
+	if s.batch.filter == batchFilterFailed && retryable+invalid == 0 {
+		s.batch.filter = batchFilterAll
+		if visible := s.filteredBatchIndices(); len(visible) > 0 && s.batch.selected < 0 {
+			s.batch.selected = visible[0]
+		}
+	}
+	s.setMessage(fmt.Sprintf("已移除 %d 张%s图片。", removed, kind), false)
+}
+
+func (s *application) deleteBatchItems(shouldRemove func(index int, item batchItem) bool) int {
 	if s.modalOpen() || s.batch == nil {
-		return
+		return 0
 	}
-	if index < 0 || index >= len(s.batch.items) {
-		return
+	visPos := slices.Index(s.filteredBatchIndices(), s.batch.selected)
+	oldSelected := s.batch.selected
+	oldPreview := -1
+	if s.batch.previewOpen {
+		oldPreview = s.batch.previewIndex
 	}
-	visPos := slices.Index(s.filteredBatchIndices(), index)
-	if s.batch.previewOpen && s.batch.previewIndex == index {
+
+	kept := make([]batchItem, 0, len(s.batch.items))
+	newIndex := make([]int, len(s.batch.items))
+	removed := 0
+	for i, item := range s.batch.items {
+		if shouldRemove(i, item) {
+			newIndex[i] = -1
+			removed++
+			continue
+		}
+		newIndex[i] = len(kept)
+		kept = append(kept, item)
+	}
+	if removed == 0 {
+		return 0
+	}
+	if len(kept) == 0 {
 		s.closeBatchPreview()
-	}
-	s.batch.items = slices.Delete(s.batch.items, index, index+1)
-	if len(s.batch.items) == 0 {
 		s.clearPendingBatchConfirmation()
 		s.batch = nil
-		s.setMessage("", false)
-		return
+		return removed
+	}
+	s.batch.items = kept
+	if oldPreview >= 0 && oldPreview < len(newIndex) {
+		if mapped := newIndex[oldPreview]; mapped >= 0 {
+			s.batch.previewIndex = mapped
+		} else {
+			s.closeBatchPreview()
+		}
+	}
+	s.batch.done, s.batch.total, s.batch.currentName = 0, 0, ""
+	if oldSelected >= 0 && oldSelected < len(newIndex) {
+		if mapped := newIndex[oldSelected]; mapped >= 0 && slices.Index(s.filteredBatchIndices(), mapped) >= 0 {
+			s.batch.selected = mapped
+			return removed
+		}
 	}
 	visible := s.filteredBatchIndices()
 	if visPos >= 0 && len(visible) > 0 {
@@ -689,9 +782,7 @@ func (s *application) removeBatchItem(index int) {
 	} else {
 		s.batch.selected = -1
 	}
-	if s.batch.previewOpen && s.batch.previewIndex > index {
-		s.batch.previewIndex--
-	}
+	return removed
 }
 
 func (s *application) invalidateBatchResults() {

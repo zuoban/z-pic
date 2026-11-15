@@ -812,6 +812,120 @@ func TestSaveActionFitsMinimumWindow(t *testing.T) {
 	}
 }
 
+func TestRevealSavedFileLifecycleAndMinimumWindow(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "photo.png")
+	savedPath := filepath.Join(dir, strings.Repeat("nested-dir-", 4)+"photo-compressed.png")
+	if err := os.WriteFile(srcPath, []byte("src"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(savedPath, []byte("out"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dark := range []bool{false, true} {
+		name := "light"
+		if dark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			var revealed []string
+			s := newApplication()
+			s.dispatchUpdate = func(fn func()) { fn() }
+			s.showInFolder = func(path string) { revealed = append(revealed, path) }
+			preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+			s.file = &selectedImage{
+				path: srcPath, format: "png", width: 20, height: 12,
+				size: 4096, preview: preview,
+			}
+			s.preview = preview
+			s.result = &compress.Result{
+				SourcePath: srcPath, Format: "png", Width: 20, Height: 12,
+				OriginalSize: 4096, OutputSize: 2048, Data: []byte("out"),
+			}
+			s.lastSavedPath = savedPath
+			s.setMessage("已保存："+savedPath, false)
+
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.LightTheme()
+				if dark {
+					theme = ui.DarkTheme()
+				}
+				c.SetTheme(theme)
+				s.view(c)
+			}, 880, 660)
+
+			for _, label := range []string{"定位文件", "另存副本", "覆盖原图"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Offscreen || button.Bounds.H < 24 ||
+					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
+					t.Fatalf("%q must fit inside minimum window: %+v", label, button)
+				}
+			}
+
+			if err := tt.Click("定位文件"); err != nil {
+				t.Fatal(err)
+			}
+			if len(revealed) != 1 || revealed[0] != savedPath {
+				t.Fatalf("clicking 定位文件 must reveal savedPath %q, got %v", savedPath, revealed)
+			}
+
+			s.settingsOpen = true
+			s.revealFileInFolder(savedPath)
+			if len(revealed) != 1 {
+				t.Fatalf("modal guard must prevent revealFileInFolder while settings open: %v", revealed)
+			}
+			s.settingsOpen = false
+		})
+	}
+
+	var revealed []string
+	s := newApplication()
+	s.dispatchUpdate = func(fn func()) { fn() }
+	s.showInFolder = func(path string) { revealed = append(revealed, path) }
+	preview := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 20, 12)))
+	s.file = &selectedImage{path: srcPath, format: "png", width: 20, height: 12, size: 4096, preview: preview}
+	s.preview = preview
+	s.result = &compress.Result{
+		SourcePath: srcPath, Format: "png", Width: 20, Height: 12,
+		OriginalSize: 4096, OutputSize: 2048, Data: []byte("out"),
+	}
+
+	s.writeCopy(s.result, filepath.Join(dir, "copy.png"))
+	s.saves.Wait()
+	if s.lastSavedPath != filepath.Join(dir, "copy.png") || s.failed {
+		t.Fatalf("writeCopy must track lastSavedPath cleanly: last=%q failed=%v msg=%q", s.lastSavedPath, s.failed, s.message)
+	}
+
+	if err := os.Remove(s.lastSavedPath); err != nil {
+		t.Fatal(err)
+	}
+	s.revealFileInFolder(s.lastSavedPath)
+	if !s.failed || !strings.Contains(s.message, "找不到输出文件") || len(revealed) != 0 {
+		t.Fatalf("missing saved file must report error instead of revealing: failed=%v msg=%q revealed=%v",
+			s.failed, s.message, revealed)
+	}
+
+	s.completeOverwrite(s.result, nil)
+	if s.lastSavedPath != srcPath || s.failed {
+		t.Fatalf("completeOverwrite must track source path for reveal: last=%q failed=%v", s.lastSavedPath, s.failed)
+	}
+	s.revealFileInFolder(s.lastSavedPath)
+	if len(revealed) != 1 || revealed[0] != srcPath {
+		t.Fatalf("reveal after overwrite must target source path %q, got %v", srcPath, revealed)
+	}
+
+	s.invalidateResult()
+	if s.lastSavedPath != "" {
+		t.Fatalf("invalidateResult must clear lastSavedPath, got %q", s.lastSavedPath)
+	}
+	s.lastSavedPath = srcPath
+	s.completeSelection(context.Background(), &selectedImage{path: srcPath, preview: preview}, nil)
+	if s.lastSavedPath != "" {
+		t.Fatalf("completeSelection must clear lastSavedPath, got %q", s.lastSavedPath)
+	}
+}
+
 func TestReadSelectionCanceledBeforeOpening(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

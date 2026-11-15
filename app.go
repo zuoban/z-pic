@@ -70,7 +70,9 @@ type application struct {
 	pendingBatchIndex     int
 	batchSearchRef        ui.Handle
 	batchOutputDir        string
+	lastSavedPath         string
 	dispatchUpdate        func(func())
+	showInFolder          func(string)
 }
 
 func newApplication() *application {
@@ -187,6 +189,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 	}
 	s.batch = nil
 	s.file, s.preview, s.result = selected, selected.preview, nil
+	s.lastSavedPath = ""
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("图片已就绪，可以开始压缩。", false)
@@ -257,6 +260,7 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 
 func (s *application) invalidateResult() {
 	s.result = nil
+	s.lastSavedPath = ""
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.confirmBatchOverwrite, s.overwritten = false, false, false
 	s.clearPendingBatchConfirmation()
@@ -287,7 +291,7 @@ func (s *application) startCompression() {
 	path, data, options := s.file.path, s.file.data, s.compressionOptions()
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
-	s.result, s.preview = nil, s.file.preview
+	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
@@ -404,8 +408,10 @@ func (s *application) writeCopy(result *compress.Result, path string) {
 		s.update(func() {
 			s.busy, s.phase = false, ""
 			if err != nil {
+				s.lastSavedPath = ""
 				s.reportError(err, "保存失败")
 			} else {
+				s.lastSavedPath = path
 				s.setMessage("已保存："+path, false)
 			}
 		})
@@ -446,6 +452,7 @@ func (s *application) overwriteOriginal() {
 func (s *application) completeOverwrite(result *compress.Result, err error) {
 	s.busy, s.phase = false, ""
 	if err != nil {
+		s.lastSavedPath = ""
 		s.reportError(err, "覆盖失败")
 		return
 	}
@@ -456,8 +463,24 @@ func (s *application) completeOverwrite(result *compress.Result, err error) {
 		size: result.OutputSize, data: result.Data, preview: s.preview,
 	}
 	s.overwritten = true
+	s.lastSavedPath = s.file.path
 	s.comparison.mode = previewResult
 	s.setMessage("已覆盖原图："+s.file.path, false)
+}
+
+func (s *application) revealFileInFolder(path string) {
+	if path == "" || s.modalOpen() {
+		return
+	}
+	if _, err := os.Lstat(path); err != nil {
+		s.setMessage("找不到输出文件："+path, true)
+		return
+	}
+	if s.showInFolder != nil {
+		s.showInFolder(path)
+		return
+	}
+	mygo.Shell.ShowItemInFolder(path)
 }
 
 func suggestedPath(source, ext string) string {

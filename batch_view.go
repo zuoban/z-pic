@@ -52,16 +52,38 @@ func (s *application) batchListPanel(c *ui.Context) {
 				visible = s.filteredBatchIndices()
 			}
 		})
-		if retryFailed := s.retryableFailedCount(); retryFailed > 0 {
+		retryFailed, invalidCount := s.batchFailureCounts()
+		if retryFailed > 0 || invalidCount > 0 {
+			var bannerText string
+			switch {
+			case retryFailed > 0 && invalidCount > 0:
+				bannerText = fmt.Sprintf("%d 张失败（%d 无效）", retryFailed+invalidCount, invalidCount)
+			case retryFailed > 0:
+				bannerText = fmt.Sprintf("%d 张图片处理失败", retryFailed)
+			default:
+				bannerText = fmt.Sprintf("%d 张无效图片无法处理", invalidCount)
+			}
 			ui.Row(c).Height(36).Padding(0, 12).Gap(8).Radius(8).
 				Background(t.Background).AlignItems(ui.Center).Children(func() {
-				ui.Textf(c, "%d 张图片处理失败，可重新压缩", retryFailed).
+				ui.Text(c, bannerText).
 					FontSize(12).FontFeatures("tnum").TextColor(t.Danger).
-					SingleLine().Grow(1)
-				ui.Button(c.Key("batch-retry-failed"), "重试失败项").Height(28).
-					Disabled(s.busy).
-					Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
-					OnClick(s.retryFailedBatchItems)
+					SingleLine().Width(0).Grow(1).Tooltip(bannerText)
+				if invalidCount > 0 {
+					ui.Button(c.Key("batch-remove-invalid"), "移除无效项").Height(28).
+						Disabled(s.busy).
+						Tooltip(fmt.Sprintf("从队列移除 %d 张无法处理的图片", invalidCount)).
+						OnClick(s.removeInvalidBatchItems)
+				}
+				if retryFailed > 0 {
+					ui.Button(c.Key("batch-remove-failed"), "移除失败项").Height(28).
+						Disabled(s.busy).
+						Tooltip("从队列移除全部失败的图片").
+						OnClick(s.removeFailedBatchItems)
+					ui.Button(c.Key("batch-retry-failed"), "重试失败项").Height(28).
+						Disabled(s.busy).
+						Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
+						OnClick(s.retryFailedBatchItems)
+				}
 			})
 		}
 		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(8).
@@ -273,7 +295,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		subTooltip = item.errMsg
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Grow(1).Gap(4).Children(func() {
+		ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, filepath.Base(item.path)).FontSize(13).FontWeight(500).
 				SingleLine().TruncateMiddle().Tooltip(item.path)
 			ui.Text(c, subText).FontSize(12).FontFeatures("tnum").TextColor(subColor).
@@ -284,6 +306,12 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 				Disabled(s.busy).
 				Tooltip("重新压缩此失败图片").
 				OnClick(func() { s.retryBatchItem(selected) })
+		}
+		if outPath := batchItemOutputPath(item); outPath != "" {
+			ui.Button(c.Key("batch-reveal-item"), "定位文件").Height(32).
+				Disabled(s.busy).
+				Tooltip("在文件夹中显示输出文件").
+				OnClick(func() { s.revealFileInFolder(outPath) })
 		}
 		ui.Button(c.Key("batch-preview"), "预览").Height(32).
 			Disabled(s.busy || item.invalidInput).
@@ -377,6 +405,12 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 						OnClick(func() { s.retryBatchItem(previewIdx) })
 				}
 				if previewItem != nil {
+					if outPath := batchItemOutputPath(*previewItem); outPath != "" {
+						ui.Button(c.Key("batch-preview-reveal"), "定位文件").Height(32).
+							Disabled(s.busy).
+							Tooltip("在文件夹中显示输出文件").
+							OnClick(func() { s.revealFileInFolder(outPath) })
+					}
 					ui.Button(c.Key("batch-preview-remove"), "移除").Height(32).
 						Disabled(s.busy).
 						Tooltip("从批量队列移除此图片").

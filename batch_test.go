@@ -1052,6 +1052,7 @@ func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
 			s.batch = newBatchState([]batchItem{
 				{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", format: "jpeg", width: 100, height: 100, originalSize: 4096, status: batchFailed, errMsg: "磁盘已满"},
 				{path: "/b.png", absPath: "/b.png", relPath: "b.png", format: "png", width: 100, height: 100, originalSize: 4096, outputSize: 2048, status: batchDone, savedPath: "/out/b.png"},
+				{path: "/c.png", absPath: "/c.png", relPath: "c.png", status: batchFailed, invalidInput: true, errMsg: "不支持动画 PNG"},
 			})
 			tt := ui.NewTester(func(c *ui.Context) {
 				theme := ui.LightTheme()
@@ -1076,23 +1077,54 @@ func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
 				sortBtn.Bounds.X+sortBtn.Bounds.W > 880 || sortBtn.Bounds.Y+sortBtn.Bounds.H > 660 {
 				t.Fatalf("sort menu button must sit beside filter without overlap inside 880x660: filter=%+v sort=%+v", filterGroup, sortBtn)
 			}
-			for _, label := range []string{"重试失败项", "重试", "预览", "移除"} {
+			for _, label := range []string{"移除无效项", "移除失败项", "重试失败项", "重试", "预览", "移除"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Offscreen || button.Bounds.H < 24 ||
 					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
 					t.Fatalf("%q must fit inside minimum window: %+v", label, button)
 				}
 			}
+			removeInvalidBtn, _ := tt.AccessByRole(ui.RoleButton, "移除无效项")
+			removeFailedBtn, _ := tt.AccessByRole(ui.RoleButton, "移除失败项")
+			retryAllBtn, _ := tt.AccessByRole(ui.RoleButton, "重试失败项")
+			if removeInvalidBtn.Bounds.X+removeInvalidBtn.Bounds.W > removeFailedBtn.Bounds.X ||
+				removeFailedBtn.Bounds.X+removeFailedBtn.Bounds.W > retryAllBtn.Bounds.X {
+				t.Fatalf("failure banner buttons must not overlap: invalid=%+v failed=%+v retry=%+v",
+					removeInvalidBtn, removeFailedBtn, retryAllBtn)
+			}
 
 			s.busy = true
 			s.phase = "正在重试 0 / 1"
 			s.batch.done, s.batch.total = 0, 1
 			tt.Frame()
-			for _, label := range []string{"重试失败项", "重试"} {
+			for _, label := range []string{"移除无效项", "移除失败项", "重试失败项", "重试"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || !button.Disabled {
 					t.Fatalf("%q must be disabled while busy: %+v", label, button)
 				}
+			}
+
+			s.busy = false
+			tt.Frame()
+			if err := tt.Click("b.png"); err != nil {
+				t.Fatal(err)
+			}
+			for _, label := range []string{"定位文件", "预览", "移除"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Offscreen || button.Bounds.H < 24 ||
+					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
+					t.Fatalf("%q for done item must fit inside minimum window: %+v", label, button)
+				}
+			}
+			revealBtn, _ := tt.AccessByRole(ui.RoleButton, "定位文件")
+			previewBtn, _ := tt.AccessByRole(ui.RoleButton, "预览")
+			if revealBtn.Bounds.X+revealBtn.Bounds.W > previewBtn.Bounds.X {
+				t.Fatalf("定位文件 must sit left of 预览 without overlap: reveal=%+v preview=%+v", revealBtn, previewBtn)
+			}
+			s.busy = true
+			tt.Frame()
+			if btn, ok := tt.AccessByRole(ui.RoleButton, "定位文件"); !ok || !btn.Disabled {
+				t.Fatalf("定位文件 must be disabled while busy: %+v", btn)
 			}
 		})
 	}
@@ -1579,5 +1611,153 @@ func TestBatchSearchFocusAndPreviewShortcuts(t *testing.T) {
 	tt.Frame()
 	if filepath.Base(s.file.path) != "a.jpg" || !tt.HasText("1 / 3") {
 		t.Fatalf("Cmd+[ must return to a.jpg (1 / 3), got %s", s.file.path)
+	}
+}
+
+func TestBatchCleanupInvalidAndFailedItems(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/p/bad1.png", absPath: "/p/bad1.png", relPath: "bad1.png", status: batchFailed, invalidInput: true, errMsg: "不支持动画 PNG"},
+		{path: "/p/fail.jpg", absPath: "/p/fail.jpg", relPath: "fail.jpg", format: "jpeg", width: 40, height: 40, originalSize: 4096, status: batchFailed, errMsg: "磁盘已满"},
+		{path: "/p/done.jpg", absPath: "/p/done.jpg", relPath: "done.jpg", format: "jpeg", width: 40, height: 40, originalSize: 4096, outputSize: 2048, status: batchDone, savedPath: "/out/done.jpg"},
+		{path: "/p/bad2.png", absPath: "/p/bad2.png", relPath: "bad2.png", status: batchFailed, invalidInput: true, errMsg: "损坏"},
+	})
+	s.batch.selected = 2
+
+	tt := ui.NewTester(s.view, 880, 660)
+	if !tt.HasText("3 张失败（2 无效）") {
+		t.Fatalf("expected combined failure banner, texts=%v", tt.Texts())
+	}
+
+	s.confirmBatchOverwrite = true
+	s.removeInvalidBatchItems()
+	if len(s.batch.items) != 4 {
+		t.Fatalf("modal guard must block removeInvalidBatchItems: len=%d", len(s.batch.items))
+	}
+	s.confirmBatchOverwrite = false
+
+	if err := tt.Click("移除无效项"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.batch.items) != 2 || s.batch.items[0].relPath != "fail.jpg" || s.batch.items[1].relPath != "done.jpg" {
+		t.Fatalf("expected only fail.jpg and done.jpg to remain, got %+v", s.batch.items)
+	}
+	if s.batch.selected != 1 {
+		t.Fatalf("selection must follow done.jpg to index 1, got %d", s.batch.selected)
+	}
+	if !tt.HasText("1 张图片处理失败") || tt.HasText("移除无效项") {
+		t.Fatalf("banner must update after invalid items removed, texts=%v", tt.Texts())
+	}
+
+	if err := tt.Click("失败"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("移除失败项"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch == nil || len(s.batch.items) != 1 || s.batch.items[0].relPath != "done.jpg" {
+		t.Fatalf("expected done.jpg to remain after removing failed items, got %+v", s.batch)
+	}
+	if s.batch.filter != batchFilterAll || s.batch.selected != 0 {
+		t.Fatalf("removing last failed item under 失败 filter must restore 全部 filter and select remaining item: filter=%d selected=%d",
+			s.batch.filter, s.batch.selected)
+	}
+
+	s2 := newApplication()
+	s2.batch = newBatchState([]batchItem{
+		{path: "/p/bad1.png", absPath: "/p/bad1.png", relPath: "bad1.png", status: batchFailed, invalidInput: true, errMsg: "损坏"},
+		{path: "/p/bad2.png", absPath: "/p/bad2.png", relPath: "bad2.png", status: batchFailed, invalidInput: true, errMsg: "动画"},
+	})
+	tt2 := ui.NewTester(s2.view, 880, 660)
+	if !tt2.HasText("2 张无效图片无法处理") || tt2.HasText("重试失败项") || tt2.HasText("移除失败项") {
+		t.Fatalf("invalid-only banner mismatch, texts=%v", tt2.Texts())
+	}
+	if err := tt2.Click("移除无效项"); err != nil {
+		t.Fatal(err)
+	}
+	if s2.batch != nil || !strings.Contains(s2.message, "队列已清空") {
+		t.Fatalf("removing all items via cleanup must clear batch cleanly: batch=%v msg=%q", s2.batch, s2.message)
+	}
+}
+
+func TestBatchRevealOutputFile(t *testing.T) {
+	root := t.TempDir()
+	srcA := filepath.Join(root, "a.jpg")
+	outA := filepath.Join(root, "out", "a.jpg")
+	srcB := filepath.Join(root, "b.jpg")
+	srcC := filepath.Join(root, "c.jpg")
+	writeTestJPEG(t, srcA, 24, 16, 85)
+	writeTestJPEG(t, outA, 24, 16, 60)
+	writeTestJPEG(t, srcB, 24, 16, 85)
+	writeTestJPEG(t, srcC, 24, 16, 85)
+
+	var revealed []string
+	updates := make(chan func(), 4)
+	s := newApplication()
+	s.dispatchUpdate = func(fn func()) { updates <- fn }
+	s.showInFolder = func(path string) { revealed = append(revealed, path) }
+	s.batch = newBatchState([]batchItem{
+		{path: srcA, absPath: srcA, relPath: "a.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048, status: batchDone, savedPath: outA},
+		{path: srcB, absPath: srcB, relPath: "b.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048, status: batchDone, overwritten: true},
+		{path: srcC, absPath: srcC, relPath: "c.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 4096, status: batchDone, unchanged: true},
+	})
+	tt := ui.NewTester(s.view, 880, 660)
+
+	if err := tt.Click("定位文件"); err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed) != 1 || revealed[0] != outA {
+		t.Fatalf("expected folder-exported item to reveal %q, got %v", outA, revealed)
+	}
+
+	if err := tt.Click("b.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("定位文件"); err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed) != 2 || revealed[1] != srcB {
+		t.Fatalf("expected overwritten item to reveal %q, got %v", srcB, revealed)
+	}
+	if err := tt.Click("c.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.AccessByRole(ui.RoleButton, "定位文件"); ok {
+		t.Fatal("unchanged item without savedPath or overwrite must not show 定位文件")
+	}
+
+	if err := tt.Click("a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("预览"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for batch preview load")
+	}
+	tt.Frame()
+	revealBtn, ok := tt.AccessByRole(ui.RoleButton, "定位文件")
+	if !ok || revealBtn.Offscreen || revealBtn.Bounds.X+revealBtn.Bounds.W > 880 || revealBtn.Bounds.Y+revealBtn.Bounds.H > 660 {
+		t.Fatalf("preview 定位文件 button must fit inside 880x660: %+v", revealBtn)
+	}
+	if err := tt.Click("定位文件"); err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed) != 3 || revealed[2] != outA {
+		t.Fatalf("preview 定位文件 must reveal %q, got %v", outA, revealed)
+	}
+
+	if err := os.Remove(outA); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("定位文件"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.failed || !strings.Contains(s.message, "找不到输出文件") || len(revealed) != 3 {
+		t.Fatalf("missing output file in preview must report error instead of revealing: failed=%v msg=%q revealed=%v",
+			s.failed, s.message, revealed)
 	}
 }
