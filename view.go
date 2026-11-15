@@ -459,6 +459,10 @@ func (s *application) resultSummary(c *ui.Context) {
 }
 
 func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue string) {
+	summaryCardWithNote(c, title, status, statusColor, firstLabel, firstValue, secondLabel, secondValue, "")
+}
+
+func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note string) {
 	t := c.Theme()
 	ui.Column(c).Padding(12).Gap(8).Radius(12).Background(t.Background).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -480,5 +484,9 @@ func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firs
 				})
 			}
 		})
+		if note != "" {
+			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
+				SingleLine().TruncateMiddle().Tooltip(note)
+		}
 	})
 }

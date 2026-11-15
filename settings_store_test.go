@@ -367,3 +367,48 @@ func assertNoSettingsTemporaryFiles(test *testing.T, directory string) {
 		test.Fatalf("temporary settings files were not cleaned up: matches=%v err=%v", matches, err)
 	}
 }
+
+func TestAppSettingsBatchOutputDirRoundTripAndCompatibility(test *testing.T) {
+	dir := test.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	outDir := filepath.Join(dir, "exports")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		test.Fatal(err)
+	}
+
+	// Legacy v1 files without batch_output_dir load with empty batchDir.
+	if err := saveSettings(path, compressionPresets, "均衡"); err != nil {
+		test.Fatal(err)
+	}
+	presets, selected, batchDir, err := loadAppSettings(path)
+	if err != nil || selected != "均衡" || batchDir != "" || len(presets) != len(compressionPresets) {
+		test.Fatalf("legacy v1 load failed: presets=%d selected=%q batchDir=%q err=%v", len(presets), selected, batchDir, err)
+	}
+
+	// saveAppSettings persists batch_output_dir cleanly.
+	if err := saveAppSettings(path, compressionPresets, "体积优先", outDir); err != nil {
+		test.Fatal(err)
+	}
+	presets, selected, batchDir, err = loadAppSettings(path)
+	if err != nil || selected != "体积优先" || batchDir != outDir || len(presets) != len(compressionPresets) {
+		test.Fatalf("batch_output_dir round-trip failed: selected=%q batchDir=%q err=%v", selected, batchDir, err)
+	}
+
+	// Invalid control characters in batch_output_dir sanitize to "" instead of corrupting presets.
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(validStoredSettings), &payload); err != nil {
+		test.Fatal(err)
+	}
+	payload["batch_output_dir"] = "/bad/\npath"
+	rawJSON, err := json.Marshal(payload)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(path, rawJSON, 0o600); err != nil {
+		test.Fatal(err)
+	}
+	_, selected, batchDir, err = loadAppSettings(path)
+	if err != nil || selected != "均衡" || batchDir != "" {
+		test.Fatalf("control chars in batch_output_dir must sanitize safely without discarding presets: selected=%q batchDir=%q err=%v", selected, batchDir, err)
+	}
+}

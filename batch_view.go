@@ -97,7 +97,21 @@ func (s *application) batchListPanel(c *ui.Context) {
 				s.batch.selected < len(s.batch.items) && !s.batch.items[s.batch.selected].invalidInput {
 				s.openBatchPreview(s.batch.selected)
 			}
+			if !s.modalOpen() && s.batch.selected >= 0 {
+				backspace := s.batch.list.Shortcut(c, 0, ui.KeyBackspace)
+				del := s.batch.list.Shortcut(c, 0, ui.KeyDelete)
+				if backspace || del {
+					s.removeSelectedBatchItem()
+					c.Invalidate()
+					if s.batch == nil {
+						return
+					}
+				}
+			}
 		})
+		if s.batch == nil {
+			return
+		}
 		s.batchSelectedBar(c)
 	})
 }
@@ -187,6 +201,9 @@ func batchItemDetail(item batchItem, t *ui.Theme) (string, ui.Color) {
 
 func (s *application) batchSelectedBar(c *ui.Context) {
 	t := c.Theme()
+	if s.batch == nil {
+		return
+	}
 	if s.batch.selected < 0 || s.batch.selected >= len(s.batch.items) {
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Text(c, "点击列表项查看详情或预览").FontSize(13).FontWeight(500)
@@ -223,7 +240,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			OnClick(func() { s.openBatchPreview(selected) })
 		ui.Button(c.Key("batch-remove"), "移除").Height(32).
 			Disabled(s.busy).
-			Tooltip("从批量队列移除此图片").
+			Tooltip("从批量队列移除此图片 · Delete / Backspace").
 			OnClick(s.removeSelectedBatchItem)
 	})
 }
@@ -234,6 +251,11 @@ func (s *application) hasAdjacentBatchPreview(delta int) bool {
 
 func (s *application) batchPreviewPanel(c *ui.Context) {
 	t := c.Theme()
+	previewIdx := s.batch.previewIndex
+	var previewItem *batchItem
+	if previewIdx >= 0 && previewIdx < len(s.batch.items) {
+		previewItem = &s.batch.items[previewIdx]
+	}
 	ui.Column(c).Grow(1).MinWidth(340).Padding(16).Gap(12).
 		Radius(16).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -271,6 +293,8 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 		if s.file != nil {
 			meta := fmt.Sprintf("%s  ·  %d × %d  ·  %s",
 				strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size))
+			metaColor := t.TextMuted
+			metaTooltip := meta
 			if s.result != nil {
 				if s.result.Unchanged {
 					meta += "  ·  未减小"
@@ -278,12 +302,31 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 					saved := float64(s.result.OriginalSize-s.result.OutputSize) / float64(s.result.OriginalSize) * 100
 					meta += fmt.Sprintf(" → %s（减少 %.1f%%）", formatSize(s.result.OutputSize), saved)
 				}
+				metaTooltip = meta
+			} else if previewItem != nil && previewItem.status == batchFailed {
+				meta += "  ·  失败：" + previewItem.errMsg
+				metaColor = t.Danger
+				metaTooltip = previewItem.errMsg
 			}
-			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(500).
-					SingleLine().TruncateMiddle().Tooltip(s.file.path)
-				ui.Text(c, meta).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
-					SingleLine()
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
+					ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(500).
+						SingleLine().TruncateMiddle().Tooltip(s.file.path)
+					ui.Text(c, meta).FontSize(12).FontFeatures("tnum").TextColor(metaColor).
+						SingleLine().TruncateMiddle().Tooltip(metaTooltip)
+				})
+				if previewItem != nil && previewItem.status == batchFailed && !previewItem.invalidInput {
+					ui.Button(c.Key("batch-preview-retry"), "重试").Height(32).
+						Disabled(s.busy).
+						Tooltip("重新压缩此失败图片").
+						OnClick(func() { s.retryBatchItem(previewIdx) })
+				}
+				if previewItem != nil {
+					ui.Button(c.Key("batch-preview-remove"), "移除").Height(32).
+						Disabled(s.busy).
+						Tooltip("从批量队列移除此图片").
+						OnClick(func() { s.removeBatchItem(previewIdx) })
+				}
 			})
 		}
 	})
@@ -383,9 +426,13 @@ func (s *application) batchResultSummary(c *ui.Context) {
 	t := c.Theme()
 	total, pending, done, failed, origTotal, outTotal, _ := s.batchStats()
 	var doneOrig int64
+	var unchanged int
 	for _, item := range s.batch.items {
 		if item.status == batchDone {
 			doneOrig += item.originalSize
+			if item.unchanged {
+				unchanged++
+			}
 		}
 	}
 	firstLabel, original := "原始总计", formatSize(origTotal)
@@ -425,7 +472,22 @@ func (s *application) batchResultSummary(c *ui.Context) {
 		}
 		color = t.Danger
 	}
-	summaryCard(c, "批量结果", label, color, firstLabel, original, secondLabel, output)
+	var note string
+	if !s.busy && done > 0 {
+		var parts []string
+		if doneOrig > outTotal {
+			parts = append(parts, "共节省 "+formatSize(doneOrig-outTotal))
+		}
+		if unchanged > 0 {
+			if s.batch.outputMode == batchOutputOverwrite {
+				parts = append(parts, fmt.Sprintf("跳过 %d 张未减小", unchanged))
+			} else {
+				parts = append(parts, fmt.Sprintf("%d 张未减小保持原样", unchanged))
+			}
+		}
+		note = strings.Join(parts, " · ")
+	}
+	summaryCardWithNote(c, "批量结果", label, color, firstLabel, original, secondLabel, output, note)
 }
 
 func (s *application) batchOverwriteConfirmation(c *ui.Context) {

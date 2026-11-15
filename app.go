@@ -68,6 +68,7 @@ type application struct {
 	pendingBatchRestart   bool
 	pendingBatchRun       batchRunMode
 	pendingBatchIndex     int
+	batchOutputDir        string
 }
 
 func newApplication() *application {

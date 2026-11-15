@@ -717,6 +717,27 @@ func TestBatchResultSummaryMatchesCompletedScope(t *testing.T) {
 	if !tt.HasText("原始总计") || tt.HasText("已完成原大小") || !tt.HasText("12.0 KiB") || !tt.HasText("6.0 KiB") {
 		t.Fatal("fully completed summary must display full 原始总计 and 输出总计")
 	}
+	if !tt.HasText("共节省 6.0 KiB") {
+		t.Fatal("completed summary must surface total saved bytes")
+	}
+
+	// Case 4: unchanged items surface concise skipped/kept count in both folder and overwrite modes at 880x660.
+	s.batch.items[1].unchanged = true
+	s.batch.items[1].outputSize = s.batch.items[1].originalSize
+	tt.Frame()
+	if !tt.HasText("共节省 1.0 KiB · 1 张未减小保持原样") {
+		t.Fatal("folder summary must show saved bytes alongside kept-unchanged count")
+	}
+	s.batch.outputMode = batchOutputOverwrite
+	s.message = "批处理完成，已处理 2 张图片。"
+	s.batch.outputDir = ""
+	ttMin := ui.NewTester(s.view, 880, 660)
+	if !ttMin.HasText("共节省 1.0 KiB · 跳过 1 张未减小") {
+		t.Fatal("overwrite summary must show skipped-unchanged count")
+	}
+	if button, ok := ttMin.AccessByRole(ui.RoleButton, "重新压缩"); !ok || button.Offscreen || button.Bounds.Y+button.Bounds.H > 660 {
+		t.Fatalf("batch action button must remain visible inside 880x660 with summary note: %+v", button)
+	}
 }
 
 func TestBatchQueueFilterSearchAndRemoval(t *testing.T) {
@@ -1061,6 +1082,200 @@ func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
 				if !ok || !button.Disabled {
 					t.Fatalf("%q must be disabled while busy: %+v", label, button)
 				}
+			}
+		})
+	}
+}
+
+func TestBatchOutputDirPersistenceAndSafety(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "settings.json")
+	outDir := filepath.Join(root, "out-a")
+	otherOut := filepath.Join(root, "out-b")
+	srcDir := filepath.Join(root, "src")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(otherOut, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestJPEG(t, filepath.Join(srcDir, "one.jpg"), 32, 32, 85)
+	t.Setenv("ZPIC_CONFIG_FILE", cfgPath)
+
+	s := newApplication()
+	s.restoreSettings()
+	s.rememberBatchOutputDir(outDir)
+
+	// Switching schemes and saving preset edits must preserve persisted batch_output_dir.
+	s.setScheme("体积优先")
+	s.setSettingsOpen(true)
+	s.savePresetEdits()
+
+	restarted := newApplication()
+	restarted.restoreSettings()
+	if restarted.batchOutputDir != outDir {
+		t.Fatalf("expected persisted batchOutputDir %q after restart, got %q", outDir, restarted.batchOutputDir)
+	}
+	scan, err := scanBatchPathsWithDirs(context.Background(), []string{srcDir}, nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.completeBatchScan(context.Background(), scan, false, nil)
+	if restarted.batch == nil || restarted.batch.outputDir != outDir {
+		t.Fatalf("new batch must pre-populate persisted outputDir %q, got %+v", outDir, restarted.batch)
+	}
+
+	// Appending into an existing batch preserves custom outputDir chosen for that batch.
+	restarted.batch.outputDir = otherOut
+	restarted.completeBatchScan(context.Background(), scan, true, nil)
+	if restarted.batch.outputDir != otherOut {
+		t.Fatalf("appending to active batch must keep current outputDir %q, got %q", otherOut, restarted.batch.outputDir)
+	}
+
+	// Deleted directory falls back to empty cleanly on startup without setting settingsError.
+	if err := os.RemoveAll(outDir); err != nil {
+		t.Fatal(err)
+	}
+	missingRestart := newApplication()
+	missingRestart.restoreSettings()
+	if missingRestart.settingsError != "" || missingRestart.batchOutputDir != "" {
+		t.Fatalf("missing persisted outputDir must fall back cleanly: err=%q dir=%q", missingRestart.settingsError, missingRestart.batchOutputDir)
+	}
+
+	// Corrupt settings file must never be overwritten when rememberBatchOutputDir runs.
+	corruptContent := `{"version":99`
+	if err := os.WriteFile(cfgPath, []byte(corruptContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	corruptApp := newApplication()
+	corruptApp.restoreSettings()
+	if corruptApp.settingsError == "" {
+		t.Fatal("expected settingsError on corrupt config")
+	}
+	corruptApp.rememberBatchOutputDir(otherOut)
+	if corruptApp.batchOutputDir != otherOut {
+		t.Fatalf("corrupt config session must still remember batchOutputDir in memory, got %q", corruptApp.batchOutputDir)
+	}
+	rawAfter, err := os.ReadFile(cfgPath)
+	if err != nil || string(rawAfter) != corruptContent {
+		t.Fatalf("corrupt config file must not be overwritten: got %q err=%v", rawAfter, err)
+	}
+}
+
+func TestBatchListDeleteAndBackspaceShortcuts(t *testing.T) {
+	s := newApplication()
+	s.batch = newBatchState([]batchItem{
+		{path: "/p/alpha.jpg", absPath: "/p/alpha.jpg", relPath: "alpha.jpg", format: "jpeg", width: 64, height: 64, originalSize: 4096, status: batchPending},
+		{path: "/p/beta.jpg", absPath: "/p/beta.jpg", relPath: "beta.jpg", format: "jpeg", width: 64, height: 64, originalSize: 4096, status: batchPending},
+		{path: "/p/gamma.jpg", absPath: "/p/gamma.jpg", relPath: "gamma.jpg", format: "jpeg", width: 64, height: 64, originalSize: 4096, status: batchPending},
+	})
+	tt := ui.NewTester(s.view, 980, 720)
+
+	// Typing Backspace in search field must edit query only, not delete any queue item.
+	searchField, ok := tt.AccessByRole(ui.RoleTextField, "筛选文件名")
+	if !ok {
+		t.Fatal("expected search field")
+	}
+	tt.ClickAt(searchField.Bounds.X+searchField.Bounds.W/2, searchField.Bounds.Y+searchField.Bounds.H/2)
+	tt.Type("be")
+	tt.Key(0, ui.KeyBackspace)
+	if len(s.batch.items) != 3 || s.batch.query != "b" {
+		t.Fatalf("Backspace in search field must not remove batch items: count=%d query=%q", len(s.batch.items), s.batch.query)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	if len(s.batch.items) != 3 || s.batch.query != "" {
+		t.Fatalf("clearing search field must leave batch items intact: count=%d query=%q", len(s.batch.items), s.batch.query)
+	}
+
+	// Focus the list row and remove alpha.jpg via Delete.
+	if err := tt.Click("alpha.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyDelete)
+	if len(s.batch.items) != 2 || s.batch.items[0].relPath != "beta.jpg" || s.batch.selected != 0 {
+		t.Fatalf("Delete on focused list must remove alpha.jpg and advance to beta.jpg: selected=%d items=%+v", s.batch.selected, s.batch.items)
+	}
+
+	// Modal confirmation must block Delete/Backspace removal even if the list had focus beforehand.
+	s.confirmBatchOverwrite = true
+	tt.Frame()
+	tt.Key(0, ui.KeyDelete)
+	if len(s.batch.items) != 2 {
+		t.Fatalf("modal confirmation must block Delete key removal, count=%d", len(s.batch.items))
+	}
+	s.confirmBatchOverwrite = false
+	tt.Frame()
+	if err := tt.Click("beta.jpg"); err != nil {
+		t.Fatal(err)
+	}
+
+	tt.Key(0, ui.KeyBackspace)
+	if len(s.batch.items) != 1 || s.batch.items[0].relPath != "gamma.jpg" {
+		t.Fatalf("Backspace on focused list must remove beta.jpg cleanly: items=%+v", s.batch.items)
+	}
+
+	tt.Key(0, ui.KeyBackspace)
+	if s.batch != nil {
+		t.Fatalf("removing last batch item via Backspace must return cleanly to empty state, got %+v", s.batch)
+	}
+}
+
+func TestBatchPreviewQuickActionsAndMinimumWindowLayout(t *testing.T) {
+	srcImg := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 24, 16)))
+	for _, dark := range []bool{false, true} {
+		name := "light"
+		if dark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newApplication()
+			s.batch = newBatchState([]batchItem{
+				{path: "/p/very-long-failed-image-name-for-preview-layout-check.jpg", absPath: "/p/very-long-failed-image-name-for-preview-layout-check.jpg", relPath: "very-long-failed-image-name-for-preview-layout-check.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, status: batchFailed, errMsg: "目标磁盘空间不足，请更换目录后重试"},
+				{path: "/p/other.png", absPath: "/p/other.png", relPath: "other.png", format: "png", width: 24, height: 16, originalSize: 2048, status: batchPending},
+			})
+			s.batch.outputMode = batchOutputOverwrite
+			s.completeBatchPreview(context.Background(), 0, s.batch.items[0],
+				&selectedImage{path: s.batch.items[0].path, format: "jpeg", width: 24, height: 16, size: 4096, preview: srcImg},
+				nil, nil, nil)
+
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.LightTheme()
+				if dark {
+					theme = ui.DarkTheme()
+				}
+				c.SetTheme(theme)
+				s.view(c)
+			}, 880, 660)
+
+			if !tt.HasText("失败：目标磁盘空间不足，请更换目录后重试") {
+				t.Fatal("preview bottom bar must show failure reason for failed items")
+			}
+			for _, label := range []string{"返回列表", "上一张", "下一张", "重试", "移除"} {
+				button, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || button.Offscreen || button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
+					t.Fatalf("preview button %q must fit inside 880x660: %+v", label, button)
+				}
+			}
+
+			// Clicking 重试 in preview triggers single-item retry flow cleanly.
+			if err := tt.Click("重试"); err != nil {
+				t.Fatal(err)
+			}
+			if !s.confirmBatchOverwrite || s.pendingBatchRun != batchRunSingle || s.pendingBatchIndex != 0 {
+				t.Fatalf("clicking 重试 in preview must trigger single-item retry: confirm=%v mode=%v index=%d", s.confirmBatchOverwrite, s.pendingBatchRun, s.pendingBatchIndex)
+			}
+			tt.Key(0, ui.KeyEscape)
+			if s.confirmBatchOverwrite || !s.batch.previewOpen {
+				t.Fatalf("canceling overwrite prompt must return to preview cleanly: confirm=%v previewOpen=%v", s.confirmBatchOverwrite, s.batch.previewOpen)
+			}
+
+			// Clicking 移除 in preview removes the previewed item and exits preview cleanly.
+			if err := tt.Click("移除"); err != nil {
+				t.Fatal(err)
+			}
+			if s.batch == nil || s.batch.previewOpen || len(s.batch.items) != 1 || s.batch.items[0].relPath != "other.png" {
+				t.Fatalf("clicking 移除 in preview must remove previewed item and close preview: %+v", s.batch)
 			}
 		})
 	}

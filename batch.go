@@ -175,6 +175,7 @@ func (s *application) chooseOutputDir() {
 			} else if len(paths) != 0 && s.batch != nil {
 				prev := s.batch.outputDir
 				s.batch.outputDir = paths[0]
+				s.rememberBatchOutputDir(paths[0])
 				if prev != paths[0] && s.resetBatchRunState() {
 					s.setMessage("输出位置已更改，请重新压缩。", false)
 				} else {
@@ -261,6 +262,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		s.comparison = comparisonView{split: 50}
 		s.confirmOverwrite, s.overwritten = false, false
 		s.batch = newBatchState(scan.items)
+		s.batch.outputDir = usableBatchOutputDir(s.batchOutputDir)
 	}
 	s.setMessage(batchScanMessage(len(scan.items), scan.duplicates, scan.truncated, appendMode), false)
 }
@@ -571,10 +573,16 @@ func (s *application) retryableFailedCount() int {
 }
 
 func (s *application) removeSelectedBatchItem() {
+	if s.batch == nil {
+		return
+	}
+	s.removeBatchItem(s.batch.selected)
+}
+
+func (s *application) removeBatchItem(index int) {
 	if s.modalOpen() || s.batch == nil {
 		return
 	}
-	index := s.batch.selected
 	if index < 0 || index >= len(s.batch.items) {
 		return
 	}
@@ -777,6 +785,7 @@ func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex
 				return
 			}
 			s.batch.outputDir = paths[0]
+			s.rememberBatchOutputDir(paths[0])
 			s.launchBatchWorkerMode(mode, singleIndex)
 		})
 	}()

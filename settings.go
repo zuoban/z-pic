@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 
@@ -66,7 +67,7 @@ func (s *application) restoreSettings() {
 		return
 	}
 	s.settingsFile = path
-	presets, selected, err := loadSettings(path)
+	presets, selected, batchDir, err := loadAppSettings(path)
 	if err != nil {
 		s.settingsError = "读取压缩方案失败，暂用默认方案：" + err.Error()
 		s.setMessage(s.settingsError, true)
@@ -74,6 +75,7 @@ func (s *application) restoreSettings() {
 	}
 	s.settingsError = ""
 	s.presets = presets
+	s.batchOutputDir = usableBatchOutputDir(batchDir)
 	s.applyScheme(selected)
 }
 
@@ -133,7 +135,7 @@ func (s *application) setScheme(name string) {
 	for _, preset := range s.presets {
 		if preset.name == name {
 			if s.settingsFile != "" && s.settingsError == "" {
-				if err := saveSettings(s.settingsFile, s.presets, name); err != nil {
+				if err := saveAppSettings(s.settingsFile, s.presets, name, usableBatchOutputDir(s.batchOutputDir)); err != nil {
 					s.setMessage("保存方案选择失败："+err.Error(), true)
 					return
 				}
@@ -236,7 +238,7 @@ func (s *application) savePresetEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := saveSettings(s.settingsFile, presets, selected); err != nil {
+	if err := saveAppSettings(s.settingsFile, presets, selected, usableBatchOutputDir(s.batchOutputDir)); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
@@ -252,4 +254,27 @@ func (s *application) savePresetEdits() {
 // Capture all settings on the UI thread before launching compression.
 func (s *application) compressionOptions() compress.Options {
 	return compress.Options{Quality: int(s.quality), PNG: s.png}
+}
+
+func usableBatchOutputDir(path string) string {
+	if path == "" {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return path
+}
+
+func (s *application) rememberBatchOutputDir(dir string) {
+	usable := usableBatchOutputDir(dir)
+	if usable == "" {
+		return
+	}
+	s.batchOutputDir = usable
+	if s.settingsFile == "" || s.settingsError != "" {
+		return
+	}
+	_ = saveAppSettings(s.settingsFile, s.presets, s.scheme, s.batchOutputDir)
 }
