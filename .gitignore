@@ -1,0 +1,11 @@
+/build/
+/dist/
+/.omx/
+/.mygo/
+.DS_Store
+/z-pic
+/zpic
+*.test
+.env
+.env.*
+!.env.example

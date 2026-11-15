@@ -1,0 +1,12 @@
+{
+  "name": "Z Pic",
+  "slug": "z-pic",
+  "identifier": "app.zpic.desktop",
+  "version": "0.1.0",
+  "main": ".",
+  "out": "dist",
+  "resources": [
+    "THIRD_PARTY_NOTICES.md",
+    "licenses"
+  ]
+}
