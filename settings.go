@@ -14,16 +14,48 @@ import (
 )
 
 type compressionPreset struct {
-	name    string
-	quality float64
-	png     compress.PNGOptions
-	builtin bool
+	name     string
+	quality  float64
+	png      compress.PNGOptions
+	output   presetSaveOptions
+	favorite bool
 }
 
 var compressionPresets = []compressionPreset{
-	{name: "体积优先", quality: 60, png: compress.PNGOptions{MinQuality: 40, MaxQuality: 65, Colors: 128, Speed: 3}, builtin: true},
-	{name: "均衡", quality: 80, png: compress.DefaultPNGOptions(), builtin: true},
-	{name: "画质优先", quality: 92, png: compress.PNGOptions{MinQuality: 85, MaxQuality: 100, Colors: 256, Speed: 1}, builtin: true},
+	{name: "体积优先", quality: 60, png: compress.PNGOptions{MinQuality: 40, MaxQuality: 65, Colors: 128, Speed: 3}},
+	{name: "均衡", quality: 80, png: compress.DefaultPNGOptions()},
+	{name: "画质优先", quality: 92, png: compress.PNGOptions{MinQuality: 85, MaxQuality: 100, Colors: 256, Speed: 1}},
+}
+
+type imageQualityLevel struct {
+	label   string
+	quality float64
+	png     compress.PNGOptions
+}
+
+var imageQualityLevels = [...]imageQualityLevel{
+	{label: "最小体积", quality: 40, png: compress.PNGOptions{MinQuality: 20, MaxQuality: 40, Colors: 64, Speed: 5}},
+	{label: "体积优先", quality: 60, png: compress.PNGOptions{MinQuality: 40, MaxQuality: 65, Colors: 128, Speed: 3}},
+	{label: "适中质量", quality: 70, png: compress.PNGOptions{MinQuality: 50, MaxQuality: 75, Colors: 192, Speed: 3}},
+	{label: "均衡质量", quality: 80, png: compress.DefaultPNGOptions()},
+	{label: "高质量", quality: 92, png: compress.PNGOptions{MinQuality: 85, MaxQuality: 100, Colors: 256, Speed: 1}},
+	{label: "最高质量", quality: 100, png: compress.PNGOptions{MinQuality: 100, MaxQuality: 100, Colors: 256, Speed: 1}},
+}
+
+func qualityLevel(preset compressionPreset) int {
+	closest, bestDistance := 0, math.Inf(1)
+	for index, level := range imageQualityLevels {
+		quality := (preset.quality - level.quality) / 100
+		minimum := float64(preset.png.MinQuality-level.png.MinQuality) / 100
+		maximum := float64(preset.png.MaxQuality-level.png.MaxQuality) / 100
+		colors := float64(preset.png.Colors-level.png.Colors) / 254
+		speed := float64(preset.png.Speed-level.png.Speed) / 10
+		distance := quality*quality + minimum*minimum + maximum*maximum + colors*colors + speed*speed
+		if distance < bestDistance {
+			closest, bestDistance = index, distance
+		}
+	}
+	return closest
 }
 
 type presetEditor struct {
@@ -38,25 +70,11 @@ func defaultPresets() []compressionPreset {
 	return slices.Clone(compressionPresets)
 }
 
-func findBuiltinPreset(name string) (compressionPreset, bool) {
-	for _, preset := range compressionPresets {
-		if preset.name == name {
-			return preset, true
-		}
-	}
-	return compressionPreset{}, false
-}
-
 func (e *presetEditor) selectedPreset() *compressionPreset {
 	if e == nil || e.selected < 0 || e.selected >= len(e.presets) {
 		return nil
 	}
 	return &e.presets[e.selected]
-}
-
-func (e *presetEditor) selectedBuiltin() bool {
-	preset := e.selectedPreset()
-	return preset != nil && preset.builtin
 }
 
 func (s *application) restoreSettings() {
@@ -69,7 +87,7 @@ func (s *application) restoreSettings() {
 	s.settingsFile = path
 	presets, selected, batchDir, err := loadAppSettings(path)
 	if err != nil {
-		s.settingsError = "读取压缩方案失败，暂用默认方案：" + err.Error()
+		s.settingsError = "读取压缩预设失败，暂用默认预设：" + err.Error()
 		s.setMessage(s.settingsError, true)
 		return
 	}
@@ -116,7 +134,7 @@ func (s *application) setSettingsOpen(open bool) {
 	}
 	s.settingsWindow = mygo.NewWindow(mygo.WindowOptions{
 		Title: "设置 · Z Pic", Parent: s.window, Modal: true,
-		Width: 820, Height: 650, MinWidth: 760, MinHeight: 560,
+		Width: 724, Height: 700, MinWidth: 640, MinHeight: 600,
 		UseContentSize: true, Content: ui.View(s.settingsView),
 	})
 	s.settingsWindow.OnClosed(func() {
@@ -136,7 +154,7 @@ func (s *application) setScheme(name string) {
 		if preset.name == name {
 			if s.settingsFile != "" && s.settingsError == "" {
 				if err := saveAppSettings(s.settingsFile, s.presets, name, usableBatchOutputDir(s.batchOutputDir)); err != nil {
-					s.setMessage("保存方案选择失败："+err.Error(), true)
+					s.setMessage("保存预设选择失败："+err.Error(), true)
 					return
 				}
 			}
@@ -154,13 +172,14 @@ func (s *application) applyScheme(name string) {
 			if changed {
 				s.invalidateResult()
 			}
+			s.applyPresetOutput(preset.output)
 			return
 		}
 	}
 }
 
 func (s *application) editQuality(quality float64) {
-	if s.busy || s.editor == nil || s.editor.selectedBuiltin() {
+	if s.busy || s.editor.selectedPreset() == nil {
 		return
 	}
 	s.editor.presets[s.editor.selected].quality = math.Round(min(100, max(1, quality)))
@@ -168,7 +187,7 @@ func (s *application) editQuality(quality float64) {
 }
 
 func (s *application) editPNGOptions(options compress.PNGOptions) {
-	if s.busy || s.editor == nil || s.editor.selectedBuiltin() || options.Validate() != nil {
+	if s.busy || s.editor.selectedPreset() == nil || options.Validate() != nil {
 		return
 	}
 	if options == (compress.PNGOptions{}) {
@@ -178,18 +197,27 @@ func (s *application) editPNGOptions(options compress.PNGOptions) {
 	s.editor.message = ""
 }
 
+func (s *application) editQualityLevel(level int) {
+	if s.busy || s.editor.selectedPreset() == nil || level < 0 || level >= len(imageQualityLevels) {
+		return
+	}
+	quality := imageQualityLevels[level]
+	preset := s.editor.selectedPreset()
+	preset.quality, preset.png = quality.quality, quality.png
+	s.editor.message = ""
+}
+
 func (s *application) addPreset() {
 	if s.busy || s.editor == nil {
 		return
 	}
 	editor := s.editor
 	preset := compressionPresets[1]
-	preset.builtin = false
-	preset.name = "新方案"
+	preset.name = "新预设"
 	for number := 2; slices.ContainsFunc(editor.presets, func(existing compressionPreset) bool {
-		return existing.name == preset.name
+		return strings.TrimSpace(existing.name) == preset.name
 	}); number++ {
-		preset.name = fmt.Sprintf("新方案 %d", number)
+		preset.name = fmt.Sprintf("新预设 %d", number)
 	}
 	editor.presets = append(editor.presets, preset)
 	editor.selected = len(editor.presets) - 1
@@ -206,7 +234,6 @@ func (s *application) duplicatePreset() {
 		return
 	}
 	preset := *source
-	preset.builtin = false
 	sourceName := []rune(strings.TrimSpace(source.name))
 	for number := 1; ; number++ {
 		suffix := " 副本"
@@ -226,14 +253,14 @@ func (s *application) duplicatePreset() {
 }
 
 func (s *application) requestDeletePreset() {
-	if s.busy || s.editor == nil || s.editor.selectedBuiltin() || len(s.editor.presets) <= 1 {
+	if s.busy || s.editor.selectedPreset() == nil || len(s.editor.presets) <= 1 {
 		return
 	}
 	s.editor.confirmDelete = true
 }
 
 func (s *application) deletePreset() {
-	if s.busy || s.editor == nil || !s.editor.confirmDelete || s.editor.selectedBuiltin() || len(s.editor.presets) <= 1 {
+	if s.busy || s.editor.selectedPreset() == nil || !s.editor.confirmDelete || len(s.editor.presets) <= 1 {
 		return
 	}
 	editor := s.editor
@@ -254,9 +281,7 @@ func (s *application) savePresetEdits() {
 	}
 	presets := slices.Clone(s.editor.presets)
 	for index := range presets {
-		if !presets[index].builtin {
-			presets[index].name = strings.TrimSpace(presets[index].name)
-		}
+		presets[index].name = strings.TrimSpace(presets[index].name)
 	}
 	selected := presets[s.editor.active].name
 	if s.settingsFile == "" {
@@ -273,7 +298,7 @@ func (s *application) savePresetEdits() {
 	}
 	s.presets = presets
 	if s.settingsError != "" {
-		s.setMessage("压缩方案已保存。", false)
+		s.setMessage("压缩预设已保存。", false)
 	}
 	s.settingsError = ""
 	s.applyScheme(selected)

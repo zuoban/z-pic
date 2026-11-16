@@ -444,16 +444,25 @@ func TestBatchSchemeAndOutputSwitchInvalidateResults(t *testing.T) {
 		t.Fatalf("changing scheme must keep invalidInput failure: %+v", s.batch.items[1])
 	}
 
-	// Switching output mode in UI resets completed results.
+	// Changing from an original-folder copy preset to in-place saving resets results.
+	s.applyPresetOutput(presetSaveOptions{UseSuffix: true, Suffix: "-compressed"})
 	s.batch.items[0].status = batchDone
 	s.batch.items[0].outputSize = 2000
 	s.batch.filter = batchFilterDone
-	tt := ui.NewTester(s.view, 880, 660)
-	if err := tt.Click("覆盖原图"); err != nil {
-		t.Fatal(err)
-	}
+	s.applyPresetOutput(presetSaveOptions{})
 	if s.batch.outputMode != batchOutputOverwrite || s.batch.items[0].status != batchPending || s.batch.filter != batchFilterAll {
 		t.Fatalf("switching output mode must reset processed batch items and emptied filter: mode=%d filter=%d item=%+v", s.batch.outputMode, s.batch.filter, s.batch.items[0])
+	}
+
+	// Selecting the same output again must preserve the completed result and filter.
+	s.batch.items[0].status = batchDone
+	s.batch.items[0].outputSize = 2000
+	s.batch.items[0].savedPath = "/a.jpg"
+	s.batch.filter = batchFilterDone
+	s.applyPresetOutput(presetSaveOptions{})
+	if s.batch.items[0].status != batchDone || s.batch.items[0].outputSize != 2000 ||
+		s.batch.items[0].savedPath != "/a.jpg" || s.batch.filter != batchFilterDone {
+		t.Fatalf("reselecting the current output must retain the completed result and filter: %+v", s.batch)
 	}
 }
 
@@ -506,7 +515,7 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%d/%s", width, name), func(t *testing.T) {
 				s := newApplication()
-				s.batch = newBatchState([]batchItem{
+				s.completeBatchScan(context.Background(), batchScanResult{items: []batchItem{
 					{
 						path:         "/photos/" + strings.Repeat("很长的目录名/", 8) + "photo-1.jpg",
 						absPath:      "/photos/photo-1.jpg",
@@ -515,9 +524,7 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 						width:        1920,
 						height:       1080,
 						originalSize: 2 << 20,
-						outputSize:   1 << 20,
-						status:       batchDone,
-						savedPath:    "/out/photo-1.jpg",
+						status:       batchPending,
 					},
 					{
 						path:         "/photos/photo-2.png",
@@ -529,8 +536,10 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 						originalSize: 512 << 10,
 						status:       batchPending,
 					},
-				})
-				s.batch.outputDir = "/Users/example/" + strings.Repeat("输出目录/", 6)
+				}}, false, nil)
+				s.batch.items[0].status = batchDone
+				s.batch.items[0].outputSize = 1 << 20
+				s.batch.items[0].savedPath = "/photos/photo-1.jpg"
 				tt := ui.NewTester(func(c *ui.Context) {
 					theme := ui.LightTheme()
 					if dark {
@@ -540,12 +549,15 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 					s.view(c)
 				}, width, 660)
 
-				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
+				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "设置"} {
 					button, ok := tt.AccessByRole(ui.RoleButton, label)
 					if !ok || button.Offscreen || button.Bounds.H < 24 ||
 						button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > float32(width) {
 						t.Fatalf("%q must fit inside %dx660: %+v", label, width, button)
 					}
+				}
+				if s.batch.outputMode != batchOutputOverwrite || s.batch.outputDir != "" || !s.output.replacesOriginal() {
+					t.Fatalf("the batch must use its preset's in-place save behavior: output=%+v mode=%d directory=%q", s.output, s.batch.outputMode, s.batch.outputDir)
 				}
 				if _, ok := tt.AccessByRole(ui.RoleList, "批量图片列表"); !ok {
 					t.Fatal("batch view must expose virtualized list accessibility role")
@@ -561,7 +573,7 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 				_ = ctx
 				tt.Frame()
 
-				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
+				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "设置"} {
 					button, ok := tt.AccessByRole(ui.RoleButton, label)
 					if !ok || !button.Disabled {
 						t.Errorf("%q must be disabled while batch is busy: %+v", label, button)
@@ -1167,15 +1179,39 @@ func TestBatchOutputDirPersistenceAndSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted.completeBatchScan(context.Background(), scan, false, nil)
-	if restarted.batch == nil || restarted.batch.outputDir != outDir {
-		t.Fatalf("new batch must pre-populate persisted outputDir %q, got %+v", outDir, restarted.batch)
+	if restarted.batch == nil || restarted.batch.outputMode != batchOutputOverwrite || restarted.batch.outputDir != "" {
+		t.Fatalf("a remembered picker directory must not override the default in-place preset: %+v", restarted.batch)
 	}
 
-	// Appending into an existing batch preserves custom outputDir chosen for that batch.
-	restarted.batch.outputDir = otherOut
-	restarted.completeBatchScan(context.Background(), scan, true, nil)
-	if restarted.batch.outputDir != otherOut {
-		t.Fatalf("appending to active batch must keep current outputDir %q, got %q", otherOut, restarted.batch.outputDir)
+	for _, test := range []struct {
+		name   string
+		output presetSaveOptions
+		mode   int
+		dir    string
+	}{
+		{name: "ask", output: presetSaveOptions{Mode: presetSaveAsk}, mode: batchOutputFolder},
+		{name: "fixed", output: presetSaveOptions{Mode: presetSaveFixed, Directory: otherOut}, mode: batchOutputFolder, dir: otherOut},
+		{name: "original-copy", output: presetSaveOptions{UseSuffix: true, Suffix: "-compressed"}, mode: batchOutputFolder},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := newApplication()
+			app.restoreSettings()
+			app.applyPresetOutput(test.output)
+			app.completeBatchScan(context.Background(), scan, false, nil)
+			if app.batch == nil || app.batch.outputMode != test.mode || app.batch.outputDir != test.dir || app.batchOutputDir != outDir {
+				t.Fatalf("new queues must use the preset output and retain the remembered picker directory separately: output=%+v batch=%+v remembered=%q", app.output, app.batch, app.batchOutputDir)
+			}
+
+			// A directory chosen for an ask queue survives appending files to that queue.
+			if test.output.Mode == presetSaveAsk {
+				app.batch.outputDir = otherOut
+			}
+			queueDir := app.batch.outputDir
+			app.completeBatchScan(context.Background(), scan, true, nil)
+			if app.batch.outputMode != test.mode || app.batch.outputDir != queueDir || app.output != test.output {
+				t.Fatalf("appending files must preserve the current queue's preset output: output=%+v batch=%+v", app.output, app.batch)
+			}
+		})
 	}
 
 	// Deleted directory falls back to empty cleanly on startup without setting settingsError.

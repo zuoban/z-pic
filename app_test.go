@@ -75,21 +75,36 @@ func TestBusyViewCannotChangeQuality(t *testing.T) {
 	}
 }
 
-func TestPNGViewExplainsLossyCompressionWithoutModeSelection(t *testing.T) {
+func TestPNGAdvancedParametersStartCollapsed(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format = "png"
+	options := s.compressionOptions()
 	tt := openTestSettings(t, s)
-	if !tt.HasText("PNG 有损压缩") ||
-		!tt.HasText("质量与颜色数越低，文件通常越小。支持透明度，但渐变、阴影与半透明边缘可能变化。") {
-		t.Fatal("PNG must explain its default lossy compression")
-	}
-	if tt.HasText("无损优化") || tt.HasText("PNG 压缩模式") || tt.HasText("更小体积（有损）") {
-		t.Fatal("PNG must not offer the removed mode selection")
-	}
-	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数"} {
-		if _, ok := tt.AccessByRole(ui.RoleSlider, label); !ok {
-			t.Fatalf("settings must expose both formats independently of the selected image: %s", label)
+	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+		if _, ok := tt.AccessByRole(ui.RoleSlider, label); ok {
+			t.Fatalf("advanced parameter %q must start collapsed", label)
 		}
+	}
+	for range 12 {
+		disclosure, ok := tt.AccessByRole(ui.RoleDisclosure, "高级压缩参数")
+		if !ok {
+			t.Fatal("advanced compression parameters must be available in settings")
+		}
+		if !disclosure.Offscreen && disclosure.Bounds.Y >= 64 && disclosure.Bounds.Y+disclosure.Bounds.H <= 480 {
+			break
+		}
+		tt.Scroll(320, 300, 0, 80)
+	}
+	if err := tt.Click("高级压缩参数"); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
+		if slider, ok := tt.AccessByRole(ui.RoleSlider, label); !ok || slider.Disabled {
+			t.Fatalf("expanding advanced settings must expose editable parameter %q: %+v", label, slider)
+		}
+	}
+	if !s.advanced || s.compressionOptions() != options {
+		t.Fatal("expanding settings must preserve the active compression options")
 	}
 }
 
@@ -115,7 +130,7 @@ func TestPNGCompressionResultIsVisible(t *testing.T) {
 					t.Errorf("PNG result must display %q; got %q", text, tt.Texts())
 				}
 			}
-			for _, label := range []string{"重新压缩", "另存副本", "覆盖原图"} {
+			for _, label := range []string{"重新压缩", "另存副本", "保存结果"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Bounds.H < 20 || button.Bounds.Y+button.Bounds.H > 660 {
 					t.Fatalf("%q must remain reachable at minimum window size: %+v", label, button)
@@ -137,7 +152,7 @@ func TestOverwriteRequiresConfirmationAndDefaultsToCancel(t *testing.T) {
 		s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 		result := s.result
 		tt := ui.NewTester(s.view, 880, 660)
-		if err := tt.Click("覆盖原图"); err != nil {
+		if err := tt.Click("保存结果"); err != nil {
 			t.Fatal(err)
 		}
 		dialog, ok := tt.AccessByRole(ui.RoleAlertDialog, "确认覆盖原图？")
@@ -180,10 +195,7 @@ func TestOverwriteUnavailableWithoutSmallerCurrentResult(t *testing.T) {
 				t.Fatalf("overwrite must not be offered in state %q", state)
 			}
 			tt := ui.NewTester(s.view, 880, 660)
-			label := "覆盖原图"
-			if s.overwritten {
-				label = "已覆盖原图"
-			}
+			label := "保存结果"
 			if button, exists := tt.AccessByRole(ui.RoleButton, label); exists && !button.Disabled {
 				t.Fatalf("unavailable overwrite must be disabled: %+v", button)
 			}
@@ -278,6 +290,7 @@ func TestPresetsConfigureBothFormats(t *testing.T) {
 func TestPNGControlsClampDraftAndInvalidateOnlyAfterSaving(t *testing.T) {
 	s := testSelectedApplication()
 	s.file.format = "png"
+	s.advanced = true
 	s.presets = append(s.presets, compressionPreset{name: "自定义", quality: 80, png: compress.DefaultPNGOptions()})
 	s.setScheme("自定义")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
@@ -287,6 +300,13 @@ func TestPNGControlsClampDraftAndInvalidateOnlyAfterSaving(t *testing.T) {
 	slider, ok := tt.AccessByRole(ui.RoleSlider, "目标质量")
 	if !ok {
 		t.Fatal("PNG target quality must be adjustable")
+	}
+	for range 12 {
+		if !slider.Offscreen && slider.Bounds.Y >= 64 && slider.Bounds.Y+slider.Bounds.H <= 480 {
+			break
+		}
+		tt.Scroll(320, 300, 0, 80)
+		slider, _ = tt.AccessByRole(ui.RoleSlider, "目标质量")
 	}
 	tt.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
 	tt.Key(0, ui.KeyHome)
@@ -473,7 +493,7 @@ func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
 					c.SetTheme(theme)
 					s.view(c)
 				}, 880, 660)
-				for _, label := range []string{"更换图片", "重新压缩", "另存副本", "覆盖原图"} {
+				for _, label := range []string{"更换图片", "重新压缩", "另存副本", "保存结果"} {
 					button, ok := tt.AccessByRole(ui.RoleButton, label)
 					if !ok || button.Offscreen || button.Bounds.H < 28 ||
 						button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > 880 {
@@ -516,7 +536,7 @@ func TestAdvancedKeyboardFocusScrollsWithoutHidingSettingsActions(t *testing.T) 
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	s.result = result
 	tt := openTestSettings(t, s)
-	for i := 0; i < 20 && !tt.Focused("处理速度"); i++ {
+	for i := 0; i < 40 && !tt.Focused("处理速度"); i++ {
 		tt.Key(0, ui.KeyTab)
 	}
 	slider, ok := tt.AccessByRole(ui.RoleSlider, "处理速度")
@@ -524,7 +544,7 @@ func TestAdvancedKeyboardFocusScrollsWithoutHidingSettingsActions(t *testing.T) 
 		t.Fatalf("keyboard focus must scroll to advanced parameters: %+v", slider)
 	}
 	save, ok := tt.AccessByRole(ui.RoleButton, "保存")
-	if !ok || save.Offscreen || save.Bounds.H < 28 || save.Bounds.Y+save.Bounds.H > 560 {
+	if !ok || save.Offscreen || save.Bounds.H < 28 || save.Bounds.Y+save.Bounds.H > 600 {
 		t.Fatalf("scrolling advanced settings must keep saving reachable: %+v", save)
 	}
 	tt.Key(0, ui.KeyRight)
@@ -540,22 +560,53 @@ func TestAdvancedKeyboardFocusScrollsWithoutHidingSettingsActions(t *testing.T) 
 	}
 }
 
-func TestMainViewOnlyOffersSchemes(t *testing.T) {
+func TestMainPresetsOnlyEditThroughDialog(t *testing.T) {
 	for _, format := range []string{"jpeg", "png"} {
 		t.Run(format, func(t *testing.T) {
 			s := testSelectedApplication()
-			s.file.format, s.advanced = format, true
+			s.file.format = format
+			s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+			result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+			s.result = result
+			preset := s.presets[1]
 			tt := ui.NewTester(s.view, 880, 660)
-			if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "压缩方案"); !ok {
-				t.Fatal("the main page must offer scheme selection")
+			if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "预设"); !ok {
+				t.Fatal("the main page must offer preset selection")
 			}
-			for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
-				if _, ok := tt.AccessByRole(ui.RoleSlider, label); ok {
-					t.Fatalf("compression parameter %q must only appear in the settings window", label)
-				}
+			if _, ok := tt.AccessByRole(ui.RoleSlider, "图片质量"); ok {
+				t.Fatal("quality must only be editable in the preset dialog")
 			}
-			if tt.HasText("高级设置") {
-				t.Fatal("advanced settings must only appear in the settings window")
+			if _, ok := tt.AccessByRole(ui.RoleRadioGroup, "保存到"); ok {
+				t.Fatal("output preferences must only be editable in the preset dialog")
+			}
+			if _, ok := tt.AccessByRole(ui.RoleButton, "新增预设"); ok {
+				t.Fatal("presets must only be created in the preset dialog")
+			}
+			if err := tt.Click("编辑"); err != nil {
+				t.Fatal(err)
+			}
+			settings := ui.NewTester(s.settingsView, 724, 700)
+			slider, ok := settings.AccessByRole(ui.RoleSlider, "图片质量")
+			if !s.settingsOpen || !ok || slider.Disabled || slider.Offscreen {
+				t.Fatalf("the edit entry must open an editable preset dialog: %+v", slider)
+			}
+			settings.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
+			settings.Key(0, ui.KeyHome)
+			if err := settings.Click("每次询问"); err != nil {
+				t.Fatal(err)
+			}
+			draft := s.editor.selectedPreset()
+			if draft.quality != 40 || draft.output.Mode != presetSaveAsk {
+				t.Fatalf("the dialog must edit the selected draft: %+v", draft)
+			}
+			if s.presets[1] != preset || s.quality != preset.quality || s.png != preset.png || s.output != preset.output || s.result != result {
+				t.Fatal("dialog edits must leave the active preset and result unchanged until saved")
+			}
+			if err := settings.Click("保存"); err != nil {
+				t.Fatal(err)
+			}
+			if s.settingsOpen || s.quality != 40 || s.output.Mode != presetSaveAsk || s.result != nil {
+				t.Fatal("saving the dialog must apply the preset and invalidate the old compression result")
 			}
 		})
 	}
@@ -564,6 +615,11 @@ func TestMainViewOnlyOffersSchemes(t *testing.T) {
 func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	s := newApplication()
 	tt := ui.NewTester(s.view, 880, 660)
+	tabs, exists := tt.AccessByRole(ui.RoleRadioGroup, "预设")
+	if !exists {
+		t.Fatal("preset selection must be available without an image")
+	}
+	tt.Scroll(tabs.Bounds.X+tabs.Bounds.W/2, tabs.Bounds.Y+tabs.Bounds.H/2, 1000, 0)
 	if err := tt.Click("画质优先"); err != nil {
 		t.Fatal(err)
 	}
@@ -574,8 +630,9 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	s.advanced = true
 	settings := ui.NewTester(s.settingsView, 760, 560)
-	if err := settings.Click("新增方案"); err != nil {
+	if err := settings.Click("新增预设"); err != nil {
 		t.Fatal(err)
 	}
 	for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数"} {
@@ -585,6 +642,13 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 		}
 	}
 	slider, _ := settings.AccessByRole(ui.RoleSlider, "JPEG / WebP 质量")
+	for range 12 {
+		if !slider.Offscreen && slider.Bounds.Y >= 64 && slider.Bounds.Y+slider.Bounds.H <= 480 {
+			break
+		}
+		settings.Scroll(400, 300, 0, 80)
+		slider, _ = settings.AccessByRole(ui.RoleSlider, "JPEG / WebP 质量")
+	}
 	settings.ClickAt(slider.Bounds.X+slider.Bounds.W/2, slider.Bounds.Y+slider.Bounds.H/2)
 	settings.Key(0, ui.KeyEnd)
 	if s.editor.presets[s.editor.selected].quality != 100 || s.quality != 92 {
@@ -597,10 +661,15 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	if s.settingsOpen || s.scheme != "画质优先" || s.quality != 92 || !tt.HasText("选择图片") {
 		t.Fatal("saving a new scheme must keep the active scheme until selected and return to the unchanged main view")
 	}
-	if err := tt.Click("新方案"); err != nil {
+	presetGroup, ok := tt.AccessByRole(ui.RoleRadioGroup, "预设")
+	if !ok {
+		t.Fatal("the saved preset must be selectable from the main page")
+	}
+	tt.Scroll(presetGroup.Bounds.X+presetGroup.Bounds.W/2, presetGroup.Bounds.Y+presetGroup.Bounds.H/2, 1000, 0)
+	if err := tt.Click("新预设"); err != nil {
 		t.Fatal(err)
 	}
-	if s.quality != 100 || s.scheme != "新方案" {
+	if s.quality != 100 || s.scheme != "新预设" {
 		t.Fatal("saving settings must preserve the named scheme and return to the unchanged main view")
 	}
 	button, ok := tt.AccessByRole(ui.RoleButton, "开始压缩")
@@ -627,7 +696,7 @@ func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
 			}
 			s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 			settings := ui.NewTester(s.settingsView, 760, 560)
-			if _, ok := settings.AccessByRole(ui.RoleDialog, "设置"); !ok {
+			if _, ok := settings.AccessByRole(ui.RoleDialog, "预设设置"); !ok {
 				t.Fatal("settings content must identify itself as a dialog")
 			}
 			if exit == "Escape" {
@@ -717,26 +786,25 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 				c.SetTheme(theme)
 				s.settingsView(c)
 			}, 760, 560)
-			for _, label := range []string{"取消", "保存", "新增方案", "复制方案", "删除方案"} {
+			for _, label := range []string{"取消", "保存", "新增预设", "复制预设", "删除预设"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				wantDisabled := label == "删除方案"
-				if !ok || button.Disabled != wantDisabled || button.Offscreen || button.Bounds.H < 28 ||
+				if !ok || button.Disabled || button.Bounds.H < 28 || button.Offscreen ||
 					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
 					t.Fatalf("%s must fit in the minimum window: %+v", label, button)
 				}
 			}
 			for _, label := range []string{"JPEG / WebP 质量", "目标质量", "最大颜色数", "最低质量", "处理速度"} {
 				slider, ok := tt.AccessByRole(ui.RoleSlider, label)
-				if !ok || !slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
+				if !ok || slider.Disabled || slider.Bounds.W < 100 || slider.Bounds.X < 20 ||
 					slider.Bounds.X+slider.Bounds.W > 740 {
 					t.Fatalf("%s must fit the settings content width: %+v", label, slider)
 				}
 			}
 			s.addPreset()
 			tt.Frame()
-			for _, label := range []string{"取消", "保存", "新增方案", "复制方案", "删除方案"} {
+			for _, label := range []string{"取消", "保存", "新增预设", "复制预设", "删除预设"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || button.Disabled || button.Offscreen || button.Bounds.H < 28 ||
+				if !ok || button.Disabled || button.Bounds.H < 28 || button.Offscreen ||
 					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
 					t.Fatalf("%s must fit and be enabled for custom schemes: %+v", label, button)
 				}
@@ -855,7 +923,7 @@ func TestRevealSavedFileLifecycleAndMinimumWindow(t *testing.T) {
 				s.view(c)
 			}, 880, 660)
 
-			for _, label := range []string{"定位文件", "另存副本", "覆盖原图"} {
+			for _, label := range []string{"定位文件", "另存副本", "保存结果"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Offscreen || button.Bounds.H < 24 ||
 					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {

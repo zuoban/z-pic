@@ -549,15 +549,16 @@ func (s *application) batchControls(c *ui.Context) {
 func (s *application) batchOutputCard(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(t.Background).Children(func() {
-		if ui.Segmented(c.Key("batch-output-mode"), &s.batch.outputMode, "保存到文件夹", "覆盖原图").
-			Label("输出方式").FillEqually().Height(32).Disabled(s.busy).Changed() {
-			if s.resetBatchRunState() {
-				s.setMessage("输出方式已切换，请重新压缩。", false)
-			}
-		}
+		ui.Text(c, "保存方式由当前预设决定").FontSize(12).TextColor(metadataColor(c))
 		if s.batch.outputMode == batchOutputFolder {
 			dirText, dirColor, dirTooltip := "压缩时选择保存位置", metadataColor(c), "将在开始压缩时选择保存文件夹"
 			btnLabel := "选择位置"
+			if s.output.Mode == presetSaveOriginal {
+				dirText, dirTooltip = "各原文件所在文件夹", "每张图片保存到自己的原文件夹"
+			}
+			if s.output.Mode == presetSaveFixed {
+				dirText, dirTooltip = "请选择预设的固定输出目录", "在预设设置中选择输出目录"
+			}
 			if s.batch.outputDir != "" {
 				dirText = s.batch.outputDir
 				dirColor = t.Text
@@ -567,8 +568,10 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, dirText).FontSize(12).TextColor(dirColor).
 					SingleLine().TruncateMiddle().Width(0).Grow(1).Tooltip(dirTooltip)
-				ui.Button(c.Key("batch-output-dir"), btnLabel).Height(32).
-					Disabled(s.busy).OnClick(s.chooseOutputDir)
+				if s.output.Mode == presetSaveAsk {
+					ui.Button(c.Key("batch-output-dir"), btnLabel).Height(32).
+						Disabled(s.busy).OnClick(s.chooseOutputDir)
+				}
 			})
 		} else {
 			ui.Text(c, "缩小后的文件将直接替换原图，未减小则跳过，无法撤销。").

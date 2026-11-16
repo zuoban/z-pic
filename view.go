@@ -240,15 +240,13 @@ func (s *application) controlsPanel(c *ui.Context) {
 	}
 	ui.Column(c).Width(panelWidth).Shrink(0).Padding(16).Gap(12).Radius(16).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Row(c).Height(24).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "压缩方案").FontSize(16).FontWeight(500).Grow(1)
+		ui.Row(c).Height(28).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "预设").FontSize(16).FontWeight(600).Grow(1)
+			ui.Button(c.Key("manage-presets"), "编辑").Height(28).
+				Disabled(s.busy || s.settingsOpen).Tooltip("编辑图片质量与保存位置").
+				OnClick(func() { s.setSettingsOpen(true) })
 		})
-		ui.Text(c, "在设置中管理方案").
-			FontSize(12).TextColor(metadataColor(c))
-		ui.Scroll(c.Key("schemes")).Height(min(float32(len(s.presets)*40+4), 184)).
-			MinHeight(76).Shrink(1).Children(func() {
-			s.presetControl(c)
-		})
+		s.presetControl(c)
 		ui.Box(c).Grow(1)
 		if s.batch != nil {
 			s.batchControls(c)
@@ -258,7 +256,9 @@ func (s *application) controlsPanel(c *ui.Context) {
 			ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
 				FontSize(12).TextColor(t.TextMuted)
 		}
-		s.resultSummary(c)
+		if s.file != nil {
+			s.resultSummary(c)
+		}
 		if s.busy {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spinner(c).Size(16, 16)
@@ -293,16 +293,12 @@ func (s *application) controlsPanel(c *ui.Context) {
 				ui.Button(c.Key("compress"), "重新压缩").Grow(1).Height(36).
 					KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("重新压缩 · " + shortcutLabel("↵")).
 					Disabled(s.busy).OnClick(s.startCompression)
-				primaryAction(c, "save", "另存副本", s.busy).Grow(1).Height(36).
-					KeyShortcuts(ui.Cmd, ui.KeyS).Tooltip("另存副本 · " + shortcutLabel("S")).
-					OnClick(s.saveCopy)
+				primaryAction(c, "save", "保存结果", s.busy || (s.output.replacesOriginal() && !s.canOverwrite())).Grow(1).Height(36).
+					KeyShortcuts(ui.Cmd, ui.KeyS).Tooltip("按当前预设保存 · " + shortcutLabel("S")).
+					OnClick(s.savePresetResult)
 			})
-			label := "覆盖原图"
-			if s.overwritten {
-				label = "已覆盖原图"
-			}
-			ui.Button(c.Key("overwrite"), label).Height(32).
-				TextColor(t.Danger).Disabled(!s.canOverwrite()).OnClick(s.requestOverwrite)
+			ui.Button(c.Key("save-copy"), "另存副本").Height(32).
+				Disabled(s.busy).OnClick(s.saveCopy)
 		} else {
 			primaryAction(c, "compress", "开始压缩", s.busy || s.file == nil).Height(40).
 				KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("开始压缩 · " + shortcutLabel("↵")).
@@ -315,140 +311,38 @@ func (s *application) controlsPanel(c *ui.Context) {
 func (s *application) presetControl(c *ui.Context) {
 	t := c.Theme()
 	scheme := s.scheme
+	revealSelected := s.presetTabName != scheme
+	s.presetTabName = scheme
 	ui.RadioGroup(c.Key("scheme"), func() {
-		for _, preset := range s.presets {
-			segment := ui.RadioBase(c.Key("preset-"+preset.name), &scheme, preset.name).
-				Label(preset.name).FillWidth().Height(36).Padding(8, 12).AlignItems(ui.Center).Radius(8).
-				Border(1, ui.Transparent).TextColor(t.TextMuted).
-				Disabled(s.busy || s.settingsOpen).
-				OnChange(func() { s.setScheme(scheme) })
-			if scheme == preset.name {
-				segment.Background(selectionBackground(c)).Border(1, t.Accent.Alpha(0.6)).TextColor(t.Text)
-			} else if segment.Hovered() {
-				segment.Background(t.SurfaceHover)
-			}
-			segment.Children(func() {
-				ui.Text(c, preset.name).FontSize(13).FontWeight(500).
-					SingleLine().TruncateMiddle().Tooltip(preset.name)
-			})
-		}
-	}).Label("压缩方案").FillWidth().Padding(4).Gap(4).
-		Radius(12).Background(t.Background)
-}
-
-func (s *application) settingsView(c *ui.Context) {
-	applyTheme(c)
-	editor := s.editor
-	if editor == nil {
-		return
-	}
-	t := c.Theme()
-	c.OnWindowShortcut(0, ui.KeyEscape, func() { s.setSettingsOpen(false) })
-	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.savePresetEdits)
-	ui.Column(c).Fill().Padding(20).Gap(16).Background(t.Background).
-		Role(ui.RoleDialog).Label("设置").Children(func() {
-		ui.Text(c, "设置").FontSize(24).FontWeight(500)
-		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "压缩方案").FontSize(16).FontWeight(500)
-			ui.Text(c, "管理压缩参数，保存后在主界面选择使用").
-				FontSize(12).TextColor(t.TextMuted)
-		})
-		ui.Row(c).Grow(1).FillWidth().Gap(20).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Width(180).Gap(12).Children(func() {
-				ui.Scroll(c.Key("preset-list")).Grow(1).Gap(4).Children(func() {
-					for index, preset := range editor.presets {
-						actionLabel := "编辑方案：" + preset.name
-						if preset.builtin {
-							actionLabel = "查看方案：" + preset.name
+		ui.ScrollHorizontal(c.Key("preset-tabs")).Height(48).FillWidth().Children(func() {
+			ui.Row(c).Gap(4).Height(44).AlignItems(ui.Stretch).Children(func() {
+				for _, preset := range s.presets {
+					segment := ui.RadioBase(c.Key("preset-"+preset.name), &scheme, preset.name).
+						Label(preset.name).Height(40).MinWidth(76).MaxWidth(164).Padding(8, 12).
+						AlignItems(ui.Center).Gap(6).Radius(10).Border(1, ui.Transparent).
+						TextColor(t.TextMuted).Disabled(s.busy || s.settingsOpen).
+						OnChange(func() { s.setScheme(scheme) })
+					if scheme == preset.name {
+						segment.Background(t.Background).Border(1, t.Border).TextColor(t.Text)
+						if revealSelected {
+							segment.ScrollIntoView()
 						}
-						button := ui.Button(c.Key(fmt.Sprintf("edit-preset-%d", index)), "").
-							Label(actionLabel).FillWidth().Height(36).
-							Tooltip(preset.name).Disabled(s.busy).OnClick(func() {
-							editor.selected = index
-							editor.message, editor.confirmDelete = "", false
-						})
-						if editor.selected == index {
-							button.Background(selectionBackground(c)).Border(1, t.Accent.Alpha(0.6))
-						}
-						button.Children(func() {
-							ui.Text(c, preset.name).FontSize(13).SingleLine().TruncateMiddle().Grow(1)
-							if preset.builtin {
-								ui.Text(c, "内置").FontSize(12).TextColor(metadataColor(c))
-							}
-						})
+					} else if segment.Hovered() {
+						segment.Background(t.SurfaceHover)
 					}
-				})
-				locked := editor.selectedBuiltin()
-				ui.Button(c.Key("add-preset"), "新增方案").Height(32).
-					Disabled(s.busy).OnClick(s.addPreset)
-				ui.Button(c.Key("duplicate-preset"), "复制方案").Height(32).
-					Tooltip("复制当前方案的参数，创建可编辑的自定义方案").
-					Disabled(s.busy || editor.selectedPreset() == nil).
-					OnClick(s.duplicatePreset)
-				deleteButton := ui.Button(c.Key("delete-preset"), "删除方案").Height(32).TextColor(t.Danger).
-					Disabled(s.busy || locked || len(editor.presets) <= 1).
-					OnClick(s.requestDeletePreset)
-				if locked {
-					deleteButton.Tooltip("内置方案不允许删除")
-				}
-			})
-			ui.Scroll(c.Key("preset-editor")).Width(0).Grow(1).Gap(12).Padding(0, 8, 0, 0).Children(func() {
-				preset := &editor.presets[editor.selected]
-				locked := preset.builtin
-				if locked {
-					ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Radius(8).
-						Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "内置方案不允许编辑或删除；如需调整可复制为自定义方案。").
-							FontSize(12).TextColor(t.TextMuted).Width(0).Grow(1)
+					segment.Children(func() {
+						ui.Text(c, preset.name).FontSize(13).FontWeight(500).
+							SingleLine().TruncateMiddle().Tooltip(preset.name)
+						if scheme == preset.name {
+							presetActiveIndicator(c)
+						} else if preset.favorite {
+							ui.Icon(c, presetHeartFilledIcon).Size(12, 12).TextColor(t.TextMuted)
+						}
 					})
 				}
-				ui.Column(c).Gap(4).Children(func() {
-					ui.Text(c, "方案名称").FontSize(13)
-					name := &preset.name
-					if locked {
-						readOnlyName := preset.name
-						name = &readOnlyName
-					}
-					if ui.TextInput(c.Key("preset-name"), name).
-						Label("方案名称").Placeholder("输入方案名称").Height(36).
-						Disabled(s.busy || locked).Changed() && !locked {
-						editor.message = ""
-					}
-				})
-				ui.Text(c, "JPEG / WebP").FontSize(16).FontWeight(500)
-				s.settingSlider(c, "quality", "JPEG / WebP 质量", preset.quality, 1, 100, locked, s.editQuality)
-				ui.Text(c, "较低质量通常带来更小体积，也会减少照片细节").
-					FontSize(12).TextColor(t.TextMuted)
-				ui.Divider(c)
-				s.pngSettings(c, locked)
-				ui.Text(c, "JPEG、PNG 与 WebP 有损压缩可能改变画质，请保留原图").
-					FontSize(12).TextColor(t.TextMuted)
 			})
 		})
-		if editor.confirmDelete {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Textf(c, "删除「%s」？保存后生效。", editor.presets[editor.selected].name).
-					FontSize(12).Grow(1).SingleLine().TruncateMiddle()
-				ui.Button(c.Key("cancel-delete"), "保留方案").Height(32).
-					OnClick(func() { editor.confirmDelete = false })
-				ui.Button(c.Key("confirm-delete"), "确认删除").Height(32).
-					TextColor(t.Danger).OnClick(s.deletePreset)
-			})
-		}
-		ui.Row(c).Height(40).Gap(12).AlignItems(ui.Center).Children(func() {
-			message, color, role := "保存后生效，关闭应用仍会保留", t.TextMuted, ui.RoleStatus
-			if editor.message != "" {
-				message, color, role = editor.message, t.Danger, ui.RoleAlert
-			}
-			ui.Text(c, message).FontSize(12).TextColor(color).Role(role).
-				Grow(1).MaxLines(2).Tooltip(message)
-			ui.Button(c.Key("cancel-settings"), "取消").Width(72).Height(36).
-				Disabled(s.busy).OnClick(func() { s.setSettingsOpen(false) })
-			primaryAction(c, "save-settings", "保存", s.busy || editor.confirmDelete).Width(88).Height(36).
-				KeyShortcuts(ui.Cmd, ui.KeyS).
-				OnClick(s.savePresetEdits)
-		})
-	})
+	}).Label("预设").FillWidth()
 }
 
 func (s *application) overwriteConfirmation(c *ui.Context) {
@@ -468,51 +362,45 @@ func (s *application) overwriteConfirmation(c *ui.Context) {
 	}
 }
 
-func (s *application) pngSettings(c *ui.Context, locked bool) {
+func (s *application) pngSettings(c *ui.Context) {
 	t := c.Theme()
 	preset := s.editor.presets[s.editor.selected]
 	ui.Text(c, "PNG 有损压缩").FontSize(16).FontWeight(500)
-	s.settingSlider(c, "png-quality", "目标质量", float64(preset.png.MaxQuality), 1, 100, locked, func(value float64) {
+	s.settingSlider(c, "png-quality", "目标质量", float64(preset.png.MaxQuality), 1, 100, func(value float64) {
 		options := s.editor.presets[s.editor.selected].png
 		options.MaxQuality = int(value)
 		options.MinQuality = min(options.MinQuality, options.MaxQuality)
 		s.editPNGOptions(options)
 	})
-	s.settingSlider(c, "png-colors", "最大颜色数", float64(preset.png.Colors), 2, 256, locked, func(value float64) {
+	s.settingSlider(c, "png-colors", "最大颜色数", float64(preset.png.Colors), 2, 256, func(value float64) {
 		options := s.editor.presets[s.editor.selected].png
 		options.Colors = int(value)
 		s.editPNGOptions(options)
 	})
-	ui.Collapsible(c.Key("advanced"), "高级设置", &s.advanced, func() {
-		ui.Column(c).Gap(12).Padding(8, 0).Children(func() {
-			s.settingSlider(c, "png-min-quality", "最低质量", float64(preset.png.MinQuality), 0, float64(preset.png.MaxQuality), locked, func(value float64) {
-				options := s.editor.presets[s.editor.selected].png
-				options.MinQuality = int(value)
-				s.editPNGOptions(options)
-			})
-			ui.Text(c, "未达最低质量时跳过量化。质量值是工具评分，并非画质保留百分比。").
-				FontSize(12).TextColor(t.TextMuted)
-			s.settingSlider(c, "png-speed", "处理速度", float64(preset.png.Speed), 1, 11, locked, func(value float64) {
-				options := s.editor.presets[s.editor.selected].png
-				options.Speed = int(value)
-				s.editPNGOptions(options)
-			})
-			ui.Text(c, "1 最慢、11 最快。更快可能降低压缩效果。").
-				FontSize(12).TextColor(t.TextMuted)
-		})
+	s.settingSlider(c, "png-min-quality", "最低质量", float64(preset.png.MinQuality), 0, float64(preset.png.MaxQuality), func(value float64) {
+		options := s.editor.presets[s.editor.selected].png
+		options.MinQuality = int(value)
+		s.editPNGOptions(options)
 	})
-	ui.Text(c, "质量与颜色数越低，文件通常越小。支持透明度，但渐变、阴影与半透明边缘可能变化。").
+	ui.Text(c, "未达最低质量时跳过量化。质量值是工具评分，并非画质保留百分比。").
 		FontSize(12).TextColor(t.TextMuted)
+	s.settingSlider(c, "png-speed", "处理速度", float64(preset.png.Speed), 1, 11, func(value float64) {
+		options := s.editor.presets[s.editor.selected].png
+		options.Speed = int(value)
+		s.editPNGOptions(options)
+	})
+	ui.Text(c, "1 最慢、11 最快。更快可能降低压缩效果。").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "有损压缩可能改变渐变与半透明边缘，请保留原图。").FontSize(12).TextColor(t.TextMuted)
 }
 
-func (s *application) settingSlider(c *ui.Context, key, label string, value, low, high float64, locked bool, change func(float64)) {
+func (s *application) settingSlider(c *ui.Context, key, label string, value, low, high float64, change func(float64)) {
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, label).FontSize(13).Grow(1)
 			ui.Textf(c, "%.0f", value).FontSize(13).FontWeight(500).FontFeatures("tnum")
 		})
 		if ui.StepSlider(c.Key(key), &value, low, high, 1).
-			Label(label).Disabled(s.busy || locked).Changed() && !locked {
+			Label(label).Disabled(s.busy).Changed() {
 			change(math.Round(value))
 		}
 	})

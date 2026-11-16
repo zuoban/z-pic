@@ -212,10 +212,7 @@ func TestWebPQualityLabelUsesPersistedQuality(t *testing.T) {
 	app := newApplication()
 	app.restoreSettings()
 	tester := openTestSettings(t, app)
-	if _, ok := tester.AccessByRole(ui.RoleSlider, "JPEG / WebP 质量"); !ok {
-		t.Fatal("shared JPEG / WebP quality control is missing")
-	}
-	if err := tester.Click("新增方案"); err != nil {
+	if err := tester.Click("新增预设"); err != nil {
 		t.Fatal(err)
 	}
 	replaceTestPresetName(t, tester, "WebP 分享")

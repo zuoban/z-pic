@@ -112,6 +112,15 @@ func TestValidatePresetsRejectsInvalidDefinitions(test *testing.T) {
 		"invalid-png-range":       func(preset *compressionPreset) { preset.png.MinQuality = 90 },
 		"invalid-png-colors":      func(preset *compressionPreset) { preset.png.Colors = 1 },
 		"invalid-png-speed":       func(preset *compressionPreset) { preset.png.Speed = 12 },
+		"invalid-output-subfolder": func(preset *compressionPreset) {
+			preset.output = presetSaveOptions{UseSubfolder: true, Subfolder: "../outside"}
+		},
+		"invalid-output-suffix": func(preset *compressionPreset) {
+			preset.output = presetSaveOptions{UseSuffix: true, Suffix: "bad/name"}
+		},
+		"relative-output-directory": func(preset *compressionPreset) {
+			preset.output = presetSaveOptions{Mode: presetSaveFixed, Directory: "exports"}
+		},
 	}
 	for name, mutate := range mutations {
 		test.Run(name, func(test *testing.T) {
@@ -123,39 +132,9 @@ func TestValidatePresetsRejectsInvalidDefinitions(test *testing.T) {
 			}
 		})
 	}
-	for index, builtin := range compressionPresets {
-		test.Run("missing-builtin-"+builtin.name, func(test *testing.T) {
-			presets := append(defaultPresets()[:index], defaultPresets()[index+1:]...)
-			if err := validatePresets(presets, "均衡"); err == nil {
-				test.Fatalf("missing built-in scheme %q must be rejected", builtin.name)
-			}
-		})
-		test.Run("edited-builtin-quality-"+builtin.name, func(test *testing.T) {
-			presets := defaultPresets()
-			presets[index].quality--
-			if err := validatePresets(presets, "均衡"); err == nil {
-				test.Fatalf("edited built-in scheme %q quality must be rejected", builtin.name)
-			}
-		})
-		test.Run("edited-builtin-png-"+builtin.name, func(test *testing.T) {
-			presets := defaultPresets()
-			presets[index].png.Speed++
-			if err := validatePresets(presets, "均衡"); err == nil {
-				test.Fatalf("edited built-in scheme %q PNG options must be rejected", builtin.name)
-			}
-		})
-		test.Run("unmarked-builtin-"+builtin.name, func(test *testing.T) {
-			presets := defaultPresets()
-			presets[index].builtin = false
-			if err := validatePresets(presets, "均衡"); err == nil {
-				test.Fatalf("unmarked built-in scheme %q must be rejected", builtin.name)
-			}
-		})
-	}
 	for name, presets := range map[string][]compressionPreset{
 		"empty-list":     nil,
 		"duplicate-name": append(defaultPresets(), compressionPreset{name: "均衡", quality: 80, png: compress.DefaultPNGOptions()}),
-		"custom-builtin": append(defaultPresets(), compressionPreset{name: "伪内置", quality: 80, png: compress.DefaultPNGOptions(), builtin: true}),
 	} {
 		test.Run(name, func(test *testing.T) {
 			if err := validatePresets(presets, "均衡"); err == nil {
@@ -189,27 +168,82 @@ func TestLoadSettingsAcceptsCanonicalStoredConfiguration(test *testing.T) {
 	}
 }
 
+func TestLoadSettingsAcceptsEditedStartingPresetAndDeletedDefaults(test *testing.T) {
+	path := filepath.Join(test.TempDir(), "settings.json")
+	contents := `{"version":1,"selected":"均衡","presets":[{"name":"均衡","quality":77,"png":{"MinQuality":30,"MaxQuality":77,"Colors":100,"Speed":6}}]}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		test.Fatal(err)
+	}
+	presets, selected, err := loadSettings(path)
+	expected := compressionPreset{name: "均衡", quality: 77, png: compress.PNGOptions{MinQuality: 30, MaxQuality: 77, Colors: 100, Speed: 6}}
+	if err != nil || selected != "均衡" || !reflect.DeepEqual(presets, []compressionPreset{expected}) {
+		test.Fatalf("edited or deleted starting presets must load without being recreated: presets=%+v selected=%q err=%v", presets, selected, err)
+	}
+}
+
+func TestPresetOutputAndFavoritesRoundTrip(test *testing.T) {
+	path := filepath.Join(test.TempDir(), "settings.json")
+	directory := filepath.Join(test.TempDir(), "exports")
+	presets := defaultPresets()
+	presets[0].output = presetSaveOptions{UseSubfolder: true, Subfolder: "压缩图片", UseSuffix: true, Suffix: "_small"}
+	presets[1].output = presetSaveOptions{Mode: presetSaveAsk}
+	presets[2].output = presetSaveOptions{Mode: presetSaveFixed, Directory: directory, UseSuffix: true, Suffix: "_高质量"}
+	presets[0].favorite, presets[2].favorite = true, true
+	if err := saveSettings(path, presets, "均衡"); err != nil {
+		test.Fatal(err)
+	}
+	loaded, selected, err := loadSettings(path)
+	if err != nil || selected != "均衡" || !reflect.DeepEqual(loaded, presets) {
+		test.Fatalf("all output choices and favorite flags must survive reload: presets=%+v selected=%q err=%v", loaded, selected, err)
+	}
+	if err := saveSettings(path, defaultPresets(), "均衡"); err != nil {
+		test.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		test.Fatal(err)
+	}
+	var stored struct {
+		Version int                          `json:"version"`
+		Presets []map[string]json.RawMessage `json:"presets"`
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		test.Fatal(err)
+	}
+	if stored.Version != 1 || len(stored.Presets) != 3 {
+		test.Fatal("new fields must retain the existing version 1 schema")
+	}
+	for _, preset := range stored.Presets {
+		if _, exists := preset["output"]; exists {
+			test.Fatal("zero output settings must be omitted")
+		}
+		if _, exists := preset["favorite"]; exists {
+			test.Fatal("false favorite flags must be omitted")
+		}
+	}
+}
+
 func TestLoadSettingsRejectsInvalidFilesWithoutChangingThem(test *testing.T) {
 	files := map[string]string{
-		"empty":               "",
-		"null":                "null",
-		"missing-version":     strings.Replace(validStoredSettings, `"version":1,`, "", 1),
-		"unsupported-version": strings.Replace(validStoredSettings, `"version":1`, `"version":2`, 1),
-		"truncated":           validStoredSettings[:len(validStoredSettings)-1],
-		"trailing-json":       validStoredSettings + "\n{}",
-		"trailing-garbage":    validStoredSettings + "\ninvalid",
-		"unknown-field":       strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"unknown":true`, 1),
-		"oversized":           strings.Repeat(" ", maxSettingsBytes+1),
-		"missing-selected":    strings.Replace(validStoredSettings, `"selected":"均衡",`, "", 1),
-		"unknown-selected":    strings.Replace(validStoredSettings, `"selected":"均衡"`, `"selected":"missing"`, 1),
-		"fractional-quality":  strings.Replace(validStoredSettings, `"quality":80`, `"quality":80.5`, 1),
-		"invalid-png":         strings.Replace(validStoredSettings, `"Colors":256`, `"Colors":1`, 1),
-		"missing-png":         strings.Replace(validStoredSettings, `"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}`, `"png":{}`, 1),
-		"empty-presets":       `{"version":1,"selected":"均衡","presets":[]}`,
-		"duplicate-name":      `{"version":1,"selected":"均衡","presets":[{"name":"均衡","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"均衡","quality":60,"png":{"MinQuality":40,"MaxQuality":65,"Colors":128,"Speed":3}}]}`,
-		"missing-builtin":     `{"version":1,"selected":"均衡","presets":[{"name":"均衡","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"画质优先","quality":92,"png":{"MinQuality":85,"MaxQuality":100,"Colors":256,"Speed":1}}]}`,
-		"edited-builtin-jpg":  strings.Replace(validStoredSettings, `"quality":80`, `"quality":79`, 1),
-		"edited-builtin-png":  strings.Replace(validStoredSettings, `"Speed":3`, `"Speed":4`, 1),
+		"empty":                     "",
+		"null":                      "null",
+		"missing-version":           strings.Replace(validStoredSettings, `"version":1,`, "", 1),
+		"unsupported-version":       strings.Replace(validStoredSettings, `"version":1`, `"version":2`, 1),
+		"truncated":                 validStoredSettings[:len(validStoredSettings)-1],
+		"trailing-json":             validStoredSettings + "\n{}",
+		"trailing-garbage":          validStoredSettings + "\ninvalid",
+		"unknown-field":             strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"unknown":true`, 1),
+		"oversized":                 strings.Repeat(" ", maxSettingsBytes+1),
+		"missing-selected":          strings.Replace(validStoredSettings, `"selected":"均衡",`, "", 1),
+		"unknown-selected":          strings.Replace(validStoredSettings, `"selected":"均衡"`, `"selected":"missing"`, 1),
+		"fractional-quality":        strings.Replace(validStoredSettings, `"quality":80`, `"quality":80.5`, 1),
+		"invalid-png":               strings.Replace(validStoredSettings, `"Colors":256`, `"Colors":1`, 1),
+		"missing-png":               strings.Replace(validStoredSettings, `"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}`, `"png":{}`, 1),
+		"empty-presets":             `{"version":1,"selected":"均衡","presets":[]}`,
+		"duplicate-name":            `{"version":1,"selected":"均衡","presets":[{"name":"均衡","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"均衡","quality":60,"png":{"MinQuality":40,"MaxQuality":65,"Colors":128,"Speed":3}}]}`,
+		"invalid-output-subfolder":  strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"use_subfolder":true,"subfolder":"../outside"}`, 1),
+		"invalid-output-suffix":     strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"use_suffix":true,"suffix":"bad/name"}`, 1),
+		"relative-output-directory": strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"mode":"fixed","directory":"exports"}`, 1),
 	}
 	for name, contents := range files {
 		test.Run(name, func(test *testing.T) {

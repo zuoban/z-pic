@@ -105,6 +105,7 @@ type batchTask struct {
 	index   int
 	path    string
 	relPath string
+	output  presetSaveOptions
 }
 
 type batchItemUpdate struct {
@@ -168,6 +169,9 @@ func (s *application) chooseOutputDir() {
 	}
 	s.busy, s.phase = true, "正在选择输出文件夹"
 	defaultPath := s.batch.outputDir
+	if defaultPath == "" {
+		defaultPath = usableBatchOutputDir(s.batchOutputDir)
+	}
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            s.window,
@@ -273,7 +277,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		s.comparison = comparisonView{split: 50}
 		s.confirmOverwrite, s.overwritten = false, false
 		s.batch = newBatchState(scan.items)
-		s.batch.outputDir = usableBatchOutputDir(s.batchOutputDir)
+		s.configureBatchPresetOutput()
 	}
 	s.setMessage(batchScanMessage(len(scan.items), scan.duplicates, scan.truncated, appendMode), false)
 }
@@ -930,6 +934,14 @@ func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 	if s.batchRunTargetCount(mode, singleIndex) == 0 {
 		return
 	}
+	if err := s.output.validate(); err != nil {
+		s.reportError(err, "无法保存批量结果")
+		return
+	}
+	if s.output.Mode == presetSaveFixed && s.output.Directory == "" {
+		s.setMessage("请选择固定输出目录", true)
+		return
+	}
 	if s.batch.outputMode == batchOutputOverwrite {
 		s.pendingBatchRun = mode
 		s.pendingBatchIndex = singleIndex
@@ -937,7 +949,7 @@ func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 		s.confirmBatchOverwrite = true
 		return
 	}
-	if s.batch.outputDir == "" {
+	if s.output.Mode == presetSaveAsk {
 		s.promptOutputDirAndStartMode(mode, singleIndex)
 		return
 	}
@@ -946,11 +958,16 @@ func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 
 func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex int) {
 	s.busy, s.phase = true, "请选择输出文件夹"
+	defaultPath := s.batch.outputDir
+	if defaultPath == "" {
+		defaultPath = usableBatchOutputDir(s.batchOutputDir)
+	}
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:            s.window,
 			Title:             "选择压缩结果输出文件夹",
 			ButtonLabel:       "选择此文件夹",
+			DefaultPath:       defaultPath,
 			Directory:         true,
 			CreateDirectories: true,
 		})
@@ -963,9 +980,14 @@ func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex
 			if len(paths) == 0 || s.batch == nil {
 				return
 			}
+			tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
+			if s.batch.outputDir != paths[0] {
+				s.resetBatchRunState()
+				usedPaths = make(map[string]bool)
+			}
 			s.batch.outputDir = paths[0]
 			s.rememberBatchOutputDir(paths[0])
-			s.launchBatchWorkerMode(mode, singleIndex)
+			s.launchPreparedBatchWorker(tasks, usedPaths)
 		})
 	}()
 }
@@ -993,6 +1015,10 @@ func (s *application) launchBatchWorkerMode(mode batchRunMode, singleIndex int) 
 		return
 	}
 	tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
+	s.launchPreparedBatchWorker(tasks, usedPaths)
+}
+
+func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map[string]bool) {
 	if len(tasks) == 0 {
 		return
 	}
@@ -1050,7 +1076,7 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 			usedPaths[item.savedPath] = true
 		}
 		if match(i, item) {
-			tasks = append(tasks, batchTask{index: i, path: item.path, relPath: item.relPath})
+			tasks = append(tasks, batchTask{index: i, path: item.path, relPath: item.relPath, output: s.output})
 		}
 	}
 	return tasks, usedPaths
@@ -1065,7 +1091,7 @@ func (s *application) runBatchTasks(
 	usedPaths map[string]bool,
 	deliver func(func()),
 ) {
-	if outputMode == batchOutputFolder {
+	if outputMode == batchOutputFolder && outputDir != "" {
 		info, err := os.Stat(outputDir)
 		if err != nil || !info.IsDir() {
 			errText := "输出文件夹不存在或不可访问"
@@ -1118,7 +1144,12 @@ func (s *application) runBatchTasks(
 			continue
 		}
 		if outputMode == batchOutputFolder {
-			dest, pathErr := resolveBatchOutputPath(outputDir, task.path, task.relPath, usedPaths)
+			output := task.output
+			// A nonempty destination is the immutable directory chosen for this run.
+			if outputDir != "" {
+				output.Mode = presetSaveFixed
+			}
+			dest, pathErr := output.copyPath(task.path, outputDir, task.relPath, usedPaths)
 			if pathErr == nil {
 				pathErr = os.MkdirAll(filepath.Dir(dest), 0o755)
 			}
@@ -1278,25 +1309,35 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 		return "", errors.New("输出路径超出目标文件夹范围")
 	}
 	sourceCanon := canonicalBatchKey(sourceAbs)
-	canUse := func(path string) bool {
+	canUse := func(path string) (bool, error) {
 		if path == sourceAbs || canonicalBatchKey(path) == sourceCanon || used[path] {
-			return false
+			return false, nil
 		}
 		_, statErr := os.Lstat(path)
-		return errors.Is(statErr, os.ErrNotExist)
-	}
-	if canUse(candidate) {
-		used[candidate] = true
-		return candidate, nil
+		if errors.Is(statErr, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, statErr
 	}
 	ext := filepath.Ext(candidate)
 	stem := strings.TrimSuffix(candidate, ext)
-	alt := stem + "-compressed" + ext
-	for index := 2; !canUse(alt); index++ {
-		alt = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
+	for index := 0; ; index++ {
+		path := candidate
+		if index == 1 {
+			path = stem + "-compressed" + ext
+		}
+		if index > 1 {
+			path = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
+		}
+		ok, err := canUse(path)
+		if err != nil {
+			return "", fmt.Errorf("无法检查输出路径：%w", err)
+		}
+		if ok {
+			used[path] = true
+			return path, nil
+		}
 	}
-	used[alt] = true
-	return alt, nil
 }
 
 func (s *application) openOutputDir() {

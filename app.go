@@ -44,11 +44,13 @@ type application struct {
 	quality        float64
 	scheme         string
 	png            compress.PNGOptions
+	output         presetSaveOptions
 	advanced       bool
 	settingsOpen   bool
 	settingsFile   string
 	settingsError  string
 	presets        []compressionPreset
+	presetTabName  string
 	editor         *presetEditor
 	result         *compress.Result
 	preview        *ui.Bitmap
@@ -353,7 +355,7 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 	if result.Unchanged {
 		s.setMessage("未减小，已保留原始数据", false)
 	} else {
-		s.setMessage("压缩完成，可以另存副本或覆盖原图", false)
+		s.setMessage("压缩完成，可以按预设保存结果", false)
 	}
 }
 
@@ -375,12 +377,12 @@ func (s *application) reportError(err error, prefix string) {
 
 func (s *application) saveActiveAction() {
 	if s.batch != nil {
-		if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
+		if !s.batch.previewOpen && s.output.Mode == presetSaveAsk {
 			s.chooseOutputDir()
 		}
 		return
 	}
-	s.saveCopy()
+	s.savePresetResult()
 }
 
 func (s *application) saveCopy() {
