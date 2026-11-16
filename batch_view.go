@@ -20,8 +20,8 @@ func (s *application) batchListPanel(c *ui.Context) {
 				headerText = fmt.Sprintf("批量队列 · %d / %d 张", len(visible), len(s.batch.items))
 			}
 			ui.Text(c, headerText).
-				FontSize(14).FontWeight(500).FontFeatures("tnum").
-				SingleLine().Grow(1)
+				FontSize(16).FontWeight(500).FontFeatures("tnum").
+				SingleLine().TruncateMiddle().Width(0).Grow(1).Tooltip(headerText)
 			ui.Button(c.Key("batch-add-files"), "添加图片").Height(32).
 				KeyShortcuts(ui.Cmd, ui.KeyO).
 				Tooltip("添加更多图片 · " + shortcutLabel("O")).
@@ -87,7 +87,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 			})
 		}
 		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(8).
-			Background(t.Background).Clip().Children(func() {
+			Background(t.Surface).Clip().Children(func() {
 			if len(visible) == 0 {
 				s.batch.selected = -1
 				s.batch.listSelected = -1
@@ -214,21 +214,17 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 	item := s.batch.items[itemIndex]
 	statusText, statusColor := batchItemStatus(item, t)
 	detailText, detailColor := batchItemDetail(item, t)
-	background, border := t.Surface, t.Border
+	background, border := t.Surface, ui.Transparent
 	if r.Selected() {
-		background = t.Surface.Mix(t.Accent, 0.08)
-		if t.Dark {
-			background = t.Surface.Mix(t.Accent, 0.16)
-		}
-		border = t.Accent
+		background, border = selectionBackground(c), t.Accent.Alpha(0.6)
 	} else if r.Hovered() {
 		background = t.SurfaceHover
 	}
-	ui.Box(c).FillWidth().Background(t.Background).Children(func() {
+	ui.Box(c).FillWidth().Background(t.Surface).Children(func() {
 		ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
 			Radius(12).Background(background).Border(1, border).Children(func() {
 			s.batchThumbnailView(c, item)
-			ui.Column(c).Width(0).Grow(1).Gap(6).Children(func() {
+			ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, item.relPath).FontSize(13).FontWeight(500).
 						TextColor(t.Text).SingleLine().TruncateMiddle().
@@ -242,7 +238,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 					meta += fmt.Sprintf(" · %d × %d", item.width, item.height)
 				}
 				ui.Text(c, meta).FontSize(12).FontFeatures("tnum").
-					TextColor(t.TextMuted).SingleLine()
+					TextColor(metadataColor(c)).SingleLine()
 				ui.Text(c, batchItemSizeDetail(item)).FontSize(12).FontFeatures("tnum").
 					TextColor(detailColor).SingleLine().TruncateMiddle().
 					Tooltip(detailText)
@@ -256,7 +252,7 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 	entry := s.batchThumbnail(item)
 	label := item.relPath + " 缩略图"
 	unavailable := item.invalidInput || entry == nil || entry.failed
-	ui.Box(c).Size(64, 64).Shrink(0).Radius(8).Background(t.Background).
+	ui.Box(c).Size(64, 64).Shrink(0).Radius(4).Background(t.Background).
 		Clip().Role(ui.RoleImage).Label(label).Children(func() {
 		if entry != nil && entry.bitmap != nil {
 			ui.Image(c, entry.bitmap).Fill().Fit(ui.Contain)
@@ -382,6 +378,8 @@ func (s *application) hasAdjacentBatchPreview(delta int) bool {
 
 func (s *application) batchPreviewPanel(c *ui.Context) {
 	t := c.Theme()
+	width, _ := c.Size()
+	compact := width < 960
 	previewIdx := s.batch.previewIndex
 	var previewItem *batchItem
 	if previewIdx >= 0 && previewIdx < len(s.batch.items) {
@@ -399,7 +397,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				posCurrent, posTotal = pos+1, len(visible)
 			}
 			ui.Textf(c, "%d / %d", posCurrent, posTotal).
-				FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).SingleLine().Grow(1)
+				FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Grow(1)
 			ui.Button(c.Key("batch-prev"), "上一张").Height(32).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
 				Tooltip("上一张 · " + shortcutLabel("[")).
@@ -410,12 +408,20 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				Tooltip("下一张 · " + shortcutLabel("]")).
 				Disabled(s.busy || !s.hasAdjacentBatchPreview(1)).
 				OnClick(func() { s.stepBatchPreview(1) })
-			if s.result != nil && !s.overwritten {
+			if s.result != nil && !s.overwritten && !compact {
 				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
-					Label("预览模式").FillEqually().Width(176).Height(32).
+					Label("预览模式").FillEqually().Width(168).Height(32).
 					Disabled(s.previewLocked())
 			}
 		})
+		if s.result != nil && !s.overwritten && compact {
+			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "预览模式").FontSize(12).TextColor(metadataColor(c)).Grow(1)
+				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+					Label("预览模式").FillEqually().Width(168).Height(32).
+					Disabled(s.previewLocked())
+			})
+		}
 		if s.preview != nil {
 			s.previewToolbar(c)
 		}
@@ -509,18 +515,18 @@ func (s *application) batchControls(c *ui.Context) {
 	_, pending, done, _, _, _, canRun := s.batchStats()
 	switch {
 	case (pending > 0 && done == 0) || !canRun:
-		ui.PrimaryButton(c.Key("batch-start"), "开始压缩").Height(40).
+		primaryAction(c, "batch-start", "开始压缩", s.busy || !canRun).Height(40).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).
 			Tooltip("开始批量压缩 · " + shortcutLabel("↵")).
-			Disabled(s.busy || !canRun).OnClick(s.startBatchCompression)
+			OnClick(s.startBatchCompression)
 	case pending > 0 && done > 0:
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Button(c.Key("batch-restart"), "重新压缩").Grow(1).Height(36).
 				Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
-			ui.PrimaryButton(c.Key("batch-continue"), "继续压缩").Grow(1).Height(36).
+			primaryAction(c, "batch-continue", "继续压缩", s.busy).Grow(1).Height(36).
 				KeyShortcuts(ui.Cmd, ui.KeyEnter).
 				Tooltip("继续压缩剩余图片 · " + shortcutLabel("↵")).
-				Disabled(s.busy).OnClick(s.startBatchCompression)
+				OnClick(s.startBatchCompression)
 		})
 	default:
 		if s.batch.outputMode == batchOutputFolder && s.batch.outputDir != "" && done > 0 {
@@ -528,8 +534,8 @@ func (s *application) batchControls(c *ui.Context) {
 				ui.Button(c.Key("batch-restart"), "重新压缩").Grow(1).Height(36).
 					KeyShortcuts(ui.Cmd, ui.KeyEnter).
 					Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
-				ui.PrimaryButton(c.Key("batch-open-output"), "打开输出文件夹").Grow(1).Height(36).
-					Disabled(s.busy).OnClick(s.openOutputDir)
+				primaryAction(c, "batch-open-output", "打开输出文件夹", s.busy).Grow(1).Height(36).
+					OnClick(s.openOutputDir)
 			})
 		} else {
 			ui.Button(c.Key("batch-restart"), "重新压缩").Height(36).
@@ -537,20 +543,20 @@ func (s *application) batchControls(c *ui.Context) {
 				Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
 		}
 	}
-	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(t.TextMuted)
+	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 }
 
 func (s *application) batchOutputCard(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(t.Background).Children(func() {
+	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(t.Background).Children(func() {
 		if ui.Segmented(c.Key("batch-output-mode"), &s.batch.outputMode, "保存到文件夹", "覆盖原图").
-			Label("输出方式").FillEqually().Height(30).Disabled(s.busy).Changed() {
+			Label("输出方式").FillEqually().Height(32).Disabled(s.busy).Changed() {
 			if s.resetBatchRunState() {
 				s.setMessage("输出方式已切换，请重新压缩。", false)
 			}
 		}
 		if s.batch.outputMode == batchOutputFolder {
-			dirText, dirColor, dirTooltip := "压缩时选择输出文件夹", t.TextMuted, "将在开始压缩时选择保存文件夹"
+			dirText, dirColor, dirTooltip := "压缩时选择保存位置", metadataColor(c), "将在开始压缩时选择保存文件夹"
 			btnLabel := "选择位置"
 			if s.batch.outputDir != "" {
 				dirText = s.batch.outputDir
@@ -558,10 +564,10 @@ func (s *application) batchOutputCard(c *ui.Context) {
 				dirTooltip = s.batch.outputDir
 				btnLabel = "更改"
 			}
-			ui.Row(c).Height(28).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, dirText).FontSize(12).TextColor(dirColor).
-					SingleLine().TruncateMiddle().Grow(1).Tooltip(dirTooltip)
-				ui.Button(c.Key("batch-output-dir"), btnLabel).Height(28).
+					SingleLine().TruncateMiddle().Width(0).Grow(1).Tooltip(dirTooltip)
+				ui.Button(c.Key("batch-output-dir"), btnLabel).Height(32).
 					Disabled(s.busy).OnClick(s.chooseOutputDir)
 			})
 		} else {

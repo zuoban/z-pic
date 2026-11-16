@@ -131,7 +131,7 @@ func (s *application) previewToolbar(c *ui.Context) {
 			})
 		}
 		ui.Textf(c, "%.0f%%", scale*100).Width(52).FontSize(12).
-			FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted)
+			FontFeatures("tnum").TextAlign(ui.Center).TextColor(metadataColor(c))
 		ui.Button(c.Key("preview-fit"), "适应").Height(32).Disabled(locked).
 			KeyShortcuts(ui.Cmd, ui.Key0).
 			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
@@ -226,14 +226,14 @@ func (s *application) previewCanvas(c *ui.Context) {
 		}
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
-				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).
-					Padding(6, 8).Radius(6).Background(t.Surface).TextColor(t.Text).
+				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(8).Radius(4).Background(t.Surface).TextColor(t.Text).
 					SingleLine()
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).
-					Padding(6, 8).Radius(6).Background(t.Surface).TextColor(t.Text).
+				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(8).Radius(4).Background(t.Surface).TextColor(t.Text).
 					SingleLine()
 			}
 		})

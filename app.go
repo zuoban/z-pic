@@ -297,7 +297,7 @@ func (s *application) invalidateResult() {
 	}
 	if s.file != nil {
 		s.preview = s.file.preview
-		s.setMessage("参数已更新，请重新压缩。", false)
+		s.setMessage("参数已更新，请重新压缩", false)
 	}
 }
 
@@ -351,9 +351,9 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
 	if result.Unchanged {
-		s.setMessage("没有得到更小的文件，已保留原始数据。", false)
+		s.setMessage("未减小，已保留原始数据", false)
 	} else {
-		s.setMessage("压缩完成，可以另存副本或覆盖原图。", false)
+		s.setMessage("压缩完成，可以另存副本或覆盖原图", false)
 	}
 }
 

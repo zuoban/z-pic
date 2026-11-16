@@ -184,7 +184,7 @@ func (s *application) floatingBitmap(item batchItem) *ui.Bitmap {
 func (s *application) floatingView(c *ui.Context) {
 	applyTheme(c)
 	theme := c.Theme()
-	theme.Radius = 12
+	theme.Radius = 8
 	c.SetTheme(theme)
 	s.prepareFloatingThumbnails()
 	indices := s.floatingIndices()
@@ -216,7 +216,7 @@ func (s *application) floatingView(c *ui.Context) {
 	if over {
 		root.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			p.Stroke(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 2, W: bounds.W - 4, H: bounds.H - 4},
-				theme.Accent, 18, 2)
+				theme.Accent, 16, 2)
 		})
 	}
 	root.Children(func() {
@@ -229,7 +229,7 @@ func (s *application) floatingView(c *ui.Context) {
 					OnClick(s.showMainWindow)
 				ui.Box(c).Grow(1)
 				ui.Button(c.Key("floating-downloads"), "下载位置").Height(28).
-					Tooltip("打开网页图片原件的下载文件夹").
+					Tooltip("打开网页原图下载文件夹").
 					OnClick(s.openDownloadedImagesDir)
 			})
 			return
@@ -251,11 +251,11 @@ func (s *application) floatingView(c *ui.Context) {
 		}
 		ui.Row(c).FillWidth().Center().Children(func() {
 			ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 8).Gap(4).
-				Radius(14).Background(theme.Text.Alpha(0.07)).Label(label).
+				Radius(8).Background(theme.Text.Alpha(0.04)).Label(label).
 				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
 				OnClick(func() { s.setFloatingExpanded(true) }).Children(func() {
 				ui.Text(c, label).FontSize(12).FontWeight(500)
-				floatingIcon(c, "right", 12, theme.TextMuted)
+				floatingIcon(c, "right", 16, theme.TextMuted)
 			})
 		})
 		s.floatingFeedback(c)
@@ -293,10 +293,10 @@ func (s *application) floatingStack(c *ui.Context) {
 					rect.X, rect.Y = centerX-rect.W/2, centerY-rect.H/2
 				}
 				p.Transform(ui.Rotation(angle), centerX, centerY, func() {
-					p.Shadow(rect, 6, 0, 4, 10, 0, ui.Hex("#000000").Alpha(0.2))
-					p.Fill(rect, theme.Surface, 6)
+					p.Shadow(rect, 8, 0, 4, 8, 0, ui.Hex("#000000").Alpha(0.16))
+					p.Fill(rect, theme.Surface, 8)
 					if bitmap != nil {
-						p.Clip(rect, 6, func() { p.Image(bitmap, rect, ui.Contain) })
+						p.Clip(rect, 8, func() { p.Image(bitmap, rect, ui.Contain) })
 					} else {
 						drawFloatingIcon(p, ui.Rect{X: centerX - 12, Y: centerY - 12, W: 24, H: 24},
 							"photo", theme.TextMuted)
@@ -315,11 +315,11 @@ func (s *application) floatingHeader(c *ui.Context) {
 	ui.Row(c).Height(40).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		floatingIconButton(c, "floating-collapse", "收起图片", "back",
 			func() { s.setFloatingExpanded(false) })
-		ui.Column(c).Grow(1).Width(0).Gap(2).Children(func() {
-			ui.Textf(c, "%d 张图片", s.floatingImageCount()).FontSize(16).FontWeight(600)
+		ui.Column(c).Grow(1).Width(0).Gap(4).Children(func() {
+			ui.Textf(c, "%d 张图片", s.floatingImageCount()).FontSize(16).FontWeight(500)
 			detail := "拖入本地或网页图片"
 			if item, ok := s.floatingSelectedImage(); ok {
-				detail = "选择：1 张图片 · " + formatSize(item.originalSize)
+				detail = "已选 1 张 · " + formatSize(item.originalSize)
 			}
 			ui.Text(c, detail).FontSize(12).TextColor(theme.TextMuted).SingleLine().TruncateMiddle()
 		})
@@ -339,7 +339,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(2).Padding(2).Radius(16).Background(theme.Text.Alpha(0.06)).Children(func() {
+		ui.Row(c).Gap(2).Padding(2).Radius(10).Background(theme.Text.Alpha(0.04)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -349,7 +349,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					func() { s.floating.listView = mode.list })
 				button.Selected(s.floating.listView == mode.list)
 				if s.floating.listView == mode.list {
-					button.Background(theme.Surface.Alpha(0.8))
+					button.Background(selectionBackground(c)).Border(1, theme.Accent.Alpha(0.6))
 				} else {
 					button.Background(ui.Transparent)
 				}
@@ -419,21 +419,18 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	if position == len(indices) {
 		_, selected := s.floatingSelectedImage()
 		foreground, iconColor := theme.Text, theme.TextMuted
-		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).
+		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(12).
 			Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 			Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 			OnClick(s.revealFloatingSelection)
 		if s.floating.cursor == position {
-			button.Radius(12).Background(theme.Accent)
-			foreground, iconColor = theme.AccentText, theme.AccentText
+			button.Background(selectionBackground(c)).Border(1, theme.Accent.Alpha(0.6))
 		}
-		iconSize := float32(36)
 		if list {
 			button.Height(56).Row().Gap(8)
-			iconSize = 28
 		}
 		button.Children(func() {
-			floatingIcon(c, "reveal", iconSize, iconColor)
+			floatingIcon(c, "reveal", 16, iconColor)
 			ui.Text(c, floatingRevealLabel()).FontSize(13).TextColor(foreground)
 		})
 		return
@@ -441,12 +438,13 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	item := s.floatingImage(indices[position])
 	bitmap := s.floatingBitmap(item)
 	selected := s.floating.cursor == position
-	background, foreground, secondary := ui.Transparent, theme.Text, theme.TextMuted
+	background, border := ui.Transparent, ui.Transparent
+	foreground, secondary := theme.Text, theme.TextMuted
 	if selected {
-		background, foreground, secondary = theme.Accent, theme.AccentText, theme.AccentText
+		background, border = selectionBackground(c), theme.Accent.Alpha(0.6)
 	}
 	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(12).Background(background).
-		Tooltip(item.path)
+		Border(1, border).Tooltip(item.path)
 	if list {
 		tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
 	}
@@ -464,7 +462,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 				width, height := bitmap.Size()
 				scale := min(maxWidth/float32(width), maxHeight/float32(height))
 				ui.Image(c, bitmap).Size(float32(width)*scale, float32(height)*scale).
-					Fit(ui.Contain).Radius(5).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
+					Fit(ui.Contain).Radius(4).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
 			} else {
 				floatingIcon(c, "photo", 32, secondary)
 				if item.invalidInput {
@@ -472,7 +470,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 				}
 			}
 		})
-		details := ui.Column(c).FillWidth().Gap(2)
+		details := ui.Column(c).FillWidth().Gap(4)
 		if list {
 			details.Width(0).Grow(1)
 		}
@@ -515,7 +513,7 @@ func (s *application) floatingFeedback(c *ui.Context) {
 	if failed {
 		color, role = theme.Danger, ui.RoleAlert
 	}
-	ui.Row(c).Height(32).Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 		tooltip := message
 		if len(s.dropFailures) > 0 {
 			tooltip = strings.Join(s.dropFailures, "\n\n")
@@ -537,15 +535,18 @@ func (s *application) floatingFeedback(c *ui.Context) {
 
 func floatingIconButton(c *ui.Context, key, label, icon string, action func()) ui.Element {
 	theme := c.Theme()
-	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(14).
-		Background(theme.Text.Alpha(0.07)).Label(label).Tooltip(label)
+	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(8).
+		Background(theme.Text.Alpha(0.04)).Label(label).Tooltip(label)
+	if icon == "close" || icon == "down" || icon == "back" {
+		button.Radius(14)
+	}
 	if button.Hovered() {
-		button.Background(theme.Text.Alpha(0.12))
+		button.Background(theme.Text.Alpha(0.08))
 	}
 	if action != nil {
 		button.OnClick(action)
 	}
-	button.Children(func() { floatingIcon(c, icon, 16, theme.Text) })
+	button.Children(func() { floatingIcon(c, icon, 16, theme.TextMuted) })
 	return button
 }
 
@@ -556,17 +557,18 @@ func floatingIcon(c *ui.Context, icon string, size float32, color ui.Color) {
 }
 
 func drawFloatingIcon(p *ui.Painter, bounds ui.Rect, icon string, color ui.Color) {
+	stroke := float32(1.5) * 24 / bounds.W
 	p.Transform(ui.Scaling(bounds.W/24, bounds.H/24), bounds.X, bounds.Y, func() {
 		line := func(points ...[2]float32) {
 			for index := range points {
 				points[index][0] += bounds.X
 				points[index][1] += bounds.Y
 			}
-			p.StrokePolyline(points, 1.8, color)
+			p.StrokePolyline(points, stroke, color)
 		}
 		rect := func(x, y, width, height, radius float32) {
 			p.Stroke(ui.Rect{X: bounds.X + x, Y: bounds.Y + y, W: width, H: height},
-				color, radius, 1.8)
+				color, radius, stroke)
 		}
 		switch icon {
 		case "close":

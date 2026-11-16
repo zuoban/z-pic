@@ -18,33 +18,33 @@ Quiet, precise, and practical. Show actual file sizes and explicit processing re
 - Character: calm, exact, and convenient.
 - World: a graphite image workbench, with neutral surfaces and the existing blue accent.
 - Moments: the selected image and the measured output size. Do not generate decorative imagery.
-- Signature: a quiet image canvas, paired with small keyboard keycaps.
+- Signature: paired source → output file sizes, with tabular figures and quiet keyboard keycaps.
 
 This is a polish pass, retaining the product, blue accent, system type, two-column layout, and section order.
 
-Observed issues in `view.go` and the native screenshot:
+The current native-window audit identified light slop and consistency problems:
 
-- Heading, filename, parameter values, and result labels all use weight 700, weakening hierarchy.
-- Settings use 10-point gaps while neighboring sections use 12/24, and the bottom caution falls to 11-point text.
-- The scheme selector hides the three common choices behind a popup.
-- Parameter values compete with the primary action through repeated accent color.
-- Output size has no stronger hierarchy than its surrounding labels.
-- The preview offers no direct way to compare the selected source with the compressed result.
-- Frequent open/compress/save actions expose no keyboard shortcuts.
+- Format and local-processing copy repeated across the header, empty canvas and footer.
+- Peer preview and scheme headings used different sizes; the scheme region and bottom actions had an uneven rhythm.
+- Scheme, settings, batch and floating selections used unrelated treatments, including solid blue gallery cells.
+- Batch output used 10-point padding and a 30-point segmented control outside the four-point scale.
+- Summary titles competed with savings and failure counts on the same line.
+- Batch mode advertised “另存” for a shortcut that chooses the output folder.
+- The fixed 880-point minimum and crowded batch-preview toolbar limited narrow-window use.
 
-Implementation plan, in the unslop pass order:
+Applied refinements, in the unslop pass order:
 
-1. Normalize spacing and panel density on a four-point grid.
-2. Quiet the surfaces and borders, retaining system light/dark preferences and the blue accent.
-3. Keep icons restrained; use one native line illustration only in the empty preview.
-4. Shorten supporting copy without removing format or overwrite warnings.
-5. Use system type at weights 400–600, with tabular figures for values.
-6. Preserve preview, scheme selection, results, and actions on the main window; maintain named compression schemes in a separate native settings dialog.
-7. Add source/result comparison and discoverable open/compress/save shortcuts, preserving all existing operation guards.
-8. Keep visual richness in the actual image and actual output size.
-9. Retain only native feedback motion; add no decorative animation.
+1. Use four-point spacing, bounded scrollable scheme lists and stable bottom actions; fit the scheme list before assigning spare space.
+2. Retain graphite light/dark surfaces and blue #2563eb, with primary, secondary and metadata text roles, quiet 8%-opacity hairlines, and restrained selection fills.
+3. Keep contextual image illustrations; render normal floating action icons at 16 points with an actual 1.5-point stroke.
+4. Consolidate empty-state format/limit copy, shorten supporting text, and show mode-specific shortcut hints while preserving loss and overwrite warnings.
+5. Keep system type at weights 400–600, align peer headings at 16 points, and use tabular figures with compact sizes that retain the displayed units.
+6. Keep the existing two-column workspace, settings sheet and floating states; adapt page padding, control-column width and comparison-tool rows to narrower windows.
+7. Share a light accent tint and outline across selections, retain separate keyboard focus, give disabled primary actions a neutral fill, and place summary status below the size comparison.
+8. Keep visual richness in real source images, before/after inspection and measured output sizes; add no generated images or invented data.
+9. Preserve native interaction feedback without adding decorative motion.
 
-Validation: existing behavior tests before edits; targeted tests for preset selection, comparison and guarded shortcuts; minimum-window, keyboard, light/dark layout checks; full tests/race/vet/MyGo vet; fresh native-window smoke checks and screenshots.
+Validation completed: the full Go suite plus temporary light/dark visual scenarios passed (741 checks across five packages), MyGo vet passed, and the native automation build ran successfully. Layout scenarios covered 760-, 880- and 980-point regression cases, 760/980/1440-point visual cases, minimum settings, long paths, failures and floating states. Native smoke checks exercised actual JPEG compression (517.3 KiB → 134.7 KiB), zoom/fit, settings duplication/cancellation without losing results, filename search/reset, queue preview/return, and floating expansion/grid/list switching. Captures are in `build/verification/ui-polish/`; the temporary review source is removed after verification.
 
 Workflow reference: unslop by Damir Sokolovsky (@heydamir), CC BY 4.0.
 
@@ -87,15 +87,15 @@ One main window, one modal child settings window, and an optional floating drop 
 ## Visual language
 
 - Follow the desktop's light/dark theme using MyGo's semantic theme colors.
-- Use the system font with a restrained hierarchy: window heading, section title, body, secondary labels.
-- Spacing: a four-point grid, with 8/12-point control gaps, 16/20-point panel padding, and 24-point page edges.
-- A single blue accent for the primary action, active controls, and keyboard focus. Parameter numbers use neutral tabular figures.
+- Use the system font: 24-point window headings, 16-point peer section headings, 13-point body/control text and 12-point metadata. Primary and secondary text use theme roles; metadata uses #707078 in light mode and #92929c in dark mode.
+- Spacing: a four-point grid, 8/12-point control gaps and 16/20-point panel padding. Main page edges are 24 points on desktop and 16 below 960 points wide.
+- A single blue #2563eb accent for primary actions, selection outlines and keyboard focus. Selected surfaces mix 6% accent in light mode and 12% in dark mode, with a 1-point 60%-opacity accent border and ordinary text colors; focus remains independently visible. Disabled primary actions use neutral surfaces and preserve their disabled semantics.
 - Controls use 8-point corners; panels use 16-point corners. Surfaces and hairlines remain neutral.
-- Text weights are 400–600; output size gets a stronger scale than supporting labels.
+- Text weights are 400–600. Source/output summary figures use 18/24 points on desktop and 16/20 points below 960 points wide, with a wider output column, tabular digits and status on its own line.
 - Images are contained without cropping. Transparent pixels and unused canvas space show the plain theme background.
 - No nonessential animation.
-- Batch queue items stack vertically as thumbnail cards: a 64-point aspect-fit image at left, filename and textual status above dimensions and file sizes, 12-point internal spacing, and 8-point gaps between cards. Use a blue outline with a light accent tint for selection, preserving readable status colors and native keyboard focus. Thumbnail failures use a neutral “无预览” placeholder without hiding the file's processing error.
-- The floating drop window uses a native blurred popover material when available, with an opaque system-theme fallback, 20-point window corners, 8-point outer padding, 4-point section gaps, and 28-point circular icon controls. Compact images overlap at −9°, +7°, and 0° with soft offset shadows, scaling within the available height so feedback remains unobstructed. Expanded grids use 136-point minimum columns and 128-point rows; lists use 56-point rows. Cells show aspect-fit rounded images, truncated names and measured sizes, with the existing blue accent and white text for selection. Highlight the panel perimeter during native drags and change the compact count pill to “松开加入队列”. Status and persistent errors retain full-message tooltips and acknowledgment/cancel actions.
+- Batch queue items stack vertically as thumbnail rows: a 64-point aspect-fit image with 4-point corners, filename and textual status above dimensions and file sizes, 12-point internal padding, 4-point text gaps and 8-point gaps between rows. Unselected rows share the neutral panel surface; selection uses the shared tint/outline without replacing native focus. Thumbnail failures retain a neutral “无预览” placeholder and the processing error.
+- The floating drop window retains native blurred popover material with an opaque theme fallback, 20-point window corners, 8-point outer padding and 4-point section gaps. Its 28-point window close/back controls remain circular; other 28-point action controls use 8-point corners and 16-point icons with 1.5-point strokes. Compact images retain −9°, +7°, and 0° stacking with soft neutral shadows. Expanded grids retain 136-point minimum columns and 128-point rows; lists retain 56-point rows. Image cells and view switches use the same selection tint/outline and normal text colors as the main app. Drag highlighting, the “松开加入队列” count pill, status/error tooltips and acknowledgment/cancel actions are preserved.
 
 ## Components
 
@@ -111,7 +111,7 @@ On the main window, Command/Ctrl+O selects or adds images, Command/Ctrl+Enter st
 
 ## Responsive behavior
 
-Desktop-first: main window defaults to 980 × 720 points, minimum 880 × 660; settings defaults to 820 × 620, minimum 760 × 560. The main window keeps results and actions fixed while long scheme lists scroll. Settings keeps its header and Save/Cancel footer fixed; scheme list and parameter editor scroll independently. Advanced parameters remain keyboard reachable at minimum size. Long names are clipped or truncated with full-value tooltips where available. No mobile target.
+Desktop-first: the main window defaults to 980 × 720 points, minimum 760 × 660; settings defaults to 820 × 650, minimum 760 × 560. Below 960 points wide the main page uses 16-point edges/gaps and a 280-point control column instead of 24-point edges, a 20-point gap and a 320-point column. Batch preview moves comparison modes onto a separate row in that range, preserving navigation and zoom controls. The main window keeps results/actions stable while scheme choices scroll when space is constrained. Settings keeps its header and Save/Cancel footer fixed; scheme list and parameter editor scroll independently. Advanced parameters remain keyboard reachable at minimum size. Long paths retain truncation and full-value tooltips. This iteration targets native desktop and narrow windows; a mobile website or application remains a separate platform scope.
 
 The floating panel changes size explicitly, keeping its nearer horizontal edge and top position where possible and clamping both states to the current display's work area. Expanded grids adapt their column count and virtualize offscreen cells; list mode also virtualizes. Main and floating windows share the existing 96-entry, 144-pixel thumbnail cache and one decoder, with independent visible-item demand and fair scheduling.
 

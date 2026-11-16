@@ -19,24 +19,52 @@ func applyTheme(c *ui.Context) {
 		theme.SurfaceHover = ui.Hex("#29292e")
 		theme.SurfacePressed = ui.Hex("#34343a")
 		theme.Text = ui.Hex("#ededee")
-		theme.TextMuted = ui.Hex("#a1a1aa")
+		theme.TextMuted = ui.Hex("#b0b0b8")
 	} else {
 		theme.Background = ui.Hex("#f7f7f8")
 		theme.Surface = ui.Hex("#ffffff")
 		theme.SurfaceHover = ui.Hex("#f0f0f3")
 		theme.SurfacePressed = ui.Hex("#e6e6eb")
 		theme.Text = ui.Hex("#202025")
-		theme.TextMuted = ui.Hex("#686870")
+		theme.TextMuted = ui.Hex("#565660")
 		theme.Success = ui.Hex("#15803d")
 	}
-	theme.Border = theme.Text.Alpha(0.10)
+	theme.Border = theme.Text.Alpha(0.08)
 	c.SetTheme(theme)
+}
+
+func metadataColor(c *ui.Context) ui.Color {
+	if c.Theme().Dark {
+		return ui.Hex("#92929c")
+	}
+	return ui.Hex("#707078")
+}
+
+func selectionBackground(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if t.Dark {
+		return t.Surface.Mix(t.Accent, 0.12)
+	}
+	return t.Surface.Mix(t.Accent, 0.06)
+}
+
+func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
+	button := ui.PrimaryButton(c.Key(key), label).Disabled(disabled)
+	if disabled {
+		button.Background(c.Theme().SurfacePressed).TextColor(c.Theme().TextMuted).DimDisabled(false)
+	}
+	return button
 }
 
 func (s *application) view(c *ui.Context) {
 	applyTheme(c)
 	s.prepareBatchThumbnails()
 	theme := c.Theme()
+	width, _ := c.Size()
+	pagePadding, panelGap := float32(24), float32(20)
+	if width < 960 {
+		pagePadding, panelGap = 16, 16
+	}
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
@@ -59,38 +87,40 @@ func (s *application) view(c *ui.Context) {
 			c.OnWindowShortcut(ui.Cmd, ui.Key1, s.zoomPreviewActual)
 		}
 	}
-	ui.Column(c).Fill().Padding(24).Gap(20).Background(theme.Background).Children(func() {
-		ui.Row(c).Height(48).Gap(16).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Fill().Padding(pagePadding).Gap(16).Background(theme.Background).Children(func() {
+		ui.Row(c).Height(48).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(4).Grow(1).Children(func() {
 				ui.Text(c, "Z Pic").FontSize(24).FontWeight(600)
-				ui.Text(c, "图片压缩，尺寸不变").FontSize(12).TextColor(theme.TextMuted)
+				ui.Text(c, "图片压缩，尺寸不变").FontSize(12).TextColor(metadataColor(c))
 			})
-			ui.Text(c, "JPEG / PNG / WebP").FontSize(12).TextColor(theme.TextMuted)
-			ui.Box(c).Size(1, 12).Background(theme.Border)
-			ui.Text(c, "本地处理").FontSize(12).TextColor(theme.TextMuted)
 			floatingLabel := "悬浮窗"
 			if s.floatingOpen {
 				floatingLabel = "收起悬浮窗"
 			}
-			ui.Button(c.Key("toggle-floating"), floatingLabel).Height(36).
+			ui.Button(c.Key("toggle-floating"), floatingLabel).Height(32).
 				Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 				OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
-			ui.Button(c.Key("open-settings"), "设置").Height(36).
+			ui.Button(c.Key("open-settings"), "设置").Height(32).
 				KeyShortcuts(ui.Cmd, ui.KeyComma).
 				Tooltip("打开设置（" + shortcutLabel(",") + "）").
 				Disabled(s.busy || s.confirmOverwrite || s.confirmBatchOverwrite).
 				OnClick(func() { s.setSettingsOpen(true) })
 		})
-		ui.Row(c).Grow(1).FillWidth().Gap(20).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).Grow(1).FillWidth().Gap(panelGap).AlignItems(ui.Stretch).Children(func() {
 			s.previewPanel(c)
 			s.controlsPanel(c)
 		})
-		ui.Row(c).Height(20).Gap(16).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本机压缩，网页图片仅在下载时联网").FontSize(12).
-				TextColor(theme.TextMuted).Grow(1)
+		ui.Row(c).Height(20).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "本机压缩 · 网页图片仅在下载时联网").FontSize(12).
+				TextColor(metadataColor(c)).Width(0).Grow(1).SingleLine().
+				Tooltip("本地图片在本机处理；仅下载网页图片时需要联网")
 			shortcutHint(c, "打开", "O")
 			shortcutHint(c, "压缩", "↵")
-			shortcutHint(c, "另存", "S")
+			if s.batch == nil {
+				shortcutHint(c, "另存", "S")
+			} else if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
+				shortcutHint(c, "输出位置", "S")
+			}
 			shortcutHint(c, "设置", ",")
 		})
 	})
@@ -116,9 +146,9 @@ func shortcutLabel(key string) string {
 func shortcutHint(c *ui.Context, label, key string) {
 	t := c.Theme()
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted)
-		ui.Text(c, shortcutLabel(key)).FontSize(12).TextColor(t.TextMuted).
-			Padding(0, 4).Radius(4).Border(1, t.Border)
+		ui.Text(c, label).FontSize(12).TextColor(metadataColor(c))
+		ui.Text(c, shortcutLabel(key)).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
+			Padding(0, 4).Radius(4).Background(t.Surface).Border(1, t.Border)
 	})
 }
 
@@ -135,10 +165,10 @@ func (s *application) previewPanel(c *ui.Context) {
 	ui.Column(c).Grow(1).MinWidth(340).Padding(16).Gap(12).
 		Radius(16).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Height(32).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "图片预览").FontSize(14).FontWeight(500).Grow(1)
+			ui.Text(c, "图片预览").FontSize(16).FontWeight(500).Width(0).Grow(1).SingleLine()
 			if s.result != nil && !s.overwritten {
 				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
-					Label("预览模式").FillEqually().Width(192).Height(32).
+					Label("预览模式").FillEqually().Width(168).Height(32).
 					Disabled(s.previewLocked())
 			}
 			if s.file != nil {
@@ -166,17 +196,19 @@ func (s *application) previewPanel(c *ui.Context) {
 						}, 1.5, t.TextMuted)
 					})
 					ui.Text(c, "选择或拖入图片").FontSize(20).FontWeight(500)
-					ui.Text(c, "把单张、多张图片或文件夹拖到这里，或从文件中选择").FontSize(13).TextColor(t.TextMuted)
+					ui.Text(c, "支持单张、多张图片或文件夹").FontSize(13).TextColor(t.TextMuted)
 					ui.Row(c).Gap(8).Margin(4, 0).Children(func() {
-						ui.PrimaryButton(c.Key("select"), "选择图片").Height(40).
+						primaryAction(c, "select", "选择图片", s.busy).Height(40).
 							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
-							Disabled(s.busy).OnClick(s.chooseFile)
+							OnClick(s.chooseFile)
 						ui.Button(c.Key("select-folder"), "选择文件夹").Height(40).
 							Tooltip("选择包含图片的文件夹").
 							Disabled(s.busy).OnClick(s.chooseFolder)
 					})
-					ui.Text(c, "JPEG / PNG / WebP · 支持多张或文件夹 · 单张最大 64 MiB / 3200 万像素").
-						FontSize(12).TextColor(t.TextMuted)
+					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "JPEG / PNG / WebP").FontSize(12).TextColor(metadataColor(c))
+						ui.Text(c, "单张最大 64 MiB · 3200 万像素").FontSize(12).TextColor(metadataColor(c))
+					})
 				})
 				return
 			}
@@ -188,12 +220,12 @@ func (s *application) previewPanel(c *ui.Context) {
 					SingleLine().TruncateMiddle().Tooltip(s.file.path)
 				ui.Textf(c, "%s  ·  %d × %d  ·  %s",
 					strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size)).
-					FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted)
+					FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
 			})
 		} else {
 			ui.Column(c).Gap(4).Children(func() {
-				ui.Text(c, "预览细节，或批量处理多张图片").FontSize(13).FontWeight(500)
-				ui.Text(c, "保留图片尺寸，支持另存副本、批量输出到文件夹或确认覆盖").FontSize(12).TextColor(t.TextMuted)
+				ui.Text(c, "压缩后可对比画质").FontSize(13).FontWeight(500)
+				ui.Text(c, "另存副本、输出到文件夹，或确认后覆盖原图").FontSize(12).TextColor(metadataColor(c))
 			})
 		}
 	})
@@ -201,22 +233,29 @@ func (s *application) previewPanel(c *ui.Context) {
 
 func (s *application) controlsPanel(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(320).Shrink(0).Padding(16).Gap(8).Radius(16).
+	width, _ := c.Size()
+	panelWidth := float32(320)
+	if width < 960 {
+		panelWidth = 280
+	}
+	ui.Column(c).Width(panelWidth).Shrink(0).Padding(16).Gap(12).Radius(16).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Height(24).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "压缩方案").FontSize(18).FontWeight(500).Grow(1)
+			ui.Text(c, "压缩方案").FontSize(16).FontWeight(500).Grow(1)
 		})
-		ui.Text(c, "在「设置」中新增或编辑压缩方案。").
-			FontSize(12).TextColor(t.TextMuted).Margin(4, 0)
-		ui.Scroll(c.Key("schemes")).Grow(1).MinHeight(68).Children(func() {
+		ui.Text(c, "在设置中管理方案").
+			FontSize(12).TextColor(metadataColor(c))
+		ui.Scroll(c.Key("schemes")).Height(min(float32(len(s.presets)*40+4), 184)).
+			MinHeight(76).Shrink(1).Children(func() {
 			s.presetControl(c)
 		})
+		ui.Box(c).Grow(1)
 		if s.batch != nil {
 			s.batchControls(c)
 			return
 		}
 		if s.file != nil && s.file.format == "png" {
-			ui.Text(c, "PNG 使用有损压缩，渐变与半透明边缘可能变化。").
+			ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
 				FontSize(12).TextColor(t.TextMuted)
 		}
 		s.resultSummary(c)
@@ -239,7 +278,7 @@ func (s *application) controlsPanel(c *ui.Context) {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
 						Width(0).Grow(1).MaxLines(2).Tooltip(s.message)
-					ui.Button(c.Key("reveal-saved"), "定位文件").Height(28).
+					ui.Button(c.Key("reveal-saved"), "定位文件").Height(32).
 						Disabled(s.busy).
 						Tooltip("在文件夹中显示输出文件").
 						OnClick(func() { s.revealFileInFolder(s.lastSavedPath) })
@@ -254,9 +293,9 @@ func (s *application) controlsPanel(c *ui.Context) {
 				ui.Button(c.Key("compress"), "重新压缩").Grow(1).Height(36).
 					KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("重新压缩 · " + shortcutLabel("↵")).
 					Disabled(s.busy).OnClick(s.startCompression)
-				ui.PrimaryButton(c.Key("save"), "另存副本").Grow(1).Height(36).
+				primaryAction(c, "save", "另存副本", s.busy).Grow(1).Height(36).
 					KeyShortcuts(ui.Cmd, ui.KeyS).Tooltip("另存副本 · " + shortcutLabel("S")).
-					Disabled(s.busy).OnClick(s.saveCopy)
+					OnClick(s.saveCopy)
 			})
 			label := "覆盖原图"
 			if s.overwritten {
@@ -265,11 +304,11 @@ func (s *application) controlsPanel(c *ui.Context) {
 			ui.Button(c.Key("overwrite"), label).Height(32).
 				TextColor(t.Danger).Disabled(!s.canOverwrite()).OnClick(s.requestOverwrite)
 		} else {
-			ui.PrimaryButton(c.Key("compress"), "开始压缩").Height(40).
+			primaryAction(c, "compress", "开始压缩", s.busy || s.file == nil).Height(40).
 				KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("开始压缩 · " + shortcutLabel("↵")).
-				Disabled(s.busy || s.file == nil).OnClick(s.startCompression)
+				OnClick(s.startCompression)
 		}
-		ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 	})
 }
 
@@ -279,12 +318,12 @@ func (s *application) presetControl(c *ui.Context) {
 	ui.RadioGroup(c.Key("scheme"), func() {
 		for _, preset := range s.presets {
 			segment := ui.RadioBase(c.Key("preset-"+preset.name), &scheme, preset.name).
-				Label(preset.name).FillWidth().Height(40).Padding(8, 12).AlignItems(ui.Center).Radius(8).
+				Label(preset.name).FillWidth().Height(36).Padding(8, 12).AlignItems(ui.Center).Radius(8).
 				Border(1, ui.Transparent).TextColor(t.TextMuted).
 				Disabled(s.busy || s.settingsOpen).
 				OnChange(func() { s.setScheme(scheme) })
 			if scheme == preset.name {
-				segment.Background(t.Surface).Border(1, t.Border).TextColor(t.Text)
+				segment.Background(selectionBackground(c)).Border(1, t.Accent.Alpha(0.6)).TextColor(t.Text)
 			} else if segment.Hovered() {
 				segment.Background(t.SurfaceHover)
 			}
@@ -308,10 +347,10 @@ func (s *application) settingsView(c *ui.Context) {
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.savePresetEdits)
 	ui.Column(c).Fill().Padding(20).Gap(16).Background(t.Background).
 		Role(ui.RoleDialog).Label("设置").Children(func() {
-		ui.Text(c, "设置").FontSize(24).FontWeight(600)
+		ui.Text(c, "设置").FontSize(24).FontWeight(500)
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Text(c, "压缩方案").FontSize(16).FontWeight(500)
-			ui.Text(c, "内置方案只读；可新增或编辑自定义方案，保存后可在主界面选择。").
+			ui.Text(c, "管理压缩参数，保存后在主界面选择使用").
 				FontSize(12).TextColor(t.TextMuted)
 		})
 		ui.Row(c).Grow(1).FillWidth().Gap(20).AlignItems(ui.Stretch).Children(func() {
@@ -329,12 +368,12 @@ func (s *application) settingsView(c *ui.Context) {
 							editor.message, editor.confirmDelete = "", false
 						})
 						if editor.selected == index {
-							button.Background(t.SurfacePressed)
+							button.Background(selectionBackground(c)).Border(1, t.Accent.Alpha(0.6))
 						}
 						button.Children(func() {
 							ui.Text(c, preset.name).FontSize(13).SingleLine().TruncateMiddle().Grow(1)
 							if preset.builtin {
-								ui.Badge(c, "内置")
+								ui.Text(c, "内置").FontSize(12).TextColor(metadataColor(c))
 							}
 						})
 					}
@@ -359,7 +398,6 @@ func (s *application) settingsView(c *ui.Context) {
 				if locked {
 					ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Radius(8).
 						Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Children(func() {
-						ui.Badge(c, "内置")
 						ui.Text(c, "内置方案不允许编辑或删除；如需调整可复制为自定义方案。").
 							FontSize(12).TextColor(t.TextMuted).Width(0).Grow(1)
 					})
@@ -377,7 +415,7 @@ func (s *application) settingsView(c *ui.Context) {
 						editor.message = ""
 					}
 				})
-				ui.Text(c, "JPEG / WebP").FontSize(14).FontWeight(500)
+				ui.Text(c, "JPEG / WebP").FontSize(16).FontWeight(500)
 				s.settingSlider(c, "quality", "JPEG / WebP 质量", preset.quality, 1, 100, locked, s.editQuality)
 				ui.Text(c, "较低质量通常带来更小体积，也会减少照片细节").
 					FontSize(12).TextColor(t.TextMuted)
@@ -406,8 +444,8 @@ func (s *application) settingsView(c *ui.Context) {
 				Grow(1).MaxLines(2).Tooltip(message)
 			ui.Button(c.Key("cancel-settings"), "取消").Width(72).Height(36).
 				Disabled(s.busy).OnClick(func() { s.setSettingsOpen(false) })
-			ui.PrimaryButton(c.Key("save-settings"), "保存").Width(88).Height(36).
-				KeyShortcuts(ui.Cmd, ui.KeyS).Disabled(s.busy || editor.confirmDelete).
+			primaryAction(c, "save-settings", "保存", s.busy || editor.confirmDelete).Width(88).Height(36).
+				KeyShortcuts(ui.Cmd, ui.KeyS).
 				OnClick(s.savePresetEdits)
 		})
 	})
@@ -433,7 +471,7 @@ func (s *application) overwriteConfirmation(c *ui.Context) {
 func (s *application) pngSettings(c *ui.Context, locked bool) {
 	t := c.Theme()
 	preset := s.editor.presets[s.editor.selected]
-	ui.Text(c, "PNG 有损压缩").FontSize(13).FontWeight(500)
+	ui.Text(c, "PNG 有损压缩").FontSize(16).FontWeight(500)
 	s.settingSlider(c, "png-quality", "目标质量", float64(preset.png.MaxQuality), 1, 100, locked, func(value float64) {
 		options := s.editor.presets[s.editor.selected].png
 		options.MaxQuality = int(value)
@@ -505,29 +543,43 @@ func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firs
 
 func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note string) {
 	t := c.Theme()
-	ui.Column(c).Padding(12).Gap(8).Radius(12).Background(t.Background).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, title).FontSize(12).TextColor(t.TextMuted).Grow(1)
-			ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(statusColor)
-		})
-		ui.Row(c).Gap(16).AlignItems(ui.End).Children(func() {
+	width, _ := c.Size()
+	compact := width < 960
+	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(t.Background).Children(func() {
+		ui.Text(c, title).FontSize(13).FontWeight(500)
+		ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
 			for index, row := range []struct{ label, value string }{
 				{firstLabel, firstValue}, {secondLabel, secondValue},
 			} {
-				ui.Column(c).Grow(1).Gap(4).Children(func() {
-					ui.Text(c, row.label).FontSize(12).TextColor(t.TextMuted)
+				if index == 1 {
+					ui.Text(c, "→").Width(12).Height(32).FontSize(16).TextColor(metadataColor(c))
+				}
+				grow := float32(1)
+				if index == 1 {
+					grow = 1.2
+				}
+				ui.Column(c).Width(0).Grow(grow).Gap(4).Children(func() {
+					ui.Text(c, row.label).FontSize(12).TextColor(metadataColor(c))
 					size := float32(18)
+					if compact {
+						size = 16
+					}
 					if index == 1 {
 						size = 24
+						if compact {
+							size = 20
+						}
 					}
 					ui.Text(c, row.value).FontSize(size).FontWeight(500).FontFeatures("tnum").
-						SingleLine().Height(32)
+						SingleLine().Height(32).Tooltip(row.value)
 				})
 			}
 		})
+		ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").
+			TextColor(statusColor).MaxLines(2).Tooltip(status)
 		if note != "" {
-			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
-				SingleLine().TruncateMiddle().Tooltip(note)
+			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
+				MaxLines(2).Tooltip(note)
 		}
 	})
 }

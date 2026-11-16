@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -497,82 +498,84 @@ func TestBatchQueueRemoveClearAndPreview(t *testing.T) {
 }
 
 func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
-	for _, dark := range []bool{false, true} {
-		name := "light"
-		if dark {
-			name = "dark"
-		}
-		t.Run(name, func(t *testing.T) {
-			s := newApplication()
-			s.batch = newBatchState([]batchItem{
-				{
-					path:         "/photos/" + strings.Repeat("很长的目录名/", 8) + "photo-1.jpg",
-					absPath:      "/photos/photo-1.jpg",
-					relPath:      strings.Repeat("nested/", 6) + "photo-1.jpg",
-					format:       "jpeg",
-					width:        1920,
-					height:       1080,
-					originalSize: 2 << 20,
-					outputSize:   1 << 20,
-					status:       batchDone,
-					savedPath:    "/out/photo-1.jpg",
-				},
-				{
-					path:         "/photos/photo-2.png",
-					absPath:      "/photos/photo-2.png",
-					relPath:      "photo-2.png",
-					format:       "png",
-					width:        800,
-					height:       600,
-					originalSize: 512 << 10,
-					status:       batchPending,
-				},
+	for _, width := range []int{760, 880, 980} {
+		for _, dark := range []bool{false, true} {
+			name := "light"
+			if dark {
+				name = "dark"
+			}
+			t.Run(fmt.Sprintf("%d/%s", width, name), func(t *testing.T) {
+				s := newApplication()
+				s.batch = newBatchState([]batchItem{
+					{
+						path:         "/photos/" + strings.Repeat("很长的目录名/", 8) + "photo-1.jpg",
+						absPath:      "/photos/photo-1.jpg",
+						relPath:      strings.Repeat("nested/", 6) + "photo-1.jpg",
+						format:       "jpeg",
+						width:        1920,
+						height:       1080,
+						originalSize: 2 << 20,
+						outputSize:   1 << 20,
+						status:       batchDone,
+						savedPath:    "/out/photo-1.jpg",
+					},
+					{
+						path:         "/photos/photo-2.png",
+						absPath:      "/photos/photo-2.png",
+						relPath:      "photo-2.png",
+						format:       "png",
+						width:        800,
+						height:       600,
+						originalSize: 512 << 10,
+						status:       batchPending,
+					},
+				})
+				s.batch.outputDir = "/Users/example/" + strings.Repeat("输出目录/", 6)
+				tt := ui.NewTester(func(c *ui.Context) {
+					theme := ui.LightTheme()
+					if dark {
+						theme = ui.DarkTheme()
+					}
+					c.SetTheme(theme)
+					s.view(c)
+				}, width, 660)
+
+				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
+					button, ok := tt.AccessByRole(ui.RoleButton, label)
+					if !ok || button.Offscreen || button.Bounds.H < 24 ||
+						button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > float32(width) {
+						t.Fatalf("%q must fit inside %dx660: %+v", label, width, button)
+					}
+				}
+				if _, ok := tt.AccessByRole(ui.RoleList, "批量图片列表"); !ok {
+					t.Fatal("batch view must expose virtualized list accessibility role")
+				}
+
+				// Busy state disables interactive controls and exposes progress/cancel.
+				s.busy = true
+				s.phase = "正在压缩 1 / 2 · photo-2.png"
+				s.batch.done, s.batch.total = 1, 2
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				s.cancel = cancel
+				_ = ctx
+				tt.Frame()
+
+				for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
+					button, ok := tt.AccessByRole(ui.RoleButton, label)
+					if !ok || !button.Disabled {
+						t.Errorf("%q must be disabled while batch is busy: %+v", label, button)
+					}
+				}
+				cancelBtn, ok := tt.AccessByRole(ui.RoleButton, "取消操作")
+				if !ok || cancelBtn.Disabled || cancelBtn.Offscreen {
+					t.Fatalf("cancel button must remain enabled and visible while busy: %+v", cancelBtn)
+				}
+				if _, ok := tt.AccessByRole(ui.RoleProgress, "批量压缩进度"); !ok {
+					t.Fatal("busy batch view must expose progress indicator")
+				}
 			})
-			s.batch.outputDir = "/Users/example/" + strings.Repeat("输出目录/", 6)
-			tt := ui.NewTester(func(c *ui.Context) {
-				theme := ui.LightTheme()
-				if dark {
-					theme = ui.DarkTheme()
-				}
-				c.SetTheme(theme)
-				s.view(c)
-			}, 880, 660)
-
-			for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
-				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || button.Offscreen || button.Bounds.H < 24 ||
-					button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > 880 {
-					t.Fatalf("%q must fit inside minimum window: %+v", label, button)
-				}
-			}
-			if _, ok := tt.AccessByRole(ui.RoleList, "批量图片列表"); !ok {
-				t.Fatal("batch view must expose virtualized list accessibility role")
-			}
-
-			// Busy state disables interactive controls and exposes progress/cancel.
-			s.busy = true
-			s.phase = "正在压缩 1 / 2 · photo-2.png"
-			s.batch.done, s.batch.total = 1, 2
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			s.cancel = cancel
-			_ = ctx
-			tt.Frame()
-
-			for _, label := range []string{"添加图片", "添加文件夹", "清空", "预览", "移除", "重新压缩", "继续压缩", "更改", "设置"} {
-				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || !button.Disabled {
-					t.Errorf("%q must be disabled while batch is busy: %+v", label, button)
-				}
-			}
-			cancelBtn, ok := tt.AccessByRole(ui.RoleButton, "取消操作")
-			if !ok || cancelBtn.Disabled || cancelBtn.Offscreen {
-				t.Fatalf("cancel button must remain enabled and visible while busy: %+v", cancelBtn)
-			}
-			if _, ok := tt.AccessByRole(ui.RoleProgress, "批量压缩进度"); !ok {
-				t.Fatal("busy batch view must expose progress indicator")
-			}
-		})
+		}
 	}
 }
 
@@ -1327,52 +1330,57 @@ func TestBatchPreviewQuickActionsAndMinimumWindowLayout(t *testing.T) {
 func TestBatchDonePreviewWithComparisonFitsMinimumWindow(t *testing.T) {
 	srcImg := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 24, 16)))
 	outImg := ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 24, 16)))
-	for _, dark := range []bool{false, true} {
-		name := "light"
-		if dark {
-			name = "dark"
+	for _, width := range []int{760, 880, 980} {
+		for _, dark := range []bool{false, true} {
+			name := "light"
+			if dark {
+				name = "dark"
+			}
+			t.Run(fmt.Sprintf("%d/%s", width, name), func(t *testing.T) {
+				items := make([]batchItem, 100)
+				for i := range items {
+					items[i] = batchItem{
+						path: "/p/img.jpg", absPath: "/p/img-" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".jpg",
+						relPath: "img.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048,
+						status: batchDone, savedPath: "/out/img.jpg",
+					}
+				}
+				s := newApplication()
+				s.batch = newBatchState(items)
+				s.completeBatchPreview(context.Background(), 99, s.batch.items[99],
+					&selectedImage{path: s.batch.items[99].path, format: "jpeg", width: 24, height: 16, size: 4096, preview: srcImg},
+					&compress.Result{SourcePath: s.batch.items[99].path, Format: "jpeg", Width: 24, Height: 16, OriginalSize: 4096, OutputSize: 2048},
+					outImg, nil)
+				tt := ui.NewTester(func(c *ui.Context) {
+					theme := ui.LightTheme()
+					if dark {
+						theme = ui.DarkTheme()
+					}
+					c.SetTheme(theme)
+					s.view(c)
+				}, width, 660)
+				if !tt.HasText("100 / 100") {
+					t.Fatalf("preview header must show 100 / 100 counter, texts=%v", tt.Texts())
+				}
+				for _, label := range []string{"返回列表", "上一张", "下一张", "缩小", "放大", "适应", "1:1", "移除"} {
+					button, ok := tt.AccessByRole(ui.RoleButton, label)
+					if !ok || button.Offscreen || button.Bounds.H < 24 || button.Bounds.X+button.Bounds.W > float32(width) || button.Bounds.Y+button.Bounds.H > 660 {
+						t.Fatalf("preview button %q must fit inside %dx660: %+v", label, width, button)
+					}
+				}
+				modeGroup, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
+				if !ok || modeGroup.Offscreen || modeGroup.Bounds.H < 24 || modeGroup.Bounds.X+modeGroup.Bounds.W > float32(width) {
+					t.Fatalf("comparison mode control must fit inside %dx660: %+v", width, modeGroup)
+				}
+				nextBtn, _ := tt.AccessByRole(ui.RoleButton, "下一张")
+				if nextBtn.Bounds.X+nextBtn.Bounds.W > modeGroup.Bounds.X &&
+					nextBtn.Bounds.X < modeGroup.Bounds.X+modeGroup.Bounds.W &&
+					nextBtn.Bounds.Y+nextBtn.Bounds.H > modeGroup.Bounds.Y &&
+					nextBtn.Bounds.Y < modeGroup.Bounds.Y+modeGroup.Bounds.H {
+					t.Fatalf("preview controls must not overlap mode switch: next=%+v mode=%+v", nextBtn, modeGroup)
+				}
+			})
 		}
-		t.Run(name, func(t *testing.T) {
-			items := make([]batchItem, 100)
-			for i := range items {
-				items[i] = batchItem{
-					path: "/p/img.jpg", absPath: "/p/img-" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".jpg",
-					relPath: "img.jpg", format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048,
-					status: batchDone, savedPath: "/out/img.jpg",
-				}
-			}
-			s := newApplication()
-			s.batch = newBatchState(items)
-			s.completeBatchPreview(context.Background(), 99, s.batch.items[99],
-				&selectedImage{path: s.batch.items[99].path, format: "jpeg", width: 24, height: 16, size: 4096, preview: srcImg},
-				&compress.Result{SourcePath: s.batch.items[99].path, Format: "jpeg", Width: 24, Height: 16, OriginalSize: 4096, OutputSize: 2048},
-				outImg, nil)
-			tt := ui.NewTester(func(c *ui.Context) {
-				theme := ui.LightTheme()
-				if dark {
-					theme = ui.DarkTheme()
-				}
-				c.SetTheme(theme)
-				s.view(c)
-			}, 880, 660)
-			if !tt.HasText("100 / 100") {
-				t.Fatalf("preview header must show 100 / 100 counter, texts=%v", tt.Texts())
-			}
-			for _, label := range []string{"返回列表", "上一张", "下一张", "缩小", "放大", "适应", "1:1", "移除"} {
-				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || button.Offscreen || button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {
-					t.Fatalf("preview button %q must fit inside 880x660: %+v", label, button)
-				}
-			}
-			modeGroup, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
-			if !ok || modeGroup.Offscreen || modeGroup.Bounds.X+modeGroup.Bounds.W > 880 {
-				t.Fatalf("comparison mode control must fit inside 880x660: %+v", modeGroup)
-			}
-			nextBtn, _ := tt.AccessByRole(ui.RoleButton, "下一张")
-			if nextBtn.Bounds.X+nextBtn.Bounds.W > modeGroup.Bounds.X {
-				t.Fatalf("preview controls must not overlap mode switch: next=%+v mode=%+v", nextBtn, modeGroup)
-			}
-		})
 	}
 }
 

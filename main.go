@@ -16,7 +16,7 @@ func main() {
 			Title:          "Z Pic · 图片压缩",
 			Width:          980,
 			Height:         720,
-			MinWidth:       880,
+			MinWidth:       760,
 			MinHeight:      660,
 			UseContentSize: true,
 			Content:        ui.View(app.view),
