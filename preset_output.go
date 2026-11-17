@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 )
@@ -44,6 +45,12 @@ func (o presetSaveOptions) supportsSubfolder() bool {
 func (o presetSaveOptions) validate() error {
 	if o.Mode != presetSaveOriginal && o.Mode != presetSaveAsk && o.Mode != presetSaveFixed {
 		return errors.New("未知的保存方式")
+	}
+	if !utf8.ValidString(o.Directory) || !utf8.ValidString(o.Subfolder) || !utf8.ValidString(o.Suffix) {
+		return errors.New("保存设置包含无效的 UTF-8 字符")
+	}
+	if strings.ContainsRune(o.Directory, 0) {
+		return errors.New("输出目录不能包含空字符")
 	}
 	if o.Mode == presetSaveFixed && o.Directory != "" && !filepath.IsAbs(o.Directory) {
 		return errors.New("固定输出目录必须是绝对路径")

@@ -30,7 +30,14 @@
 - 防重复踩坑：探测函数只能用于探测；真正的输入入口应执行返回错误的完整策略检查，之后仍需解码检查 CRC 和像素。
 - 验证：压缩包全套测试、拖放离线输入测试和选图测试；review 核对静态 PNG 原数据保留、IEND 后不再误判动画、循环取消和内存上限。
 
+## 5. 保存选项必须能无损经过 JSON 往返
+
+- 问题：输出目录、子目录和后缀可包含无效 UTF-8；JSON 编码会静默替换这些字节，重启后可能保存到不同路径。目录中的 NUL 也可被保存，却永远无法用于文件操作。
+- 修改：保存选项统一拒绝无效 UTF-8 和目录中的 NUL，包含暂时未启用但仍会持久化的字段。
+- 防重复踩坑：配置校验应覆盖序列化后的行为，不只检查当前启用功能；失败校验必须保留原配置文件。
+- 验证：`go test . -run 'TestPresetOutput|TestSettings|TestSave|TestLoad'`；review 核对中文路径、默认空值及已有的隐藏子目录设置行为继续保留。
+
 ## 本轮交付验证
 
-- 本提交包含第 4 轮修改及前 4 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestPNG|TestInspect|TestClipboardPNG|TestReadSelection|TestResolve|TestThumbnail'` 并 review 暂存差异。
+- 本提交包含第 5 轮修改及前 5 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestPresetOutput|TestSettings|TestSave|TestLoad'` 并 review 暂存差异。

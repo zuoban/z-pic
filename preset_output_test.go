@@ -77,6 +77,34 @@ func TestPresetOutputValidationAndFixedErrors(t *testing.T) {
 	}
 }
 
+func TestPresetOutputRejectsNamesJSONCannotPreserve(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := saveSettings(path, defaultPresets(), "均衡"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []presetSaveOptions{
+		{Mode: presetSaveFixed, Directory: "/tmp/\xff"},
+		{UseSubfolder: true, Subfolder: "\xff"},
+		{UseSuffix: true, Suffix: "\xff"},
+		{Suffix: "\xff"}, // Inactive preferences are serialized too.
+		{Mode: presetSaveFixed, Directory: "/tmp/\x00"},
+	} {
+		presets := defaultPresets()
+		presets[0].output = output
+		if err := saveSettings(path, presets, "均衡"); err == nil {
+			t.Fatalf("accepted output that cannot round trip: %+v", output)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("failed validation changed saved settings: %v", err)
+		}
+	}
+}
+
 func TestPresetOutputKeepsSingleResultAndOnlyResetsChangedBatch(t *testing.T) {
 	s := testSelectedApplication()
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
