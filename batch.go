@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
+	"zpic/internal/nameseq"
 )
 
 const maxBatchFiles = 2000
@@ -1358,20 +1359,7 @@ type batchOutputPlanner struct {
 	sequences map[string]batchOutputSequence
 }
 
-type batchOutputSequence map[int]int
-
-func (sequence batchOutputSequence) next(index int) int {
-	available := index
-	for sequence[available] > available {
-		available = sequence[available]
-	}
-	for sequence[index] > index {
-		following := sequence[index]
-		sequence[index] = available
-		index = following
-	}
-	return available
-}
+type batchOutputSequence = nameseq.Sequence
 
 func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string) (string, error) {
 	ctx := planner.ctx
@@ -1419,7 +1407,7 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		index = sequence.next(index)
+		index = sequence.Next(index)
 		path := candidate
 		if index == 1 {
 			path = stem + "-compressed" + ext

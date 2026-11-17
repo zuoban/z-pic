@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"zpic/internal/compress"
+	"zpic/internal/nameseq"
 )
 
 // Resolve leaves local paths untouched. Remote and byte inputs are saved
@@ -43,20 +44,7 @@ func NewResolver(dir string, sharedTransport *http.Transport) *Resolver {
 	return &Resolver{dir: dir, transport: sharedTransport}
 }
 
-type filenameSequence map[int]int
-
-func (sequence filenameSequence) next(index int) int {
-	available := index
-	for sequence[available] > available {
-		available = sequence[available]
-	}
-	for sequence[index] > index {
-		following := sequence[index]
-		sequence[index] = available
-		index = following
-	}
-	return available
-}
+type filenameSequence = nameseq.Sequence
 
 func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, downloaded bool, err error) {
 	dir := resolver.dir
@@ -173,7 +161,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
-		suffix = sequence.next(suffix)
+		suffix = sequence.Next(suffix)
 		if suffix >= 10000 {
 			break
 		}
