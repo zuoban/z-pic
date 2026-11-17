@@ -405,15 +405,18 @@ func TestOrientForJPEGEncodePlanes(test *testing.T) {
 	graySource := image.NewGray(image.Rect(0, 0, 4, 2))
 	graySource.SetGray(0, 0, color.Gray{Y: 200})
 	graySource.SetGray(3, 1, color.Gray{Y: 40})
-	grayParent := image.NewGray(image.Rect(-9, -7, 31, 25))
+	grayParent := image.NewGray(image.Rect(-9, -7, 91, 101))
 	for index := range grayParent.Pix {
 		grayParent.Pix[index] = uint8(index*37 + 11)
 	}
 	paddedGray := grayParent.SubImage(image.Rect(-3, -1, 16, 8))
 	narrowGray := grayParent.SubImage(image.Rect(3, 2, 4, 9))
 	shortGray := grayParent.SubImage(image.Rect(2, 3, 9, 4))
+	tiledGray := grayParent.SubImage(image.Rect(-3, -1, 64, 98))
+	tallGray := grayParent.SubImage(image.Rect(3, 2, 4, 69))
+	wideGray := grayParent.SubImage(image.Rect(2, 3, 69, 4))
 
-	for _, source := range []image.Image{ycbcrSource, graySource, paddedGray, narrowGray, shortGray, nrgba} {
+	for _, source := range []image.Image{ycbcrSource, graySource, paddedGray, narrowGray, shortGray, tiledGray, tallGray, wideGray, nrgba} {
 		if unchanged := orientForJPEGEncode(source, 1); unchanged != source {
 			test.Fatalf("orientation 1 must return original %T", source)
 		}
@@ -457,6 +460,12 @@ func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
 		{"odd-size-420", image.Rect(0, 0, 19, 11), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
 		{"translated-420", image.Rect(2, 2, 20, 12), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
 		{"negative-origin-420", image.Rect(-4, -2, 14, 8), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
+		{"tile-aligned-420", image.Rect(0, 0, 66, 98), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, false},
+		{"tile-padded-420", image.Rect(0, 0, 66, 98), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, true},
+		{"tile-odd-420", image.Rect(0, 0, 67, 99), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"tile-translated-420", image.Rect(3, 5, 70, 104), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"tile-negative-origin-420", image.Rect(-5, -7, 62, 92), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
+		{"tile-444", image.Rect(-3, 1, 64, 100), image.YCbCrSubsampleRatio444, image.YCbCrSubsampleRatio444, false},
 		{"444", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio444, image.YCbCrSubsampleRatio444, false},
 		{"422", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio444, false},
 		{"440", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio440, image.YCbCrSubsampleRatio444, false},
@@ -466,7 +475,7 @@ func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
 		test.Run(scenario.name, func(test *testing.T) {
 			source := image.NewYCbCr(scenario.bounds, scenario.ratio)
 			if scenario.padded {
-				parent := image.NewYCbCr(image.Rect(0, 0, 32, 32), scenario.ratio)
+				parent := image.NewYCbCr(image.Rect(0, 0, max(32, scenario.bounds.Max.X+5), max(32, scenario.bounds.Max.Y+3)), scenario.ratio)
 				source = parent.SubImage(scenario.bounds).(*image.YCbCr)
 			}
 			for index := range source.Y {

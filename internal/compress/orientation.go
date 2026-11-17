@@ -115,55 +115,39 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 	oriented := orientedImage{Image: img, orientation: orientation}
 	bounds := oriented.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
-	originX, originY := oriented.mapCoords(0, 0)
-	nextX, nextY := oriented.mapCoords(1, 0)
-	stepX, stepY := nextX-originX, nextY-originY
 	switch source := img.(type) {
 	case *image.YCbCr:
 		ratio := image.YCbCrSubsampleRatio444
-		chromaShift := 0
 		if source.SubsampleRatio == image.YCbCrSubsampleRatio420 &&
 			source.Rect.Min == (image.Point{}) &&
 			source.Rect.Dx()%2 == 0 && source.Rect.Dy()%2 == 0 {
 			ratio = image.YCbCrSubsampleRatio420
-			chromaShift = 1
 		}
 		output := image.NewYCbCr(bounds, ratio)
-		lumaStep := stepX + stepY*source.YStride
-		for row := 0; row < height; row++ {
-			rowBase := row * output.YStride
-			mappedX, mappedY := oriented.mapCoords(0, row)
-			sourceIndex := source.YOffset(mappedX, mappedY)
-			for column := 0; column < width; column++ {
-				output.Y[rowBase+column] = source.Y[sourceIndex]
-				sourceIndex += lumaStep
-			}
+		copyOrientedPlane(output.Y, output.YStride, source.Y, source.YStride, oriented, 0)
+		if ratio == image.YCbCrSubsampleRatio420 {
+			copyOrientedPlane(output.Cb, output.CStride, source.Cb, source.CStride, oriented, 1)
+			copyOrientedPlane(output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1)
+			return output
 		}
-		chromaStepX, chromaStepY := stepX<<chromaShift, stepY<<chromaShift
-		for row := 0; row < height>>chromaShift; row++ {
+		originX, originY := oriented.mapCoords(0, 0)
+		nextX, nextY := oriented.mapCoords(1, 0)
+		stepX, stepY := nextX-originX, nextY-originY
+		for row := 0; row < height; row++ {
 			rowBase := row * output.CStride
-			mappedX, mappedY := oriented.mapCoords(0, row<<chromaShift)
-			for column := 0; column < width>>chromaShift; column++ {
+			mappedX, mappedY := oriented.mapCoords(0, row)
+			for column := 0; column < width; column++ {
 				sourceIndex := source.COffset(mappedX, mappedY)
 				output.Cb[rowBase+column] = source.Cb[sourceIndex]
 				output.Cr[rowBase+column] = source.Cr[sourceIndex]
-				mappedX += chromaStepX
-				mappedY += chromaStepY
+				mappedX += stepX
+				mappedY += stepY
 			}
 		}
 		return output
 	case *image.Gray:
 		output := image.NewGray(bounds)
-		pixelStep := stepX + stepY*source.Stride
-		for row := 0; row < height; row++ {
-			rowBase := row * output.Stride
-			mappedX, mappedY := oriented.mapCoords(0, row)
-			sourceIndex := source.PixOffset(mappedX, mappedY)
-			for column := 0; column < width; column++ {
-				output.Pix[rowBase+column] = source.Pix[sourceIndex]
-				sourceIndex += pixelStep
-			}
-		}
+		copyOrientedPlane(output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0)
 		return output
 	default:
 		output := image.NewRGBA(bounds)
@@ -179,6 +163,38 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 			}
 		}
 		return output
+	}
+}
+
+func copyOrientedPlane(output []byte, outputStride int, source []byte, sourceStride int, oriented orientedImage, subsampleShift int) {
+	bounds := oriented.Bounds()
+	width, height := bounds.Dx()>>subsampleShift, bounds.Dy()>>subsampleShift
+	sourceBounds := oriented.Image.Bounds()
+	originX, originY := oriented.mapCoords(0, 0)
+	nextX, nextY := oriented.mapCoords(1, 0)
+	nextRowX, nextRowY := oriented.mapCoords(0, 1)
+	columnStep := nextX - originX + (nextY-originY)*sourceStride
+	rowStep := nextRowX - originX + (nextRowY-originY)*sourceStride
+	sourceX := (originX - sourceBounds.Min.X) >> subsampleShift
+	sourceY := (originY - sourceBounds.Min.Y) >> subsampleShift
+	origin := sourceX + sourceY*sourceStride
+	blockWidth, blockHeight := max(1, width), max(1, height)
+	if nextY != originY {
+		blockWidth, blockHeight = 32, 32
+	}
+	for top := 0; top < height; top += blockHeight {
+		bottom := min(top+blockHeight, height)
+		for left := 0; left < width; left += blockWidth {
+			right := min(left+blockWidth, width)
+			for row := top; row < bottom; row++ {
+				outputRow := output[row*outputStride+left : row*outputStride+right]
+				sourceIndex := origin + row*rowStep + left*columnStep
+				for column := range outputRow {
+					outputRow[column] = source[sourceIndex]
+					sourceIndex += columnStep
+				}
+			}
+		}
 	}
 }
 
