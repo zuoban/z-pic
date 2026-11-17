@@ -166,3 +166,26 @@ func TestPlanBatchOutputsFailureAndCancellationDoNotReserveNames(test *testing.T
 		test.Fatalf("canceled plan changed reservations: paths=%v failures=%v used=%v", paths, failures, used)
 	}
 }
+
+func TestBatchOutputPlannerWorksWithoutCallerMaps(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.jpg")
+	for _, resolve := range []func() (string, error){
+		func() (string, error) { return resolveBatchOutputPath(root, source, "photo.jpg", nil) },
+		func() (string, error) {
+			return (presetSaveOptions{Mode: presetSaveFixed}).copyPath(source, root, "photo.jpg", nil)
+		},
+	} {
+		path, err := resolve()
+		if err != nil || path != filepath.Join(root, "photo.jpg") {
+			t.Fatalf("nil reservations = %q, %v", path, err)
+		}
+	}
+	var planner batchOutputPlanner
+	for _, name := range []string{"photo.jpg", "photo-compressed.jpg", "photo-compressed-2.jpg"} {
+		path, err := planner.resolve(root, source, "photo.jpg")
+		if err != nil || path != filepath.Join(root, name) {
+			t.Fatalf("zero value planner = %q, %v; want %q", path, err, name)
+		}
+	}
+}

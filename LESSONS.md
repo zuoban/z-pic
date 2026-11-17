@@ -37,7 +37,14 @@
 - 防重复踩坑：配置校验应覆盖序列化后的行为，不只检查当前启用功能；失败校验必须保留原配置文件。
 - 验证：`go test . -run 'TestPresetOutput|TestSettings|TestSave|TestLoad'`；review 核对中文路径、默认空值及已有的隐藏子目录设置行为继续保留。
 
+## 6. 输出规划器自行初始化内部状态
+
+- 问题：传入 nil 预留表或使用零值规划器会在写 map 时 panic；部分入口未初始化后继表，同名命名优化也未生效。
+- 修改：规划器按需初始化预留和后继表，移除循环中的冗余 nil 分支，所有入口都可复用相同逻辑。
+- 防重复踩坑：调用方可以提供共享状态，但被调用方应明确处理省略状态的情况；不要把隐式初始化约定散落在不同入口。
+- 验证：`go test . -run 'TestBatchOutput|TestPlanBatchOutputs|TestPresetOutput'`；review 核对已有预留、磁盘冲突、源文件别名保护和导入顺序不变。
+
 ## 本轮交付验证
 
-- 本提交包含第 5 轮修改及前 5 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestPresetOutput|TestSettings|TestSave|TestLoad'` 并 review 暂存差异。
+- 本提交包含第 6 轮修改及前 6 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestBatchOutput|TestPlanBatchOutputs|TestPresetOutput'` 并 review 暂存差异。

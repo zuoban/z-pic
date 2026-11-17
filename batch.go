@@ -1400,6 +1400,12 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 	}
 	ext := filepath.Ext(candidate)
 	stem := strings.TrimSuffix(candidate, ext)
+	if planner.used == nil {
+		planner.used = make(map[string]bool)
+	}
+	if planner.sequences == nil {
+		planner.sequences = make(map[string]batchOutputSequence)
+	}
 	sequence := planner.sequences[candidate]
 	for index := 0; ; index++ {
 		index = sequence.next(index)
@@ -1411,13 +1417,11 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 			path = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
 		}
 		if planner.used[path] {
-			if sequence == nil && planner.sequences != nil {
+			if sequence == nil {
 				sequence = make(batchOutputSequence)
 				planner.sequences[candidate] = sequence
 			}
-			if sequence != nil {
-				sequence[index] = index + 1
-			}
+			sequence[index] = index + 1
 			continue
 		}
 		ok, err := canUse(path)
