@@ -875,7 +875,7 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	}
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	settings := ui.NewTester(s.settingsView, 760, 560)
-	if err := settings.Click("压缩预设"); err != nil {
+	if err := settings.Click("预设"); err != nil {
 		t.Fatal(err)
 	}
 	if err := settings.Click("新增预设"); err != nil {

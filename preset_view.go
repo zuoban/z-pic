@@ -66,19 +66,23 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(bodyPad).Gap(16).Children(func() {
 			preset := editor.selectedPreset()
-			ui.Row(c).Height(36).Gap(8).AlignItems(ui.Center).Children(func() {
-				if ui.TextInput(c.Key("preset-name"), &preset.name).Label("预设名称").
-					Placeholder("输入预设名称").Tooltip("预设名称，点击重命名").Height(36).
-					Width(0).Grow(1).FontSize(18).FontWeight(600).Padding(0).
-					Background(ui.Transparent).Border(0, ui.Transparent).Disabled(s.busy).Changed() {
-					editor.message = ""
-				}
-				if editor.active == editor.selected {
-					presetActiveIndicator(c)
-				} else {
-					quietButton(c, "activate-preset", "设为当前预设", 32, s.busy || editor.confirmDelete).
-						OnClick(func() { s.selectSettingsPreset(editor.selected) })
-				}
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				ui.Text(c, "预设名称").FontSize(13).FontWeight(500)
+				ui.Row(c).FillWidth().Height(36).Gap(8).AlignItems(ui.Center).Children(func() {
+					name := ui.TextInput(c.Key("preset-name"), &preset.name).Label("预设名称").
+						Placeholder("输入预设名称").Tooltip("点击编辑预设名称").Height(36).
+						Width(0).Grow(1).MinWidth(0).FontSize(14).Padding(0, 12).Disabled(s.busy)
+					styleGlassField(name, c, 36)
+					if name.Changed() {
+						editor.message = ""
+					}
+					if editor.active == editor.selected {
+						presetActiveIndicator(c)
+					} else {
+						quietButton(c, "activate-preset", "设为当前预设", 32, s.busy || editor.confirmDelete).
+							OnClick(func() { s.selectSettingsPreset(editor.selected) })
+					}
+				})
 			})
 			s.presetQualityCard(c, *preset)
 			s.presetSaveCard(c, preset, compact)
