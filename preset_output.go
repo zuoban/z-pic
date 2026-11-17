@@ -85,6 +85,10 @@ func (s *application) configureBatchPresetOutput() {
 }
 
 func (o presetSaveOptions) copyPath(source, root, rel string, used map[string]bool) (string, error) {
+	return o.copyPathWithPlanner(source, root, rel, &batchOutputPlanner{used: used})
+}
+
+func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner *batchOutputPlanner) (string, error) {
 	if err := o.validate(); err != nil {
 		return "", err
 	}
@@ -117,7 +121,7 @@ func (o presetSaveOptions) copyPath(source, root, rel string, used map[string]bo
 		ext := filepath.Ext(rel)
 		rel = strings.TrimSuffix(rel, ext) + suffix + ext
 	}
-	return resolveBatchOutputPath(root, source, rel, used)
+	return planner.resolve(root, source, rel)
 }
 
 func (s *application) savePresetResult() {

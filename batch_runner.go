@@ -85,6 +85,10 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 	if usedPaths == nil {
 		usedPaths = make(map[string]bool)
 	}
+	planner := &batchOutputPlanner{
+		used:      usedPaths,
+		sequences: make(map[string]batchOutputSequence),
+	}
 	paths := make(map[int]string, len(tasks))
 	failures := make(map[int]error)
 	for _, task := range tasks {
@@ -96,7 +100,7 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 		if outputDir != "" {
 			output.Mode = presetSaveFixed
 		}
-		path, err := output.copyPath(task.path, outputDir, task.relPath, usedPaths)
+		path, err := output.copyPathWithPlanner(task.path, outputDir, task.relPath, planner)
 		if err != nil {
 			failures[task.index] = err
 		} else {

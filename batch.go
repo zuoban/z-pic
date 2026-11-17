@@ -1349,6 +1349,30 @@ func (s *application) completeBatchRun(ctx context.Context) {
 // resolveBatchOutputPath chooses a collision-free output file inside outputDir
 // without overwriting the source path or any existing file.
 func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[string]bool) (string, error) {
+	return (&batchOutputPlanner{used: used}).resolve(outputDir, sourcePath, relPath)
+}
+
+type batchOutputPlanner struct {
+	used      map[string]bool
+	sequences map[string]batchOutputSequence
+}
+
+type batchOutputSequence map[int]int
+
+func (sequence batchOutputSequence) next(index int) int {
+	available := index
+	for sequence[available] > available {
+		available = sequence[available]
+	}
+	for sequence[index] > index {
+		following := sequence[index]
+		sequence[index] = available
+		index = following
+	}
+	return available
+}
+
+func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string) (string, error) {
 	rootAbs, err := filepath.Abs(outputDir)
 	if err != nil {
 		return "", fmt.Errorf("无法解析输出文件夹路径：%w", err)
@@ -1365,7 +1389,7 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 	}
 	sourceCanon := canonicalBatchKey(sourceAbs)
 	canUse := func(path string) (bool, error) {
-		if path == sourceAbs || canonicalBatchKey(path) == sourceCanon || used[path] {
+		if path == sourceAbs || canonicalBatchKey(path) == sourceCanon {
 			return false, nil
 		}
 		_, statErr := os.Lstat(path)
@@ -1376,7 +1400,9 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 	}
 	ext := filepath.Ext(candidate)
 	stem := strings.TrimSuffix(candidate, ext)
+	sequence := planner.sequences[candidate]
 	for index := 0; ; index++ {
+		index = sequence.next(index)
 		path := candidate
 		if index == 1 {
 			path = stem + "-compressed" + ext
@@ -1384,12 +1410,25 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 		if index > 1 {
 			path = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
 		}
+		if planner.used[path] {
+			if sequence == nil && planner.sequences != nil {
+				sequence = make(batchOutputSequence)
+				planner.sequences[candidate] = sequence
+			}
+			if sequence != nil {
+				sequence[index] = index + 1
+			}
+			continue
+		}
 		ok, err := canUse(path)
 		if err != nil {
 			return "", fmt.Errorf("无法检查输出路径：%w", err)
 		}
 		if ok {
-			used[path] = true
+			planner.used[path] = true
+			if sequence != nil {
+				sequence[index] = index + 1
+			}
 			return path, nil
 		}
 	}

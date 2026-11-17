@@ -56,6 +56,45 @@ func BenchmarkScanBatchPaths1000Files(bench *testing.B) {
 	}
 }
 
+func BenchmarkPlanBatchOutputs1000Files(bench *testing.B) {
+	root := bench.TempDir()
+	outputDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		bench.Fatal(err)
+	}
+	tasks := make([]batchTask, 1000)
+	for index := range tasks {
+		dir := filepath.Join(root, "photos", "2026", fmt.Sprintf("album_%04d", index))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			bench.Fatal(err)
+		}
+		path := filepath.Join(dir, "photo.jpg")
+		if err := os.WriteFile(path, []byte("source"), 0o600); err != nil {
+			bench.Fatal(err)
+		}
+		tasks[index] = batchTask{index: index, path: path}
+	}
+	for _, name := range []string{"UniqueNames", "SameName"} {
+		bench.Run(name, func(sub *testing.B) {
+			for index := range tasks {
+				tasks[index].relPath = "photo.jpg"
+				if name == "UniqueNames" {
+					tasks[index].relPath = fmt.Sprintf("photo_%04d.jpg", index)
+				}
+			}
+			sub.ReportAllocs()
+			ctx := context.Background()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				paths, failures := planBatchOutputs(ctx, tasks, outputDir, nil)
+				if len(paths) != len(tasks) || len(failures) != 0 {
+					sub.Fatalf("unexpected plan: paths=%d failures=%v", len(paths), failures)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkBatchFrameQueries1000Items(bench *testing.B) {
 	items := make([]batchItem, 1000)
 	for index := range items {

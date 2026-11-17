@@ -133,6 +133,8 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 批量导入在单次扫描内缓存成功解析的父目录规范路径，复用前核对目录身份；目录别名改向或目录重命名后重新解析。每次导入独立建立缓存，文件本身的符号链接保留独立路径身份，文件列表的目录识别阶段也逐项检查取消。
 
+批量输出规划记录已预留名称的后继编号，重复名称跳过连续预留的编号，避免从头逐个检查。记录只在单次规划内使用；磁盘已有文件、目录、符号链接与源文件路径的冲突仍重新检查，失败任务不占用名称，输出命名保持任务顺序。实际保存通过独占创建拒绝覆盖已有文件。
+
 压缩、缩略图和单图预览共用 `internal/imageinput` 读取文件内容，按已打开文件的大小预分配缓冲区，减少逐步扩容带来的分配和复制。读取期间文件增长或截短时以实际读取内容为准，增长后仍按实际字节数执行 64 MiB 上限，并检查取消。
 
 单图压缩使用 `compress.BytesWithPreview`，将 PNG/WebP 输出完整校验时解码出的像素直接用于预览，避免再次解码。JPEG 预览仍从实际压缩结果解码，保持导出方向与预览一致。未减小的结果复用原图位图；批量压缩使用 `File`/`Bytes`，结果对象只保存编码数据，不保留预览像素。PNG 输出解码也会在读取数据时检查取消。
@@ -140,7 +142,7 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 性能基线可运行：
 
 ```sh
-go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkScanBatchPaths1000Files|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode|BenchmarkValidatedPNGPreview12MP' -benchmem
+go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkScanBatchPaths1000Files|BenchmarkPlanBatchOutputs1000Files|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode|BenchmarkValidatedPNGPreview12MP' -benchmem
 ```
 
 `BenchmarkReadInputJPEG12MP` 单独测量文件读取，`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。
@@ -148,3 +150,5 @@ go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000It
 `BenchmarkValidatedPNGPreview12MP` 对比 PNG 输出校验后再次解码与直接复用校验像素两种路径。Apple M1、Go 1.27.3 下，4000×3000 合成图片使用 `-benchtime=10x -count=3` 测得约 231–233 ms/op → 115–118 ms/op，分配量约 96.2 MB/op → 48.1 MB/op。该数据只覆盖输出校验与预览解码阶段，不包含原生编码、界面位图转换或绘制，也不代表完整压缩流程的提速比例。
 
 `BenchmarkScanBatchPaths1000Files` 使用 10 个子目录中的 1000 张 32×24 合成 JPEG，对比文件夹递归导入和直接导入文件列表。Apple M1、Go 1.27.3 下，使用 `-benchtime=5x -count=3` 测得父目录缓存优化前后：文件夹扫描约 52–65 ms/op → 25–28 ms/op，文件列表扫描约 40–44 ms/op → 26–27 ms/op；Go 分配量约 24.8 MB/op → 20.5–20.6 MB/op。该基准只覆盖扫描与头部检查，不解码像素或执行压缩，耗时也受目录结构和文件系统缓存影响。
+
+`BenchmarkPlanBatchOutputs1000Files` 为不同源目录中的 1000 个文件规划输出，分别使用唯一名称和相同名称，目标目录初始为空。Apple M1、Go 1.27.3 下，使用 `-benchtime=1x -count=3` 测得同名场景优化前后约 6.96–7.01 s/op → 37–40 ms/op，Go 累计分配量约 2.10 GB/op → 10.5 MB/op；唯一名称场景约 36–37 ms/op → 37–43 ms/op。该基准只覆盖路径规划与文件系统检查，源文件内容不参与处理，不包含图片扫描、解码、压缩或保存；分配量是单次操作的累计值，不是峰值内存。
