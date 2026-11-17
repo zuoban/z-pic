@@ -1353,6 +1353,7 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 }
 
 type batchOutputPlanner struct {
+	ctx       context.Context
 	used      map[string]bool
 	sequences map[string]batchOutputSequence
 }
@@ -1373,6 +1374,13 @@ func (sequence batchOutputSequence) next(index int) int {
 }
 
 func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string) (string, error) {
+	ctx := planner.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	rootAbs, err := filepath.Abs(outputDir)
 	if err != nil {
 		return "", fmt.Errorf("无法解析输出文件夹路径：%w", err)
@@ -1408,6 +1416,9 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 	}
 	sequence := planner.sequences[candidate]
 	for index := 0; ; index++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		index = sequence.next(index)
 		path := candidate
 		if index == 1 {

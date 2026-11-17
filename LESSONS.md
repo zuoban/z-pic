@@ -44,7 +44,14 @@
 - 防重复踩坑：调用方可以提供共享状态，但被调用方应明确处理省略状态的情况；不要把隐式初始化约定散落在不同入口。
 - 验证：`go test . -run 'TestBatchOutput|TestPlanBatchOutputs|TestPresetOutput'`；review 核对已有预留、磁盘冲突、源文件别名保护和导入顺序不变。
 
+## 7. 取消信号必须进入同名冲突搜索内部
+
+- 问题：批量输出只在两张图片之间检查取消；目标目录存在大量同名文件时，单张图片的编号搜索会继续访问文件系统。
+- 修改：批量规划器携带本次任务的 context，进入规划和每次名称冲突迭代前检查取消。
+- 防重复踩坑：外层循环可取消，不代表内部的磁盘搜索可取消；测试应在搜索已经开始后触发取消，确认没有预留或返回新输出。
+- 验证：`go test . -run 'TestBatchOutput|TestPlanBatchOutputs|TestBatchPipeline'`；review 核对非批量入口使用默认 context，批量入口传递实际 context。
+
 ## 本轮交付验证
 
-- 本提交包含第 6 轮修改及前 6 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestBatchOutput|TestPlanBatchOutputs|TestPresetOutput'` 并 review 暂存差异。
+- 本提交包含第 7 轮修改及前 7 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestBatchOutput|TestPlanBatchOutputs|TestBatchPipeline'` 并 review 暂存差异。

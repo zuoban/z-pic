@@ -86,6 +86,7 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 		usedPaths = make(map[string]bool)
 	}
 	planner := &batchOutputPlanner{
+		ctx:       ctx,
 		used:      usedPaths,
 		sequences: make(map[string]batchOutputSequence),
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -187,5 +188,37 @@ func TestBatchOutputPlannerWorksWithoutCallerMaps(t *testing.T) {
 		if err != nil || path != filepath.Join(root, name) {
 			t.Fatalf("zero value planner = %q, %v; want %q", path, err, name)
 		}
+	}
+}
+
+type cancelDuringOutputPlan struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelDuringOutputPlan) Err() error {
+	ctx.checks++
+	if ctx.checks == 5 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestPlanBatchOutputsCancelsWithinCollisionSearch(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"photo.jpg", "photo-compressed.jpg", "photo-compressed-2.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &cancelDuringOutputPlan{Context: base, cancel: cancel}
+	used := make(map[string]bool)
+	tasks := []batchTask{{index: 0, path: filepath.Join(root, "source.jpg"), relPath: "photo.jpg"}}
+	paths, failures := planBatchOutputs(ctx, tasks, root, used)
+	if len(paths) != 0 || len(used) != 0 || !errors.Is(failures[0], context.Canceled) {
+		t.Fatalf("canceled collision search reserved output: paths=%v failures=%v used=%v", paths, failures, used)
 	}
 }
