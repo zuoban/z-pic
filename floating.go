@@ -137,6 +137,7 @@ func (s *application) startNextDropImport() {
 		defer s.saves.Done()
 		transport := dropimport.NewTransport()
 		defer transport.CloseIdleConnections()
+		resolver := dropimport.NewResolver(dir, transport)
 		items, err := dropimport.Parse(data)
 		var paths []string
 		var failures []string
@@ -168,7 +169,7 @@ func (s *application) startNextDropImport() {
 				failures = append(failures, "无法读取下载目录："+dirErr.Error())
 				continue
 			}
-			path, saved, resolveErr := dropimport.ResolveWithTransport(ctx, item, dir, transport)
+			path, saved, resolveErr := resolver.Resolve(ctx, item)
 			if resolveErr != nil {
 				if ctx.Err() == nil {
 					failures = append(failures, resolveErr.Error())

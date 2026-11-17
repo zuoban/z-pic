@@ -179,6 +179,38 @@ func TestFloatingWebImagesDownloadAndReuseOriginals(t *testing.T) {
 	}
 }
 
+func TestFloatingSameNameImagesKeepImportOrder(test *testing.T) {
+	root := test.TempDir()
+	original := writeTestJPEG(test, filepath.Join(root, "fixture.jpg"), 80, 60, 100)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write(original)
+	}))
+	defer server.Close()
+	updates := make(chan func(), 32)
+	app := newApplication()
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.downloadDir = filepath.Join(root, "downloads")
+	var urls []string
+	for _, path := range []string{"/first/photo.jpg", "/second/photo.jpg", "/third/photo-1.jpg", "/fourth/photo.jpg"} {
+		urls = append(urls, server.URL+path)
+	}
+	app.receiveDrop(transfer.New(transfer.NewItem(transfer.Bytes(transfer.URIList, []byte(strings.Join(urls, "\r\n"))))))
+	waitForDropImports(test, app, updates)
+	if app.batch == nil || len(app.batch.items) != len(urls) || app.dropFailed {
+		test.Fatalf("same-name import failed: %q, %+v", app.dropMessage, app.batch)
+	}
+	for index, name := range []string{"photo.jpg", "photo-1.jpg", "photo-1-1.jpg", "photo-2.jpg"} {
+		path := app.batch.items[index].path
+		if path != filepath.Join(app.downloadDir, name) || app.downloadedURLs[urls[index]] != path {
+			test.Fatalf("item %d lost its name or URL mapping: %q, %v", index, path, app.downloadedURLs)
+		}
+		actual, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(actual, original) {
+			test.Fatalf("download changed source bytes: %q, %v", path, err)
+		}
+	}
+}
+
 func TestFloatingDownloadCanCancel(t *testing.T) {
 	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

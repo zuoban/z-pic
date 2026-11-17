@@ -30,6 +30,37 @@ func NewTransport() *http.Transport {
 }
 
 func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTransport *http.Transport) (path string, downloaded bool, err error) {
+	return NewResolver(dir, sharedTransport).Resolve(ctx, item)
+}
+
+type Resolver struct {
+	dir       string
+	transport *http.Transport
+	saved     map[string]bool
+	sequences map[string]filenameSequence
+}
+
+func NewResolver(dir string, sharedTransport *http.Transport) *Resolver {
+	return &Resolver{dir: dir, transport: sharedTransport}
+}
+
+type filenameSequence map[int]int
+
+func (sequence filenameSequence) next(index int) int {
+	available := index
+	for sequence[available] > available {
+		available = sequence[available]
+	}
+	for sequence[index] > index {
+		following := sequence[index]
+		sequence[index] = available
+		index = following
+	}
+	return available
+}
+
+func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, downloaded bool, err error) {
+	dir := resolver.dir
 	if item.Path != "" {
 		return item.Path, false, nil
 	}
@@ -44,7 +75,7 @@ func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTran
 			return "", false, err
 		}
 		name = filename(parsed)
-		transport := sharedTransport
+		transport := resolver.transport
 		if transport == nil {
 			transport = NewTransport()
 			defer transport.CloseIdleConnections()
@@ -139,18 +170,42 @@ func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTran
 	} else if info.Format == "webp" {
 		extension = ".webp"
 	}
+	if resolver.saved == nil {
+		resolver.saved = make(map[string]bool)
+	}
+	key := name + extension
+	sequence := resolver.sequences[key]
 	for suffix := 0; suffix < 10000; suffix++ {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		suffix = sequence.next(suffix)
+		if suffix >= 10000 {
+			break
+		}
 		stem := name
 		if suffix > 0 {
 			stem = fmt.Sprintf("%s-%d", name, suffix)
 		}
 		target := filepath.Join(dir, stem+extension)
+		if resolver.saved[target] {
+			if sequence == nil {
+				sequence = make(filenameSequence)
+				if resolver.sequences == nil {
+					resolver.sequences = make(map[string]filenameSequence)
+				}
+				resolver.sequences[key] = sequence
+			}
+			sequence[suffix] = suffix + 1
+			continue
+		}
 		linkErr := os.Link(tempName, target)
 		if linkErr == nil {
 			if err := ctx.Err(); err != nil {
 				_ = os.Remove(target)
 				return "", false, err
 			}
+			resolver.saved[target] = true
 			return target, true, nil
 		}
 		if os.IsExist(linkErr) {
@@ -185,6 +240,7 @@ func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTran
 			os.Remove(target)
 			return "", false, err
 		}
+		resolver.saved[target] = true
 		return target, true, nil
 	}
 	return "", false, fmt.Errorf("同名图片过多，请选择其他目录")
