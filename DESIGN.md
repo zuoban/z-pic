@@ -12,6 +12,8 @@
 
 Quiet, precise, and practical. Show actual file sizes and explicit processing results. Avoid decorative gradients, emoji, fabricated savings, and unrelated tools.
 
+The application icon is `resources/icon.png`, a 1024 × 1024 PNG with transparent outer margins. A cobalt rounded-square tile carries a white photograph symbol whose negative space joins a Z-shaped diagonal with a landscape and sun. Restrained material lighting belongs to the native app icon; interface surfaces retain their neutral treatment. `mygo.json` explicitly selects this asset, and MyGo generates the platform icon formats when packaging.
+
 ### Polish direction and audit
 
 - Product: local JPEG/PNG/WebP compression for people preparing images to share or upload.
