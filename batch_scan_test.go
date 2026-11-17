@@ -175,3 +175,20 @@ func TestCanonicalBatchKeyRefreshesChangedParents(t *testing.T) {
 		})
 	}
 }
+
+func TestScanBatchPathsDeduplicatesBeforeCapacityCheck(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo.jpg")
+	other := filepath.Join(root, "other.jpg")
+	writeTestJPEG(t, source, 8, 4, 80)
+	writeTestJPEG(t, other, 8, 4, 80)
+	existing := map[string]bool{canonicalBatchKey(source): true}
+	scan, err := scanBatchPaths(context.Background(), []string{source, source}, existing, maxBatchFiles)
+	if err != nil || len(scan.items) != 0 || scan.duplicates != 2 || scan.truncated {
+		t.Fatalf("duplicates consume no slots: %+v, %v", scan, err)
+	}
+	scan, err = scanBatchPaths(context.Background(), []string{source, source, other}, nil, maxBatchFiles-1)
+	if err != nil || len(scan.items) != 1 || scan.duplicates != 1 || !scan.truncated {
+		t.Fatalf("capacity must apply only to new entries: %+v, %v", scan, err)
+	}
+}

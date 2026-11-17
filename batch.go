@@ -370,14 +370,14 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if existingCount+len(out.items) >= maxBatchFiles {
-			out.truncated = true
-			return errBatchLimit
-		}
 		absPath := canonicalBatchKeyWithParents(path, resolvedParents)
 		if seen[absPath] {
 			out.duplicates++
 			return nil
+		}
+		if existingCount+len(out.items) >= maxBatchFiles {
+			out.truncated = true
+			return errBatchLimit
 		}
 		seen[absPath] = true
 		relPath = sanitizeRelPath(relPath, filepath.Base(path))
