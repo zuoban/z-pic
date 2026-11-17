@@ -405,8 +405,15 @@ func TestOrientForJPEGEncodePlanes(test *testing.T) {
 	graySource := image.NewGray(image.Rect(0, 0, 4, 2))
 	graySource.SetGray(0, 0, color.Gray{Y: 200})
 	graySource.SetGray(3, 1, color.Gray{Y: 40})
+	grayParent := image.NewGray(image.Rect(-9, -7, 31, 25))
+	for index := range grayParent.Pix {
+		grayParent.Pix[index] = uint8(index*37 + 11)
+	}
+	paddedGray := grayParent.SubImage(image.Rect(-3, -1, 16, 8))
+	narrowGray := grayParent.SubImage(image.Rect(3, 2, 4, 9))
+	shortGray := grayParent.SubImage(image.Rect(2, 3, 9, 4))
 
-	for _, source := range []image.Image{ycbcrSource, graySource, nrgba} {
+	for _, source := range []image.Image{ycbcrSource, graySource, paddedGray, narrowGray, shortGray, nrgba} {
 		if unchanged := orientForJPEGEncode(source, 1); unchanged != source {
 			test.Fatalf("orientation 1 must return original %T", source)
 		}
@@ -442,6 +449,9 @@ func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
 	}{
 		{"aligned-420", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, true},
 		{"minimal-420", image.Rect(0, 0, 2, 2), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, false},
+		{"single-pixel-420", image.Rect(0, 0, 1, 1), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
+		{"single-column-420", image.Rect(0, 0, 1, 7), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"single-row-420", image.Rect(0, 0, 7, 1), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
 		{"odd-width-420", image.Rect(0, 0, 19, 10), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
 		{"odd-height-420", image.Rect(0, 0, 18, 11), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
 		{"odd-size-420", image.Rect(0, 0, 19, 11), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},

@@ -115,6 +115,9 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 	oriented := orientedImage{Image: img, orientation: orientation}
 	bounds := oriented.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
+	originX, originY := oriented.mapCoords(0, 0)
+	nextX, nextY := oriented.mapCoords(1, 0)
+	stepX, stepY := nextX-originX, nextY-originY
 	switch source := img.(type) {
 	case *image.YCbCr:
 		ratio := image.YCbCrSubsampleRatio444
@@ -126,29 +129,39 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 			chromaShift = 1
 		}
 		output := image.NewYCbCr(bounds, ratio)
+		lumaStep := stepX + stepY*source.YStride
 		for row := 0; row < height; row++ {
 			rowBase := row * output.YStride
-			chromaBase := (row >> chromaShift) * output.CStride
+			mappedX, mappedY := oriented.mapCoords(0, row)
+			sourceIndex := source.YOffset(mappedX, mappedY)
 			for column := 0; column < width; column++ {
-				mappedX, mappedY := oriented.mapCoords(column, row)
-				yIndex := source.YOffset(mappedX, mappedY)
-				output.Y[rowBase+column] = source.Y[yIndex]
-				if chromaShift == 0 || (row&1 == 0 && column&1 == 0) {
-					cIndex := source.COffset(mappedX, mappedY)
-					chromaIndex := chromaBase + (column >> chromaShift)
-					output.Cb[chromaIndex] = source.Cb[cIndex]
-					output.Cr[chromaIndex] = source.Cr[cIndex]
-				}
+				output.Y[rowBase+column] = source.Y[sourceIndex]
+				sourceIndex += lumaStep
+			}
+		}
+		chromaStepX, chromaStepY := stepX<<chromaShift, stepY<<chromaShift
+		for row := 0; row < height>>chromaShift; row++ {
+			rowBase := row * output.CStride
+			mappedX, mappedY := oriented.mapCoords(0, row<<chromaShift)
+			for column := 0; column < width>>chromaShift; column++ {
+				sourceIndex := source.COffset(mappedX, mappedY)
+				output.Cb[rowBase+column] = source.Cb[sourceIndex]
+				output.Cr[rowBase+column] = source.Cr[sourceIndex]
+				mappedX += chromaStepX
+				mappedY += chromaStepY
 			}
 		}
 		return output
 	case *image.Gray:
 		output := image.NewGray(bounds)
+		pixelStep := stepX + stepY*source.Stride
 		for row := 0; row < height; row++ {
 			rowBase := row * output.Stride
+			mappedX, mappedY := oriented.mapCoords(0, row)
+			sourceIndex := source.PixOffset(mappedX, mappedY)
 			for column := 0; column < width; column++ {
-				mappedX, mappedY := oriented.mapCoords(column, row)
-				output.Pix[rowBase+column] = source.GrayAt(mappedX, mappedY).Y
+				output.Pix[rowBase+column] = source.Pix[sourceIndex]
+				sourceIndex += pixelStep
 			}
 		}
 		return output

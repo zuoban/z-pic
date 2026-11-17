@@ -145,6 +145,8 @@ EXIF 方向包装保留原图的 `Opaque` 判断能力，JPEG 转成剪贴板 PN
 
 JPEG 重新编码时，方向变换对零原点、宽高均为偶数的 4:2:0 图像保留色度采样，每个 2×2 像素块只搬运一组 Cb/Cr，减少方向缓冲的分配。奇数尺寸、其他坐标原点或采样方式沿用完整色度映射，保留边缘像素；回归测试同时核对各方向的 Y/Cb/Cr 样本与 JPEG 编码字节。
 
+YCbCr 与灰度方向变换按行计算起点，用固定索引步长推进像素，省去逐像素重复解析方向与图片边界。YCbCr 的亮度、色度平面分别复制；色度仍按源采样方式读取，支持非零原点、带行填充的子图和单行、单列图片。
+
 JPEG 编码输出达到原图字节数后，释放候选缓冲并丢弃后续输出，避免继续为最终不会采用的数据扩容。编码仍完整执行，原有错误与取消检查保持不变；小于原图的结果保留完整编码字节，未减小的结果仍返回原始数据。
 
 性能基线可运行：
@@ -162,6 +164,8 @@ go test ./internal/pngtools -run '^$' -bench 'BenchmarkPNGOutputBuffer|Benchmark
 `BenchmarkClipboardJPEG12MP` 将 4000×3000 合成 JPEG 转成剪贴板 PNG，分别测量 EXIF 方向 1 和 6。Apple M1、Go 1.27.3 下，使用 `-benchtime=3x -count=3` 测得方向 6 优化前后约 1.21–1.22 s/op → 0.98–1.03 s/op，Go 累计分配量约 106.3 MB/op → 67.9 MB/op，分配次数约 2400 万次/op → 1200 万次/op；方向 1 的累计分配量均约 67.9 MB/op。基准包含 JPEG 解码、方向处理和 PNG 编码，不包含系统剪贴板写入或界面操作，分配量不代表峰值内存。
 
 `BenchmarkOrientYCbCr42012MP` 单独测量 4000×3000 的 4:2:0 图像按 EXIF 方向 2 镜像和方向 6 旋转；`BenchmarkJPEGCompression12MP` 将同尺寸、质量 90 的合成 JPEG 以质量 80 重新压缩，包含图片头检查、JPEG 解码、方向处理、编码及结果快照。Apple M1、Go 1.27.3 下，使用 `-benchtime=3x -count=3` 测得：两种方向变换的 Go 累计分配量均约 36.0 MB/op → 18.0 MB/op；完整旋转压缩约 62.5 MB/op → 44.5 MB/op，减少约 29%，方向 1 均约 26.5 MB/op。基准不包含文件读取、保存、界面预览或剪贴板转换，累计分配量不代表峰值内存。
+
+坐标推进优化使用 `go test ./internal/compress -run '^$' -bench 'BenchmarkOrientYCbCr42012MP|BenchmarkJPEGCompression12MP' -benchmem -benchtime=3x -count=3 -cpuprofile=/tmp/z-pic-orientation.cpu` 对比前后。在相同 Apple M1、Go 1.27.3 环境下，镜像方向变换约 50.5–52.3 ms/op → 16.7–18.4 ms/op，旋转方向变换约 55.6–71.7 ms/op → 24.7–33.3 ms/op，累计分配量仍约 18.0 MB/op。测试逐像素核对方向 2–8 的 Y/Cb/Cr 样本，并比较完整 JPEG 编码字节；另覆盖带行填充和非零原点的灰度子图。耗时受 CPU 与缓存状态影响，此处收益只对应方向变换阶段，不能直接作为完整压缩流程的提速比例。
 
 `BenchmarkJPEGNoSavings12MP` 将 4000×3000、质量 30 的合成 JPEG 以质量 100 重新编码，分别测量 EXIF 方向 1 和 6，并确认结果仍复用原图字节。Apple M1、Go 1.27.3 下，使用 `-benchtime=3x -count=3` 测得 JPEG 输出缓冲优化前后：方向 1 的 Go 累计分配量约 34.9 MB/op → 22.3 MB/op，减少约 36%；方向 6 约 52.9 MB/op → 40.3 MB/op，减少约 24%。同期 `BenchmarkJPEGCompression12MP` 的较小结果仍分别分配约 26.5 MB/op 和 44.5 MB/op。基准覆盖图片头检查、JPEG 解码、方向处理、编码与结果快照，不包含文件读取、保存或界面预览；只据此报告分配量收益，不代表峰值内存或编码提速。
 
