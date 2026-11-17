@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,10 +17,11 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
+	"zpic/internal/imageinput"
 )
 
 const (
-	maxInputBytes = 64 << 20
+	maxInputBytes = imageinput.MaxSize
 	maxPixels     = 32_000_000
 )
 
@@ -233,34 +233,9 @@ func readSelectionWithPreview(ctx context.Context, path string, reusable *select
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("无法打开图片：%w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("请选择普通图片文件")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("无法打开图片：%w", err)
-	}
-	defer f.Close()
-	info, err = f.Stat()
+	data, err := imageinput.Read(ctx, path)
 	if err != nil {
 		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("请选择图片文件")
-	}
-	if info.Size() > maxInputBytes {
-		return nil, errors.New("图片超过 64 MiB，请选择较小的文件")
-	}
-	data, err := io.ReadAll(io.LimitReader(selectionReader{ctx: ctx, reader: f}, maxInputBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("无法读取图片：%w", err)
-	}
-	if len(data) > maxInputBytes {
-		return nil, errors.New("图片超过 64 MiB，请选择较小的文件")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -303,18 +278,6 @@ func readSelectionWithPreview(ctx context.Context, path string, reusable *select
 		path: path, format: format, width: width, height: height,
 		size: int64(len(data)), data: data, preview: preview,
 	}, nil
-}
-
-type selectionReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (reader selectionReader) Read(buffer []byte) (int, error) {
-	if err := reader.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return reader.reader.Read(buffer)
 }
 
 func (s *application) invalidateResult() {

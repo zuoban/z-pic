@@ -131,10 +131,12 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 批处理调度与保存位于 `batch_runner.go`，图片工作内存预算位于 `image_budget.go`；PNG/WebP 共用的原生工具缓存、完整性验证与原子释放逻辑位于 `internal/toolcache`。GitHub Actions 在 macOS ARM64 上执行竞态检测、Go 与 MyGo 静态检查、捆绑编码器验证和构建；编码器的真实集成测试随 `go test -race ./...` 一起运行。
 
+压缩、缩略图和单图预览共用 `internal/imageinput` 读取文件内容，按已打开文件的大小预分配缓冲区，减少逐步扩容带来的分配和复制。读取期间文件增长或截短时以实际读取内容为准，增长后仍按实际字节数执行 64 MiB 上限，并检查取消。
+
 性能基线可运行：
 
 ```sh
-go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode' -benchmem
+go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode' -benchmem
 ```
 
-`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。
+`BenchmarkReadInputJPEG12MP` 单独测量文件读取，`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。

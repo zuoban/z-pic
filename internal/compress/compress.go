@@ -17,12 +17,13 @@ import (
 
 	_ "golang.org/x/image/webp"
 
+	"zpic/internal/imageinput"
 	"zpic/internal/pngtools"
 	"zpic/internal/webptools"
 )
 
 const (
-	maxInputSize = 64 << 20
+	maxInputSize = imageinput.MaxSize
 	maxPixels    = 32_000_000
 )
 
@@ -256,42 +257,7 @@ func validatePNGOutput(ctx context.Context, data []byte, input image.Config) err
 // readInput enforces the limit on bytes actually read, even if the file grows
 // after Stat. It also closes the input on every exit path.
 func readInput(ctx context.Context, path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("无法读取图片信息：%w", err)
-	}
-	// Check before Open so an ordinary FIFO path is rejected without blocking.
-	// A concurrent replacement between Stat and Open is outside this portable
-	// check; opening arbitrary paths race-free requires OS-specific support.
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("图片输入必须是普通文件")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("无法打开图片：%w", err)
-	}
-	defer f.Close()
-	info, err = f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("无法读取图片信息：%w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("图片输入必须是普通文件")
-	}
-	if info.Size() > maxInputSize {
-		return nil, fmt.Errorf("图片文件超过 64 MiB 限制")
-	}
-	data, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: f}, maxInputSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("读取图片失败：%w", err)
-	}
-	if len(data) > maxInputSize {
-		return nil, fmt.Errorf("图片文件超过 64 MiB 限制")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("压缩已取消：%w", err)
-	}
-	return data, nil
+	return imageinput.Read(ctx, path)
 }
 
 type contextReader struct {

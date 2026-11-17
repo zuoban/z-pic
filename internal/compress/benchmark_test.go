@@ -13,7 +13,8 @@ import (
 	"testing"
 )
 
-func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
+func benchmarkJPEGFile12MP(bench *testing.B) (string, int64) {
+	bench.Helper()
 	source := benchmarkSourceNRGBA(4000, 3000)
 	var encoded bytes.Buffer
 	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 90}); err != nil {
@@ -23,8 +24,26 @@ func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
 	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
 		bench.Fatal(err)
 	}
+	return path, int64(encoded.Len())
+}
+
+func BenchmarkReadInputJPEG12MP(bench *testing.B) {
+	path, size := benchmarkJPEGFile12MP(bench)
 	ctx := context.Background()
-	bench.SetBytes(int64(encoded.Len()))
+	bench.SetBytes(size)
+	bench.ReportAllocs()
+	bench.ResetTimer()
+	for iter := 0; iter < bench.N; iter++ {
+		if _, err := readInput(ctx, path); err != nil {
+			bench.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
+	path, size := benchmarkJPEGFile12MP(bench)
+	ctx := context.Background()
+	bench.SetBytes(size)
 	bench.ReportAllocs()
 	bench.ResetTimer()
 	for iter := 0; iter < bench.N; iter++ {
