@@ -255,8 +255,10 @@ func readSelectionWithPreview(ctx context.Context, path string, reusable *select
 	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
 		return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
 	}
-	if format == "png" && compress.IsAnimatedPNG(data) {
-		return nil, errors.New("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+	if format == "png" {
+		if err := compress.ValidatePNG(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	if format == "webp" {
 		if err := compress.ValidateWebP(ctx, data); err != nil {

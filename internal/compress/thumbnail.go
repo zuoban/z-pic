@@ -35,8 +35,10 @@ func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, erro
 		uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
 		return nil, fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
 	}
-	if format == "png" && animatedPNG(data) {
-		return nil, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+	if format == "png" {
+		if err := ValidatePNG(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	if format == "webp" {
 		if err := ValidateWebP(ctx, data); err != nil {

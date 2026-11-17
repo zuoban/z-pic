@@ -23,7 +23,14 @@
 - 防重复踩坑：只读头部不代表只看开头；容器策略必须覆盖完整块序列，同时保持不解码像素的内存特性。
 - 验证：`go test ./internal/compress -run 'TestInspect|TestWebPInspection'`；review 核对块长度运算先检查剩余空间，并保留逐块取消检查。
 
+## 4. 合并三套 PNG 块扫描规则
+
+- 问题：内存动画检查、文件头检查、拖放保存各自维护扫描器，导致 IEND、损坏数据和取消处理不一致。
+- 修改：集中到支持字节和文件的同一块扫描器；压缩、输出校验、缩略图、剪贴板及选图复用 `ValidatePNG`，拖放复用 `Inspect`，删除重复扫描。
+- 防重复踩坑：探测函数只能用于探测；真正的输入入口应执行返回错误的完整策略检查，之后仍需解码检查 CRC 和像素。
+- 验证：压缩包全套测试、拖放离线输入测试和选图测试；review 核对静态 PNG 原数据保留、IEND 后不再误判动画、循环取消和内存上限。
+
 ## 本轮交付验证
 
-- 本提交包含第 3 轮修改及前 3 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestInspect|TestWebPInspection'` 并 review 暂存差异。
+- 本提交包含第 4 轮修改及前 4 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestPNG|TestInspect|TestClipboardPNG|TestReadSelection|TestResolve|TestThumbnail'` 并 review 暂存差异。

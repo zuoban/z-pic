@@ -2,14 +2,11 @@ package compress
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"image"
 	"io"
 	"os"
 )
-
-var pngSignature = [8]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 
 // ImageInfo describes validated static JPEG, PNG or WebP metadata read from headers.
 type ImageInfo struct {
@@ -66,12 +63,8 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 		return ImageInfo{}, fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
 	}
 	if format == "png" {
-		animated, err := isAnimatedPNGFile(ctx, f, opened.Size())
-		if err != nil {
+		if err := validatePNGContainer(ctx, f, opened.Size()); err != nil {
 			return ImageInfo{}, err
-		}
-		if animated {
-			return ImageInfo{}, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
 		}
 	}
 	if format == "webp" {
@@ -89,44 +82,4 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 		Height: config.Height,
 		Size:   opened.Size(),
 	}, nil
-}
-
-func isAnimatedPNGFile(ctx context.Context, r io.ReadSeeker, fileSize int64) (bool, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return false, fmt.Errorf("无法读取 PNG 头部：%w", err)
-	}
-	var sig [8]byte
-	if _, err := io.ReadFull(r, sig[:]); err != nil || sig != pngSignature {
-		return false, fmt.Errorf("PNG 头部损坏")
-	}
-	offset := int64(len(sig))
-	var header [8]byte
-	for offset <= fileSize-12 {
-		if err := ctx.Err(); err != nil {
-			return false, fmt.Errorf("读取图片已取消：%w", err)
-		}
-		if _, err := io.ReadFull(r, header[:]); err != nil {
-			return false, fmt.Errorf("PNG 数据块头部损坏：%w", err)
-		}
-		length := uint64(binary.BigEndian.Uint32(header[:4]))
-		if length > uint64(fileSize-offset-12) {
-			return false, fmt.Errorf("PNG 数据块长度无效")
-		}
-		chunkType := string(header[4:8])
-		if chunkType == "acTL" {
-			return true, nil
-		}
-		if chunkType == "IEND" {
-			if length != 0 {
-				return false, fmt.Errorf("PNG IEND 数据块长度无效")
-			}
-			return false, nil
-		}
-		skip := int64(length) + 4
-		if _, err := r.Seek(skip, io.SeekCurrent); err != nil {
-			return false, fmt.Errorf("无法读取 PNG 数据块：%w", err)
-		}
-		offset += 12 + int64(length)
-	}
-	return false, fmt.Errorf("PNG 数据损坏：缺少 IEND")
 }

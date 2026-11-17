@@ -5,7 +5,6 @@ package compress
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -127,8 +126,10 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
 		return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
 	}
-	if format == "png" && animatedPNG(data) {
-		return nil, fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
+	if format == "png" {
+		if err := ValidatePNG(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	if format == "webp" {
 		if err := ValidateWebP(ctx, data); err != nil {
@@ -262,8 +263,11 @@ func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (imag
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PNG 头部：%w", err)
 	}
-	if format != "png" || config.Width != input.Width || config.Height != input.Height || animatedPNG(data) {
+	if format != "png" || config.Width != input.Width || config.Height != input.Height {
 		return nil, fmt.Errorf("输出格式或图片尺寸发生了变化")
+	}
+	if err := ValidatePNG(ctx, data); err != nil {
+		return nil, err
 	}
 	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	if err != nil {
@@ -291,31 +295,6 @@ func (r contextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return r.reader.Read(p)
-}
-
-// IsAnimatedPNG reports whether data starts with a PNG signature and contains
-// an animation control (acTL) chunk.
-func IsAnimatedPNG(data []byte) bool {
-	return animatedPNG(data)
-}
-
-// The standard PNG decoder ignores APNG animation chunks. Walk chunk
-// boundaries so bytes inside a pixel payload cannot be mistaken for acTL.
-func animatedPNG(data []byte) bool {
-	if len(data) < len(pngSignature) || !bytes.Equal(data[:len(pngSignature)], pngSignature[:]) {
-		return false
-	}
-	for offset := len(pngSignature); len(data)-offset >= 12; {
-		length := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
-		if length > uint64(len(data)-offset-12) {
-			return false // The decoder will report the truncated chunk.
-		}
-		if string(data[offset+4:offset+8]) == "acTL" {
-			return true
-		}
-		offset += int(length) + 12
-	}
-	return false
 }
 
 // Save creates a new file and never overwrites an existing path. Failed writes

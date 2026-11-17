@@ -357,6 +357,22 @@ func TestResolveValidationAndSafeName(t *testing.T) {
 	}
 }
 
+func TestResolveBytesRejectsMalformedPNGChunks(t *testing.T) {
+	payload := imageBytes(t, "png")
+	end := len(payload) - 12
+	lateAnimation := append(bytes.Clone(payload[:end]), pngChunk("acTL", make([]byte, 8))...)
+	lateAnimation = append(lateAnimation, payload[end:]...)
+	badLength := bytes.Clone(payload)
+	binary.BigEndian.PutUint32(badLength[end:], 0xffffffff)
+	for _, input := range [][]byte{payload[:end], payload[:len(payload)-1], badLength, lateAnimation} {
+		dir := t.TempDir()
+		if path, saved, err := Resolve(context.Background(), Item{Data: input}, dir); err == nil || saved || path != "" {
+			t.Fatalf("malformed PNG saved: %q, %v, %v", path, saved, err)
+		}
+		assertFileCount(t, dir, 0)
+	}
+}
+
 func TestResolveWithSharedTransportPreservesOriginals(test *testing.T) {
 	payload := imageBytes(test, "png")
 	requests := 0

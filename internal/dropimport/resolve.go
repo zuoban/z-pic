@@ -3,7 +3,6 @@ package dropimport
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"image"
 	"io"
@@ -145,11 +144,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	if err != nil {
 		return "", false, err
 	}
-	if info.Format == "png" {
-		if err := checkPNGChunks(ctx, temp, info.Size); err != nil {
-			return "", false, err
-		}
-	}
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
 		return "", false, err
 	}
@@ -244,33 +238,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		return target, true, nil
 	}
 	return "", false, fmt.Errorf("同名图片过多，请选择其他目录")
-}
-
-func checkPNGChunks(ctx context.Context, file *os.File, size int64) error {
-	for offset := int64(8); offset < size; {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return err
-		}
-		var header [8]byte
-		if _, err := io.ReadFull(file, header[:]); err != nil {
-			return fmt.Errorf("PNG 数据损坏：%w", err)
-		}
-		length := int64(binary.BigEndian.Uint32(header[:4]))
-		if size-offset < 12 || length > size-offset-12 {
-			return fmt.Errorf("PNG 数据损坏")
-		}
-		if string(header[4:]) == "acTL" {
-			return fmt.Errorf("不支持动画 PNG，仅支持静态 JPEG/PNG/WebP")
-		}
-		if string(header[4:]) == "IEND" {
-			return nil
-		}
-		offset += 12 + length
-	}
-	return fmt.Errorf("PNG 数据损坏：缺少 IEND")
 }
 
 func filename(parsed *url.URL) string {
