@@ -16,7 +16,14 @@
 - 防重复踩坑：压缩、缩略图、剪贴板等入口都需执行产品规定的格式限制，不能假设系统解码器会拒绝所有不支持的容器。
 - 验证：`go test ./internal/compress -run TestClipboardPNG`；review 核对合法 PNG 仍保留原始编码，JPEG 方向和透明度测试继续通过。
 
+## 3. 图片头检查不能在第一个 IDAT 提前放行
+
+- 问题：文件检查在 PNG 的首个 IDAT 处返回，漏掉后续动画块；数据块截断、超长或缺少 IEND 也被当作静态图片接受。
+- 修改：按块边界跳过像素载荷，持续检查到合法 IEND；错误长度和缺失终止块立即报错。
+- 防重复踩坑：只读头部不代表只看开头；容器策略必须覆盖完整块序列，同时保持不解码像素的内存特性。
+- 验证：`go test ./internal/compress -run 'TestInspect|TestWebPInspection'`；review 核对块长度运算先检查剩余空间，并保留逐块取消检查。
+
 ## 本轮交付验证
 
-- 本提交包含第 2 轮修改及前 2 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestClipboardPNG'` 并 review 暂存差异。
+- 本提交包含第 3 轮修改及前 3 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestInspect|TestWebPInspection'` 并 review 暂存差异。

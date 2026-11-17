@@ -382,14 +382,18 @@ func TestSaveNeverOverwrites(t *testing.T) {
 	}
 }
 
-func insertPNGChunk(data []byte, kind string, payload []byte) []byte {
+func pngTestChunk(kind string, payload []byte) []byte {
 	chunk := make([]byte, len(payload)+12)
 	binary.BigEndian.PutUint32(chunk, uint32(len(payload)))
 	copy(chunk[4:8], kind)
 	copy(chunk[8:], payload)
 	binary.BigEndian.PutUint32(chunk[len(chunk)-4:], crc32.ChecksumIEEE(chunk[4:len(chunk)-4]))
+	return chunk
+}
+
+func insertPNGChunk(data []byte, kind string, payload []byte) []byte {
 	out := append([]byte(nil), data[:33]...)
-	out = append(out, chunk...)
+	out = append(out, pngTestChunk(kind, payload)...)
 	return append(out, data[33:]...)
 }
 

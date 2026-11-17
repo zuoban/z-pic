@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,32 @@ func TestInspectValidJPEGAndPNG(t *testing.T) {
 	}
 	if pngInfo.Format != "png" || pngInfo.Width != 24 || pngInfo.Height != 16 || pngInfo.Size != int64(pngBuf.Len()) {
 		t.Fatalf("unexpected PNG info: %+v", pngInfo)
+	}
+}
+
+func TestInspectPNGChecksChunksAfterImageData(t *testing.T) {
+	data := pngFixture(t, image.NewNRGBA(image.Rect(0, 0, 3, 2)), png.DefaultCompression)
+	end := len(data) - 12
+	lateAnimation := append(bytes.Clone(data[:end]), pngTestChunk("acTL", make([]byte, 8))...)
+	lateAnimation = append(lateAnimation, data[end:]...)
+	oversized := bytes.Clone(data)
+	binary.BigEndian.PutUint32(oversized[end:], 0xffffffff)
+	badEnd := bytes.Clone(data)
+	binary.BigEndian.PutUint32(badEnd[end:], 1)
+	for name, input := range map[string][]byte{
+		"late animation":  lateAnimation,
+		"missing IEND":    data[:end],
+		"partial header":  append(bytes.Clone(data[:end]), 0, 0, 0),
+		"oversized chunk": oversized,
+		"invalid IEND":    badEnd,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeFixture(t, "invalid.png", input)
+			if _, err := Inspect(context.Background(), path); err == nil ||
+				name == "late animation" && !strings.Contains(err.Error(), "动画") {
+				t.Fatalf("invalid PNG accepted or wrong reason: %v", err)
+			}
+		})
 	}
 }
 

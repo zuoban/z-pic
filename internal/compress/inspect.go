@@ -97,7 +97,7 @@ func isAnimatedPNGFile(ctx context.Context, r io.ReadSeeker, fileSize int64) (bo
 	}
 	var sig [8]byte
 	if _, err := io.ReadFull(r, sig[:]); err != nil || sig != pngSignature {
-		return false, nil
+		return false, fmt.Errorf("PNG 头部损坏")
 	}
 	offset := int64(len(sig))
 	var header [8]byte
@@ -106,24 +106,27 @@ func isAnimatedPNGFile(ctx context.Context, r io.ReadSeeker, fileSize int64) (bo
 			return false, fmt.Errorf("读取图片已取消：%w", err)
 		}
 		if _, err := io.ReadFull(r, header[:]); err != nil {
-			return false, nil
+			return false, fmt.Errorf("PNG 数据块头部损坏：%w", err)
 		}
 		length := uint64(binary.BigEndian.Uint32(header[:4]))
 		if length > uint64(fileSize-offset-12) {
-			return false, nil
+			return false, fmt.Errorf("PNG 数据块长度无效")
 		}
 		chunkType := string(header[4:8])
 		if chunkType == "acTL" {
 			return true, nil
 		}
-		if chunkType == "IDAT" || chunkType == "IEND" {
+		if chunkType == "IEND" {
+			if length != 0 {
+				return false, fmt.Errorf("PNG IEND 数据块长度无效")
+			}
 			return false, nil
 		}
 		skip := int64(length) + 4
 		if _, err := r.Seek(skip, io.SeekCurrent); err != nil {
-			return false, nil
+			return false, fmt.Errorf("无法读取 PNG 数据块：%w", err)
 		}
 		offset += 12 + int64(length)
 	}
-	return false, nil
+	return false, fmt.Errorf("PNG 数据损坏：缺少 IEND")
 }
