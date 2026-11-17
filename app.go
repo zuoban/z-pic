@@ -78,7 +78,9 @@ type application struct {
 	showInFolder          func(string)
 	applyNativeTheme      func(mygo.ThemeSource)
 	writeClipboardImage   func([]byte) error
+	readClipboardImages   func() (transfer.Data, error)
 	clipboardToast        *ui.Toast
+	clipboardImporting    bool
 	floatingWindow        *mygo.Window
 	floatingOpen          bool
 	floating              floatingState

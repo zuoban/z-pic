@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -9,6 +10,59 @@ import (
 
 	"zpic/internal/compress"
 )
+
+func (s *application) canPasteImages() bool {
+	return !s.closed && !s.modalOpen() && len(s.dropQueue) == 0
+}
+
+func (s *application) pasteImages() {
+	if !s.canPasteImages() {
+		return
+	}
+	read := s.readClipboardImages
+	if read == nil {
+		read = func() (transfer.Data, error) {
+			return mygo.Clipboard.Read(transfer.FileList, transfer.URIList, transfer.PNG, "image/jpeg", "image/webp")
+		}
+	}
+	data, err := read()
+	if errors.Is(err, transfer.ErrFormat) || err == nil && len(data.Items()) == 0 {
+		s.setMessage("剪贴板中没有可导入的图片，请先复制图片或图片文件。", true)
+		s.showClipboardToast("无法粘贴图片", s.message, true)
+		return
+	}
+	if err != nil {
+		s.reportError(err, "读取剪贴板失败")
+		s.showClipboardToast("无法粘贴图片", s.message, true)
+		return
+	}
+	s.clipboardImporting = true
+	s.receiveDrop(data)
+}
+
+func (s *application) showClipboardToast(title, description string, failed bool) {
+	kind := "success"
+	if failed {
+		kind = "error"
+	}
+	s.clipboardToast = &ui.Toast{ID: "clipboard-result", Title: title, Description: description, Type: kind}
+}
+
+func (s *application) completeClipboardImport() {
+	if !s.clipboardImporting {
+		return
+	}
+	s.clipboardImporting = false
+	title := "剪贴板图片已加入队列"
+	if s.failed {
+		title = "剪贴板图片导入失败"
+	} else if s.message == "操作已取消。" {
+		title = "已取消粘贴图片"
+	} else if s.message == "所选图片均已在批量队列中。" {
+		title = "图片已在队列中"
+	}
+	s.showClipboardToast(title, s.message, s.failed)
+}
 
 func (s *application) canCopyResult() bool {
 	return !s.closed && !s.modalOpen() && s.result != nil && len(s.result.Data) > 0 &&
@@ -41,11 +95,11 @@ func (s *application) copyResult() {
 			if err != nil {
 				s.reportError(err, "复制图片失败")
 				if s.failed {
-					s.clipboardToast = &ui.Toast{ID: "clipboard-result", Title: "复制图片失败", Description: s.message, Type: "error"}
+					s.showClipboardToast("复制图片失败", s.message, true)
 				}
 			} else {
 				s.setMessage("已复制压缩图片，可直接粘贴", false)
-				s.clipboardToast = &ui.Toast{ID: "clipboard-result", Title: "图片已复制到剪贴板", Description: "可直接粘贴到其他应用", Type: "success"}
+				s.showClipboardToast("图片已复制到剪贴板", "可直接粘贴到其他应用", false)
 			}
 		})
 	}()

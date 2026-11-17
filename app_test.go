@@ -1373,7 +1373,7 @@ func TestHiddenTitleBarKeepsToolbarClearOfWindowControls(t *testing.T) {
 					items = append(items, item)
 				}
 			}
-			for _, label := range []string{"重新压缩", "继续压缩", "收起悬浮窗", "设置"} {
+			for _, label := range []string{"重新压缩", "继续压缩", "粘贴图片", "收起悬浮窗", "设置"} {
 				role := ui.RoleButton
 				control, found := tt.AccessByRole(role, label)
 				if !found {

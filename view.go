@@ -17,6 +17,7 @@ var (
 	toolbarContinueIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l7 5-7 5Z"/></svg>`))
 	toolbarFloatingIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><rect x="8" y="7" width="4" height="4" rx=".5"/></svg>`))
 	toolbarSettingsIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.75h3l.4 1.75 1.2.7 1.7-.5 1.5 2.6L13 7.5v1l1.3 1.2-1.5 2.6-1.7-.5-1.2.7-.4 1.75h-3l-.4-1.75-1.2-.7-1.7.5-1.5-2.6L3 8.5v-1L1.7 6.3l1.5-2.6 1.7.5 1.2-.7Z"/><circle cx="8" cy="8" r="2"/></svg>`))
+	toolbarPasteIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="1.5" width="6" height="3" rx="1"/><path d="M5 3H3.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H11M8 7v4m-2-2h4"/></svg>`))
 )
 
 func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
@@ -84,6 +85,7 @@ func (s *application) view(c *ui.Context) {
 	}
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
+		c.OnWindowShortcut(ui.Cmd, ui.KeyV, s.pasteImages)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveActiveAction)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyComma, func() { s.setSettingsOpen(true) })
@@ -159,6 +161,15 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 	}
 	availWidth := max(0, width-leftPad-rightPad)
 	utilityControls := func() {
+		pasteButton := quietToolbarButton(c, "paste-images", "").Label("粘贴图片").
+			KeyShortcuts(ui.Cmd, ui.KeyV).
+			Tooltip("从剪贴板粘贴图片并加入队列 · " + shortcutLabel("V")).
+			Disabled(!s.canPasteImages()).OnClick(s.pasteImages)
+		if availWidth >= 850 || mobile {
+			toolbarButtonContent(c, pasteButton, "粘贴图片", toolbarPasteIcon)
+		} else {
+			pasteButton.Children(func() { ui.Icon(c, toolbarPasteIcon).Size(16, 16) })
+		}
 		floatingLabel := "悬浮窗"
 		if s.floatingOpen {
 			floatingLabel = "收起悬浮窗"
@@ -298,6 +309,7 @@ func (s *application) previewPanel(c *ui.Context) {
 					})
 					ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(500)
 					ui.Text(c, "支持单张、多张图片或文件夹").FontSize(13).TextColor(t.TextMuted)
+					ui.Text(c, "复制图片后按 "+shortcutLabel("V")+" 粘贴入队").FontSize(12).TextColor(metadataColor(c))
 					ui.Row(c).Gap(8).Margin(4, 0).Children(func() {
 						primaryAction(c, "select", "选择图片", s.busy).Height(36).Padding(0, 16).
 							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).

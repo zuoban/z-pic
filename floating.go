@@ -125,7 +125,11 @@ func (s *application) startNextDropImport() {
 	cached := maps.Clone(s.downloadedURLs)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel, s.canceling = true, "正在接收拖入的图片", cancel, false
+	if s.clipboardImporting {
+		s.phase = "正在导入剪贴板图片"
+	}
 	s.dropImporting = true
+	pasted := s.clipboardImporting
 	s.dropMessage, s.dropFailed = "", len(s.dropFailures) > 0
 	s.setMessage("", false)
 	s.saves.Add(1)
@@ -195,6 +199,11 @@ func (s *application) startNextDropImport() {
 				s.dropMessage = fmt.Sprintf("已下载 %d 张，正在加入队列。", downloaded)
 			}
 			if len(paths) == 0 {
+				if pasted && ctx.Err() != nil {
+					s.reportError(ctx.Err(), "粘贴图片失败")
+					s.completeClipboardImport()
+					return
+				}
 				s.dropMessage = s.dropImportErrors
 				if s.dropMessage == "" {
 					s.dropMessage = "请拖入本地 JPEG/PNG/WebP 图片或网页图片。"
@@ -202,6 +211,7 @@ func (s *application) startNextDropImport() {
 				s.dropFailed = true
 				s.rememberDropFailure(s.dropMessage)
 				s.setMessage(s.dropMessage, true)
+				s.completeClipboardImport()
 				return
 			}
 			if s.batch == nil && s.file != nil {
@@ -229,6 +239,7 @@ func (s *application) completeDropScan() {
 		s.rememberDropFailure(s.dropMessage)
 	}
 	s.dropImportErrors = ""
+	s.completeClipboardImport()
 }
 
 func (s *application) rememberDropFailure(message string) {

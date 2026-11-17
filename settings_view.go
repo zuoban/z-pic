@@ -109,7 +109,7 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 		ui.Column(c).FillWidth().Gap(12).Children(func() {
 			ui.Text(c, "快捷键").FontSize(16).FontWeight(500)
 			for _, shortcut := range []struct{ label, key string }{
-				{"选择图片", "O"}, {"开始或继续压缩", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
+				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"开始或继续压缩", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
 			} {
 				ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, shortcut.label).FontSize(13).TextColor(t.TextMuted).Grow(1)
