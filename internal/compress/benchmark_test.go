@@ -3,6 +3,7 @@ package compress
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -50,6 +51,33 @@ func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
 		if _, err := Thumbnail(ctx, path, 144); err != nil {
 			bench.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkClipboardJPEG12MP(bench *testing.B) {
+	source := benchmarkSourceNRGBA(4000, 3000)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 90}); err != nil {
+		bench.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name        string
+		orientation uint16
+	}{
+		{"Normal", 1},
+		{"Rotated", 6},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			data := withEXIF(encoded.Bytes(), exifTIFF(binary.LittleEndian, scenario.orientation))
+			ctx := context.Background()
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				if _, err := PNGBytes(ctx, data); err != nil {
+					sub.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

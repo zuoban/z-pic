@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -215,6 +216,127 @@ func (plain plainColorImage) Bounds() image.Rectangle {
 
 func (plain plainColorImage) At(column, row int) color.Color {
 	return plain.pixels.NRGBAAt(column, row)
+}
+
+type opacityProbe struct {
+	image.Image
+	opacity    bool
+	checks     int
+	pixelReads int
+}
+
+func (probe *opacityProbe) Opaque() bool {
+	probe.checks++
+	return probe.opacity
+}
+
+func (probe *opacityProbe) At(column, row int) color.Color {
+	probe.pixelReads++
+	return probe.Image.At(column, row)
+}
+
+func TestOrientedImageOpacityDelegatesWithoutReadingPixels(test *testing.T) {
+	for _, opaque := range []bool{true, false} {
+		for orientation := 2; orientation <= 8; orientation++ {
+			pixels := image.NewNRGBA(image.Rect(3, 5, 8, 9))
+			if opaque {
+				for offset := 3; offset < len(pixels.Pix); offset += 4 {
+					pixels.Pix[offset] = 255
+				}
+			}
+			source := &opacityProbe{Image: pixels, opacity: opaque}
+			oriented := normalizeOrientation(source, orientation).(interface{ Opaque() bool })
+			if got := oriented.Opaque(); got != opaque || source.checks != 1 || source.pixelReads != 0 {
+				test.Fatalf("orientation %d: opaque=%v want=%v checks=%d pixel reads=%d",
+					orientation, got, opaque, source.checks, source.pixelReads)
+			}
+		}
+	}
+}
+
+func TestOrientedImageOpacityFallbackPreservesAlpha(test *testing.T) {
+	bounds := image.Rect(-3, 5, 4, 9)
+	for _, alpha := range []uint8{255, 254, 128, 0} {
+		source := image.NewNRGBA(bounds)
+		for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
+			for column := bounds.Min.X; column < bounds.Max.X; column++ {
+				source.SetNRGBA(column, row, color.NRGBA{R: 170, G: 80, B: 30, A: 255})
+			}
+		}
+		source.SetNRGBA(bounds.Max.X-1, bounds.Max.Y-1, color.NRGBA{R: 170, G: 80, B: 30, A: alpha})
+		for _, wrapper := range []image.Image{
+			plainColorImage{bounds: bounds, pixels: source},
+			struct{ image.RGBA64Image }{source},
+		} {
+			for orientation := 2; orientation <= 8; orientation++ {
+				oriented := normalizeOrientation(wrapper, orientation).(interface{ Opaque() bool })
+				if got := oriented.Opaque(); got != source.Opaque() {
+					test.Fatalf("%T orientation %d: opaque=%v alpha=%d", wrapper, orientation, got, alpha)
+				}
+			}
+		}
+	}
+	empty := normalizeOrientation(struct{ image.Image }{image.NewNRGBA(image.Rectangle{})}, 6)
+	if !empty.(interface{ Opaque() bool }).Opaque() {
+		test.Fatal("empty image must be opaque")
+	}
+}
+
+func TestOrientedImageOpacityFallbackPreserves16BitAlpha(test *testing.T) {
+	source := image.NewNRGBA64(image.Rect(3, 5, 4, 6))
+	for _, alpha := range []uint16{0xffff, 0xfffe, 0xff00, 0x8000, 0} {
+		source.SetNRGBA64(3, 5, color.NRGBA64{R: 45000, G: 20000, B: 10000, A: alpha})
+		for _, wrapper := range []image.Image{
+			struct{ image.Image }{source},
+			struct{ image.RGBA64Image }{source},
+		} {
+			for orientation := 2; orientation <= 8; orientation++ {
+				oriented := normalizeOrientation(wrapper, orientation).(interface{ Opaque() bool })
+				if got := oriented.Opaque(); got != (alpha == 0xffff) {
+					test.Fatalf("%T orientation %d: opaque=%v alpha=%d", wrapper, orientation, got, alpha)
+				}
+			}
+		}
+	}
+}
+
+func TestOrientedPNGPreservesPixelSamples(test *testing.T) {
+	bounds := image.Rect(3, 5, 6, 7)
+	source8 := image.NewNRGBA(bounds)
+	source16 := image.NewNRGBA64(bounds)
+	alphas := []uint16{0xffff, 0xfffe, 0x8000, 0x0101, 1, 0}
+	for index, alpha := range alphas {
+		column, row := bounds.Min.X+index%3, bounds.Min.Y+index/3
+		source8.SetNRGBA(column, row, color.NRGBA{R: 240, G: 110, B: 30, A: uint8(alpha >> 8)})
+		source16.SetNRGBA64(column, row, color.NRGBA64{R: 61001, G: 28003, B: 7007, A: alpha})
+	}
+	for _, source := range []image.Image{source8, source16} {
+		for _, wrapper := range []image.Image{source, struct{ image.Image }{source}} {
+			for orientation := 2; orientation <= 8; orientation++ {
+				oriented := normalizeOrientation(wrapper, orientation)
+				var encoded bytes.Buffer
+				if err := png.Encode(&encoded, oriented); err != nil {
+					test.Fatal(err)
+				}
+				decoded, err := png.Decode(&encoded)
+				if err != nil {
+					test.Fatal(err)
+				}
+				if decoded.Bounds() != oriented.Bounds() {
+					test.Fatalf("%T orientation %d: bounds=%v want=%v", wrapper, orientation, decoded.Bounds(), oriented.Bounds())
+				}
+				for row := 0; row < decoded.Bounds().Dy(); row++ {
+					for column := 0; column < decoded.Bounds().Dx(); column++ {
+						got := color.NRGBA64Model.Convert(decoded.At(column, row))
+						want := color.NRGBA64Model.Convert(oriented.At(column, row))
+						if got != want {
+							test.Fatalf("%T orientation %d pixel (%d,%d)=%v want=%v", wrapper, orientation, column, row, got, want)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func TestOrientedImageRGBA64AtParity(test *testing.T) {

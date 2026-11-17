@@ -166,6 +166,21 @@ func (img orientedImage) Bounds() image.Rectangle {
 	return image.Rect(0, 0, bounds.Dx(), bounds.Dy())
 }
 
+func (img orientedImage) Opaque() bool {
+	if source, ok := img.Image.(interface{ Opaque() bool }); ok {
+		return source.Opaque()
+	}
+	bounds := img.Bounds()
+	for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
+		for column := bounds.Min.X; column < bounds.Max.X; column++ {
+			if img.RGBA64At(column, row).A != 0xffff {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (img orientedImage) mapCoords(column, row int) (int, int) {
 	bounds := img.Image.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
