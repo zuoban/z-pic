@@ -574,6 +574,10 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 		primaryAction(c, "batch-open-output", "打开输出文件夹", s.busy).Height(36).
 			OnClick(s.openOutputDir)
 	}
+	if s.batch.previewOpen && s.result != nil {
+		quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
+			Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片").OnClick(s.copyResult)
+	}
 	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 }
 

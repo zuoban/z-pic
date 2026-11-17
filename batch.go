@@ -1631,10 +1631,12 @@ func (s *application) openBatchPreview(index int) {
 			}
 			if item.overwritten {
 				outputPreview = selected.preview
+				result.Data = selected.data
 			} else if item.savedPath != "" {
 				if item.unchanged && selected.size == item.originalSize {
 					if savedInfo, statErr := os.Stat(item.savedPath); statErr == nil && savedInfo.Mode().IsRegular() && savedInfo.Size() == selected.size {
 						outputPreview = selected.preview
+						result.Data = selected.data
 					}
 				}
 				if outputPreview == nil {
@@ -1642,6 +1644,7 @@ func (s *application) openBatchPreview(index int) {
 					outSelected, err = readSelection(ctx, item.savedPath)
 					if err == nil {
 						outputPreview = outSelected.preview
+						result.Data = outSelected.data
 					}
 				}
 			}

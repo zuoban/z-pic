@@ -63,6 +63,10 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 
 func (s *application) view(c *ui.Context) {
 	s.applyTheme(c)
+	if s.clipboardToast != nil {
+		c.AddToast(*s.clipboardToast)
+		s.clipboardToast = nil
+	}
 	s.prepareBatchThumbnails()
 	_, pending, done, _, _, _, canRun := s.batchStats()
 	showBatchOutput := s.batch != nil && canRun && pending == 0 && done > 0 &&
@@ -430,8 +434,12 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 			primaryAction(c, "save", "保存结果", s.busy || (s.output.replacesOriginal() && !s.canOverwrite())).FillWidth().Height(36).
 				KeyShortcuts(ui.Cmd, ui.KeyS).Tooltip("按当前预设保存 · " + shortcutLabel("S")).
 				OnClick(s.savePresetResult)
-			quietButton(c, "save-copy", "另存副本", 32, s.busy).FillWidth().
-				OnClick(s.saveCopy)
+			ui.Row(c).FillWidth().Gap(8).Children(func() {
+				quietButton(c, "save-copy", "另存副本", 32, s.busy).Width(0).Grow(1).
+					OnClick(s.saveCopy)
+				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
+					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片").OnClick(s.copyResult)
+			})
 		}
 		ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 	})

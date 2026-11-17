@@ -77,6 +77,8 @@ type application struct {
 	dispatchUpdate        func(func())
 	showInFolder          func(string)
 	applyNativeTheme      func(mygo.ThemeSource)
+	writeClipboardImage   func([]byte) error
+	clipboardToast        *ui.Toast
 	floatingWindow        *mygo.Window
 	floatingOpen          bool
 	floating              floatingState
