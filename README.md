@@ -143,10 +143,13 @@ PNG 工具输出先与输入逐段比较，相同前缀复用原数据，首次�
 
 EXIF 方向包装保留原图的 `Opaque` 判断能力，JPEG 转成剪贴板 PNG 时直接复用原图的不透明状态，省去逐像素重复扫描及颜色接口分配。包装不新增完整像素缓冲区；没有 `Opaque` 接口的图像仍逐像素检查真实 Alpha，包括 16 位 Alpha。
 
+JPEG 重新编码时，方向变换对零原点、宽高均为偶数的 4:2:0 图像保留色度采样，每个 2×2 像素块只搬运一组 Cb/Cr，减少方向缓冲的分配。奇数尺寸、其他坐标原点或采样方式沿用完整色度映射，保留边缘像素；回归测试同时核对各方向的 Y/Cb/Cr 样本与 JPEG 编码字节。
+
 性能基线可运行：
 
 ```sh
 go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkScanBatchPaths1000Files|BenchmarkPlanBatchOutputs1000Files|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkClipboardJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode|BenchmarkValidatedPNGPreview12MP' -benchmem
+go test ./internal/compress -run '^$' -bench 'BenchmarkOrientYCbCr42012MP|BenchmarkJPEGCompression12MP' -benchmem -benchtime=3x -count=3
 go test ./internal/pngtools -run '^$' -bench 'BenchmarkPNGOutputBuffer|BenchmarkCommandOutputFallback6MiB' -benchmem -benchtime=20x -count=3
 ```
 
@@ -155,6 +158,8 @@ go test ./internal/pngtools -run '^$' -bench 'BenchmarkPNGOutputBuffer|Benchmark
 `BenchmarkValidatedPNGPreview12MP` 对比 PNG 输出校验后再次解码与直接复用校验像素两种路径。Apple M1、Go 1.27.3 下，4000×3000 合成图片使用 `-benchtime=10x -count=3` 测得约 231–233 ms/op → 115–118 ms/op，分配量约 96.2 MB/op → 48.1 MB/op。该数据只覆盖输出校验与预览解码阶段，不包含原生编码、界面位图转换或绘制，也不代表完整压缩流程的提速比例。
 
 `BenchmarkClipboardJPEG12MP` 将 4000×3000 合成 JPEG 转成剪贴板 PNG，分别测量 EXIF 方向 1 和 6。Apple M1、Go 1.27.3 下，使用 `-benchtime=3x -count=3` 测得方向 6 优化前后约 1.21–1.22 s/op → 0.98–1.03 s/op，Go 累计分配量约 106.3 MB/op → 67.9 MB/op，分配次数约 2400 万次/op → 1200 万次/op；方向 1 的累计分配量均约 67.9 MB/op。基准包含 JPEG 解码、方向处理和 PNG 编码，不包含系统剪贴板写入或界面操作，分配量不代表峰值内存。
+
+`BenchmarkOrientYCbCr42012MP` 单独测量 4000×3000 的 4:2:0 图像按 EXIF 方向 2 镜像和方向 6 旋转；`BenchmarkJPEGCompression12MP` 将同尺寸、质量 90 的合成 JPEG 以质量 80 重新压缩，包含图片头检查、JPEG 解码、方向处理、编码及结果快照。Apple M1、Go 1.27.3 下，使用 `-benchtime=3x -count=3` 测得：两种方向变换的 Go 累计分配量均约 36.0 MB/op → 18.0 MB/op；完整旋转压缩约 62.5 MB/op → 44.5 MB/op，减少约 29%，方向 1 均约 26.5 MB/op。基准不包含文件读取、保存、界面预览或剪贴板转换，累计分配量不代表峰值内存。
 
 `BenchmarkScanBatchPaths1000Files` 使用 10 个子目录中的 1000 张 32×24 合成 JPEG，对比文件夹递归导入和直接导入文件列表。Apple M1、Go 1.27.3 下，使用 `-benchtime=5x -count=3` 测得父目录缓存优化前后：文件夹扫描约 52–65 ms/op → 25–28 ms/op，文件列表扫描约 40–44 ms/op → 26–27 ms/op；Go 分配量约 24.8 MB/op → 20.5–20.6 MB/op。该基准只覆盖扫描与头部检查，不解码像素或执行压缩，耗时也受目录结构和文件系统缓存影响。
 

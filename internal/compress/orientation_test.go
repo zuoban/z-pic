@@ -431,3 +431,77 @@ func TestOrientForJPEGEncodePlanes(test *testing.T) {
 		}
 	}
 }
+
+func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		bounds    image.Rectangle
+		ratio     image.YCbCrSubsampleRatio
+		wantRatio image.YCbCrSubsampleRatio
+		padded    bool
+	}{
+		{"aligned-420", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, true},
+		{"minimal-420", image.Rect(0, 0, 2, 2), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio420, false},
+		{"odd-width-420", image.Rect(0, 0, 19, 10), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"odd-height-420", image.Rect(0, 0, 18, 11), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"odd-size-420", image.Rect(0, 0, 19, 11), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
+		{"translated-420", image.Rect(2, 2, 20, 12), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, true},
+		{"negative-origin-420", image.Rect(-4, -2, 14, 8), image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio444, false},
+		{"444", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio444, image.YCbCrSubsampleRatio444, false},
+		{"422", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio444, false},
+		{"440", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio440, image.YCbCrSubsampleRatio444, false},
+		{"411", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio411, image.YCbCrSubsampleRatio444, false},
+		{"410", image.Rect(0, 0, 18, 10), image.YCbCrSubsampleRatio410, image.YCbCrSubsampleRatio444, false},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			source := image.NewYCbCr(scenario.bounds, scenario.ratio)
+			if scenario.padded {
+				parent := image.NewYCbCr(image.Rect(0, 0, 32, 32), scenario.ratio)
+				source = parent.SubImage(scenario.bounds).(*image.YCbCr)
+			}
+			for index := range source.Y {
+				source.Y[index] = uint8(index*37 + 11)
+			}
+			for index := range source.Cb {
+				source.Cb[index] = uint8(index*17 + 57)
+				source.Cr[index] = uint8(index*29 + 91)
+			}
+			beforeY, beforeCb, beforeCr := bytes.Clone(source.Y), bytes.Clone(source.Cb), bytes.Clone(source.Cr)
+			for orientation := 2; orientation <= 8; orientation++ {
+				test.Run(strconv.Itoa(orientation), func(test *testing.T) {
+					output := orientForJPEGEncode(source, orientation).(*image.YCbCr)
+					expected := normalizeOrientation(source, orientation)
+					if output.Bounds() != expected.Bounds() || output.SubsampleRatio != scenario.wantRatio {
+						test.Fatalf("bounds=%v ratio=%v, want %v %v", output.Bounds(), output.SubsampleRatio, expected.Bounds(), scenario.wantRatio)
+					}
+					reference := image.NewYCbCr(expected.Bounds(), image.YCbCrSubsampleRatio444)
+					for row := 0; row < output.Bounds().Dy(); row++ {
+						for column := 0; column < output.Bounds().Dx(); column++ {
+							want := expected.At(column, row).(color.YCbCr)
+							if got := output.YCbCrAt(column, row); got != want {
+								test.Fatalf("pixel (%d,%d)=%v, want %v", column, row, got, want)
+							}
+							reference.Y[reference.YOffset(column, row)] = want.Y
+							chromaIndex := reference.COffset(column, row)
+							reference.Cb[chromaIndex], reference.Cr[chromaIndex] = want.Cb, want.Cr
+						}
+					}
+					var actualJPEG, referenceJPEG bytes.Buffer
+					options := &jpeg.Options{Quality: 80}
+					if err := jpeg.Encode(&actualJPEG, output, options); err != nil {
+						test.Fatal(err)
+					}
+					if err := jpeg.Encode(&referenceJPEG, reference, options); err != nil {
+						test.Fatal(err)
+					}
+					if !bytes.Equal(actualJPEG.Bytes(), referenceJPEG.Bytes()) {
+						test.Fatal("JPEG output differs from full-resolution chroma reference")
+					}
+				})
+			}
+			if !bytes.Equal(source.Y, beforeY) || !bytes.Equal(source.Cb, beforeCb) || !bytes.Equal(source.Cr, beforeCr) {
+				test.Fatal("source planes changed")
+			}
+		})
+	}
+}

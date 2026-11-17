@@ -165,6 +165,67 @@ func BenchmarkOrientedJPEGEncode(bench *testing.B) {
 	})
 }
 
+func BenchmarkOrientYCbCr42012MP(bench *testing.B) {
+	source := image.NewYCbCr(image.Rect(0, 0, 4000, 3000), image.YCbCrSubsampleRatio420)
+	for index := range source.Y {
+		source.Y[index] = uint8(index * 37)
+	}
+	for index := range source.Cb {
+		source.Cb[index] = uint8(index * 17)
+		source.Cr[index] = uint8(index * 29)
+	}
+	for _, scenario := range []struct {
+		name        string
+		orientation int
+	}{
+		{"Mirrored", 2},
+		{"Rotated", 6},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				oriented := orientForJPEGEncode(source, scenario.orientation)
+				if oriented.Bounds().Dx()*oriented.Bounds().Dy() != 12_000_000 {
+					sub.Fatal(oriented.Bounds())
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkJPEGCompression12MP(bench *testing.B) {
+	source := benchmarkSourceNRGBA(4000, 3000)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 90}); err != nil {
+		bench.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name        string
+		orientation uint16
+	}{
+		{"Normal", 1},
+		{"Rotated", 6},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			data := withEXIF(encoded.Bytes(), exifTIFF(binary.LittleEndian, scenario.orientation))
+			ctx := context.Background()
+			options := Options{Quality: 80}
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				result, err := Bytes(ctx, data, "photo.jpg", options)
+				if err != nil {
+					sub.Fatal(err)
+				}
+				if result.Unchanged {
+					sub.Fatal("fixture did not shrink")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkThumbnailRaster(bench *testing.B) {
 	source := benchmarkSourceNRGBA(1600, 1200)
 	fallbackSource := plainColorImage{bounds: source.Bounds(), pixels: source}

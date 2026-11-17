@@ -117,17 +117,28 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 	width, height := bounds.Dx(), bounds.Dy()
 	switch source := img.(type) {
 	case *image.YCbCr:
-		output := image.NewYCbCr(bounds, image.YCbCrSubsampleRatio444)
+		ratio := image.YCbCrSubsampleRatio444
+		chromaShift := 0
+		if source.SubsampleRatio == image.YCbCrSubsampleRatio420 &&
+			source.Rect.Min == (image.Point{}) &&
+			source.Rect.Dx()%2 == 0 && source.Rect.Dy()%2 == 0 {
+			ratio = image.YCbCrSubsampleRatio420
+			chromaShift = 1
+		}
+		output := image.NewYCbCr(bounds, ratio)
 		for row := 0; row < height; row++ {
 			rowBase := row * output.YStride
-			chromaBase := row * output.CStride
+			chromaBase := (row >> chromaShift) * output.CStride
 			for column := 0; column < width; column++ {
 				mappedX, mappedY := oriented.mapCoords(column, row)
 				yIndex := source.YOffset(mappedX, mappedY)
-				cIndex := source.COffset(mappedX, mappedY)
 				output.Y[rowBase+column] = source.Y[yIndex]
-				output.Cb[chromaBase+column] = source.Cb[cIndex]
-				output.Cr[chromaBase+column] = source.Cr[cIndex]
+				if chromaShift == 0 || (row&1 == 0 && column&1 == 0) {
+					cIndex := source.COffset(mappedX, mappedY)
+					chromaIndex := chromaBase + (column >> chromaShift)
+					output.Cb[chromaIndex] = source.Cb[cIndex]
+					output.Cr[chromaIndex] = source.Cr[cIndex]
+				}
 			}
 		}
 		return output
