@@ -475,3 +475,73 @@ func TestComparisonZoomShortcutsAndGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestComparisonZoomedDragPansWithoutMovingSplit(test *testing.T) {
+	appState := testLargeComparisonApplication()
+	tester := ui.NewTester(appState.view, 880, 660)
+	canvas := comparisonCanvas(test, tester)
+	bounds := canvas.Bounds
+	if appState.previewCanPan(bounds) {
+		test.Fatal("fitted image must not enable drag panning")
+	}
+
+	if err := tester.Click("1:1"); err != nil {
+		test.Fatal(err)
+	}
+	if !appState.previewCanPan(bounds) {
+		test.Fatal("1:1 zoom on a 1600x1000 image must enable drag panning")
+	}
+	if appState.comparison.split != 50 {
+		test.Fatalf("expected initial split 50, got %.2f", appState.comparison.split)
+	}
+
+	panStartX := bounds.X + bounds.W*0.18
+	centerY := bounds.Y + bounds.H/2
+	beforeOffset := appState.comparison.offset
+	tester.Press(panStartX, centerY)
+	tester.Move(panStartX+48, centerY+32)
+	tester.Release(panStartX+48, centerY+32)
+
+	if appState.comparison.split != 50 {
+		test.Fatalf("zoomed drag away from divider must keep split at 50, got %.2f", appState.comparison.split)
+	}
+	if appState.comparison.offset.X <= beforeOffset.X || appState.comparison.offset.Y <= beforeOffset.Y {
+		test.Fatalf("zoomed drag away from divider must pan offset: before=%+v after=%+v",
+			beforeOffset, appState.comparison.offset)
+	}
+	canvas = comparisonCanvas(test, tester)
+	if canvas.Now != 50 {
+		test.Fatalf("assistive slider value must stay 50 after pan, got %.2f", canvas.Now)
+	}
+
+	tester.Key(0, ui.KeyRight)
+	if appState.comparison.split <= 50 {
+		test.Fatalf("keyboard arrow after pan release must adjust split, got %.2f", appState.comparison.split)
+	}
+
+	pannedOffset := appState.comparison.offset
+	dividerX := bounds.X + bounds.W*float32(appState.comparison.split/100)
+	targetX := bounds.X + bounds.W*0.75
+	tester.Press(dividerX, centerY)
+	tester.Move(targetX, centerY+20)
+	tester.Release(targetX, centerY+20)
+	if math.Abs(appState.comparison.split-75) > 1 {
+		test.Fatalf("dragging on divider while zoomed must move split to ~75, got %.2f", appState.comparison.split)
+	}
+	if appState.comparison.offset != pannedOffset {
+		test.Fatalf("dragging on divider must not alter pan offset: got %+v, want %+v",
+			appState.comparison.offset, pannedOffset)
+	}
+
+	newDividerX := bounds.X + bounds.W*float32(appState.comparison.split/100)
+	tester.PressButton(2, newDividerX, centerY)
+	tester.Move(newDividerX-30, centerY-20)
+	tester.ReleaseButton(2, newDividerX-30, centerY-20)
+	if math.Abs(appState.comparison.split-75) > 1 {
+		test.Fatalf("middle-button pan on divider must preserve split, got %.2f", appState.comparison.split)
+	}
+	if appState.comparison.offset.X >= pannedOffset.X || appState.comparison.offset.Y >= pannedOffset.Y {
+		test.Fatalf("middle-button drag must pan image even over divider: before=%+v after=%+v",
+			pannedOffset, appState.comparison.offset)
+	}
+}

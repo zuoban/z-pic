@@ -12,12 +12,18 @@ const (
 	previewResult
 )
 
+const comparisonDividerHitHalfWidth = 20
+
 type comparisonView struct {
-	mode     int
-	split    float64
-	scale    float64
-	offset   ui.Point
-	viewport ui.Rect
+	mode              int
+	split             float64
+	scale             float64
+	offset            ui.Point
+	viewport          ui.Rect
+	panning           bool
+	panSuppressSlider bool
+	panFrozenSplit    float64
+	panPointer        ui.Point
 }
 
 func (s *application) previewLocked() bool {
@@ -37,6 +43,25 @@ func (s *application) previewScale(bounds ui.Rect) float64 {
 		return 1
 	}
 	return min(float64(bounds.W)/float64(s.file.width), float64(bounds.H)/float64(s.file.height))
+}
+
+func (s *application) previewCanPan(bounds ui.Rect) bool {
+	if s.file == nil || bounds.W <= 0 || bounds.H <= 0 {
+		return false
+	}
+	scale := float32(s.previewScale(bounds))
+	return float32(s.file.width)*scale > bounds.W+0.5 ||
+		float32(s.file.height)*scale > bounds.H+0.5
+}
+
+func (s *application) nearComparisonDivider(width, localX float32) bool {
+	if width <= 0 {
+		return true
+	}
+	divider := width * float32(s.comparison.split/100)
+	handleX := min(width-16, max(16, divider))
+	return math.Abs(float64(localX-divider)) <= comparisonDividerHitHalfWidth ||
+		math.Abs(float64(localX-handleX)) <= comparisonDividerHitHalfWidth
 }
 
 func (s *application) previewImageRect(bounds ui.Rect) ui.Rect {
@@ -92,6 +117,7 @@ func (s *application) resetPreviewFit() {
 		return
 	}
 	s.comparison.scale, s.comparison.offset = 0, ui.Point{}
+	s.comparison.panning, s.comparison.panSuppressSlider = false, false
 }
 
 func (s *application) zoomPreviewActual() {
@@ -150,10 +176,16 @@ func (s *application) previewToolbar(c *ui.Context) {
 			ui.Box(c).Grow(1)
 			hint := "滚轮缩放"
 			if s.comparing() {
-				hint = "拖动分隔线"
+				if s.previewCanPan(bounds) {
+					hint = "拖动平移 · 拖分隔线对比"
+				} else {
+					hint = "拖动分隔线"
+				}
+			} else if s.previewCanPan(bounds) {
+				hint = "拖动平移"
 			}
 			ui.Text(c, hint).FontSize(12).TextColor(metadataColor(c)).
-				Tooltip("拖动分隔线对比；滚轮或捏合缩放；双指滚动平移图片")
+				Tooltip("拖动分隔线对比；放大后拖动图片或双指滚动平移；滚轮或捏合缩放")
 		}
 	})
 }
@@ -161,23 +193,55 @@ func (s *application) previewToolbar(c *ui.Context) {
 func (s *application) previewCanvas(c *ui.Context) {
 	t := c.Theme()
 	comparing := s.comparing()
+	if !comparing || s.previewLocked() {
+		s.comparison.panning, s.comparison.panSuppressSlider = false, false
+	}
 	var canvas ui.Element
 	if comparing {
-		canvas = ui.SliderBase(c.Key("comparison"), &s.comparison.split, 0, 100).
-			Step(1).Label("原图与压缩结果对比").Cursor(ui.CursorResizeEW).
-			Description("左侧原图，右侧压缩后。拖动或使用方向键调整分隔线，Home 和 End 查看整张图片。")
+		splitTarget := &s.comparison.split
+		suppressSlider := s.comparison.panning || s.comparison.panSuppressSlider
+		frozenSplit := s.comparison.panFrozenSplit
+		if suppressSlider {
+			splitTarget = &frozenSplit
+		}
+		canvas = ui.SliderBase(c.Key("comparison"), splitTarget, 0, 100).
+			Step(1).Label("原图与压缩结果对比").
+			Description("左侧原图，右侧压缩后。拖动或使用方向键调整分隔线，放大后拖动图片平移，Home 和 End 查看整张图片。")
+		if suppressSlider {
+			s.comparison.split = s.comparison.panFrozenSplit
+			if !s.comparison.panning {
+				s.comparison.panSuppressSlider = false
+			}
+			canvas.Range(0, 100, s.comparison.split)
+		}
+		cursor := ui.CursorResizeEW
+		if s.comparison.panning {
+			cursor = ui.CursorGrabbing
+		} else if s.previewCanPan(s.comparison.viewport) {
+			pointerX, _, pointerOver := canvas.PointerPosition()
+			if pointerOver && !s.nearComparisonDivider(s.comparison.viewport.W, pointerX) {
+				cursor = ui.CursorGrab
+			}
+		}
+		canvas.Cursor(cursor)
 	} else {
 		label := "原图预览"
 		if s.result != nil && (s.overwritten || s.comparison.mode != previewOriginal) {
 			label = "压缩后预览"
 		}
+		singleCursor := ui.CursorDefault
+		if s.previewCanPan(s.comparison.viewport) {
+			singleCursor = ui.CursorGrab
+		}
 		canvas = ui.Box(c.Key("preview-image")).Role(ui.RoleImage).Label(label).
-			Focusable().Cursor(ui.CursorGrab)
+			Focusable().Cursor(singleCursor)
 		if deltaX, deltaY, held := canvas.Dragged(); held && !s.previewLocked() {
 			s.comparison.offset.X += deltaX
 			s.comparison.offset.Y += deltaY
 			s.clampPreviewOffset()
-			canvas.Cursor(ui.CursorGrabbing)
+			if s.previewCanPan(s.comparison.viewport) {
+				canvas.Cursor(ui.CursorGrabbing)
+			}
 		}
 	}
 	canvas.Fill().Radius(8).Clip().FocusRingOffset(-3).
@@ -190,9 +254,40 @@ func (s *application) previewCanvas(c *ui.Context) {
 	s.clampPreviewOffset()
 	canvas.HandleInput(func(event ui.InputEvent) bool {
 		if s.previewLocked() {
+			s.comparison.panning = false
 			return false
 		}
 		switch event.Kind {
+		case ui.InputPointerDown:
+			if !comparing || !s.previewCanPan(s.comparison.viewport) {
+				return false
+			}
+			if event.Button != 0 && event.Button != 2 {
+				return false
+			}
+			if event.Button == 0 && s.nearComparisonDivider(s.comparison.viewport.W, event.X) {
+				return false
+			}
+			s.comparison.panning = true
+			s.comparison.panSuppressSlider = event.Button == 0
+			s.comparison.panFrozenSplit = s.comparison.split
+			s.comparison.panPointer = ui.Point{X: event.X, Y: event.Y}
+			return true
+		case ui.InputPointerMove:
+			if !s.comparison.panning {
+				return false
+			}
+			s.comparison.offset.X += event.X - s.comparison.panPointer.X
+			s.comparison.offset.Y += event.Y - s.comparison.panPointer.Y
+			s.comparison.panPointer = ui.Point{X: event.X, Y: event.Y}
+			s.clampPreviewOffset()
+			return true
+		case ui.InputPointerUp:
+			if !s.comparison.panning {
+				return false
+			}
+			s.comparison.panning = false
+			return true
 		case ui.InputZoom:
 			s.zoomPreview(s.previewScale(s.comparison.viewport)*float64(event.Scale),
 				ui.Point{X: event.X, Y: event.Y})
