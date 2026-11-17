@@ -222,7 +222,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stdout := &limitedOutput{limit: limit + 1, cancel: cancel}
+	stdout := &limitedOutput{input: data, limit: limit + 1, cancel: cancel}
 	stderr := &limitedDiagnostic{limit: maxStderr}
 	cmd := exec.CommandContext(childCtx, path, args...)
 	cmd.Stdin = bytes.NewReader(data)
@@ -235,7 +235,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s 已取消或超时：%w", name, ctx.Err())
 	}
-	if stdout.overflow || stdout.buf.Len() > limit {
+	if stdout.overflow || stdout.size > limit {
 		return nil, fmt.Errorf("%s：%w", name, errOutputLimit)
 	}
 	if err != nil {
@@ -247,26 +247,41 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 		return nil, fmt.Errorf("%s 执行失败（请检查捆绑工具和系统执行权限）：%w；%s",
 			name, err, strings.TrimSpace(stderr.buf.String()))
 	}
-	if stdout.buf.Len() == 0 {
+	if stdout.size == 0 {
 		return nil, fmt.Errorf("%s 未生成 PNG 数据", name)
 	}
-	if stdout.buf.Len() >= len(data) {
+	if stdout.size >= len(data) {
 		return data, nil
+	}
+	if stdout.buf.Len() == 0 {
+		return data[:stdout.size], nil
 	}
 	return stdout.buf.Bytes(), nil
 }
 
 type limitedOutput struct {
+	input    []byte
 	buf      bytes.Buffer
+	size     int
 	limit    int
 	overflow bool
 	cancel   context.CancelFunc
 }
 
 func (w *limitedOutput) Write(p []byte) (int, error) {
-	n := min(len(p), w.limit-w.buf.Len())
-	_, _ = w.buf.Write(p[:n])
-	if n < len(p) || w.buf.Len() == w.limit {
+	n := min(len(p), w.limit-w.size)
+	start := w.size
+	w.size += n
+	if w.size >= len(w.input) {
+		w.buf = bytes.Buffer{}
+	} else if w.buf.Len() != 0 || !bytes.Equal(p[:n], w.input[start:w.size]) {
+		if w.buf.Len() == 0 {
+			w.buf.Grow(w.size)
+			_, _ = w.buf.Write(w.input[:start])
+		}
+		_, _ = w.buf.Write(p[:n])
+	}
+	if n < len(p) || w.size == w.limit {
 		w.overflow = true
 		w.cancel()
 		return n, errOutputLimit

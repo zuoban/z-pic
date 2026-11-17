@@ -31,6 +31,24 @@ func TestToolProcess(t *testing.T) {
 	switch mode {
 	case "success":
 		_, _ = io.Copy(os.Stdout, os.Stdin)
+	case "larger", "larger-42", "larger-98", "larger-99":
+		_, _ = io.Copy(os.Stdout, os.Stdin)
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 4096))
+		fmt.Fprint(os.Stderr, "diagnostic from child")
+		switch mode {
+		case "larger-42":
+			os.Exit(42)
+		case "larger-98":
+			os.Exit(98)
+		case "larger-99":
+			os.Exit(99)
+		}
+	case "prefix":
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			os.Exit(41)
+		}
+		_, _ = os.Stdout.Write(data[:len(data)/2])
 	case "98", "99", "42":
 		fmt.Fprint(os.Stdout, "corrupt partial PNG")
 		fmt.Fprint(os.Stderr, "diagnostic from child")
@@ -43,6 +61,10 @@ func TestToolProcess(t *testing.T) {
 	case "stderr":
 		_, _ = os.Stderr.Write(bytes.Repeat([]byte("e"), maxStderr*4))
 		fmt.Fprint(os.Stdout, "ok")
+	case "larger-wait":
+		_, _ = io.Copy(os.Stdout, os.Stdin)
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 4096))
+		time.Sleep(30 * time.Second)
 	case "wait":
 		time.Sleep(30 * time.Second)
 	default:
@@ -71,7 +93,50 @@ func TestCommandExecution(t *testing.T) {
 	}
 	t.Run("success", func(t *testing.T) {
 		out, err := runCommand(context.Background(), "oxipng", exe, helperArgs("success"), input, 1024)
-		if err != nil || !bytes.Equal(out, input) {
+		if err != nil || !bytes.Equal(out, input) || &out[0] != &input[0] {
+			t.Fatalf("output=%q err=%v", out, err)
+		}
+	})
+	t.Run("smaller-prefix", func(t *testing.T) {
+		out, err := runCommand(context.Background(), "oxipng", exe, helperArgs("prefix"), input, 1024)
+		if err != nil || !bytes.Equal(out, input[:len(input)/2]) {
+			t.Fatalf("output=%q err=%v", out, err)
+		}
+	})
+	t.Run("larger-output-drains", func(t *testing.T) {
+		data := bytes.Repeat(input, 2000)
+		out, err := runCommand(context.Background(), "oxipng", exe, helperArgs("larger"), data, len(data)+4096)
+		if err != nil || len(out) != len(data) || &out[0] != &data[0] {
+			t.Fatalf("output length=%d err=%v", len(out), err)
+		}
+	})
+	for _, code := range []string{"98", "99"} {
+		t.Run("larger-"+code, func(t *testing.T) {
+			out, err := runCommand(context.Background(), "pngquant", exe, helperArgs("larger-"+code), input, 8192)
+			if err != nil || len(out) != len(input) || &out[0] != &input[0] {
+				t.Fatalf("output=%q err=%v", out, err)
+			}
+		})
+	}
+	for _, tool := range []string{"oxipng", "pngquant"} {
+		t.Run(tool+"-larger-fails", func(t *testing.T) {
+			out, err := runCommand(context.Background(), tool, exe, helperArgs("larger-42"), input, 8192)
+			if out != nil || err == nil || !strings.Contains(err.Error(), "diagnostic from child") {
+				t.Fatalf("output=%q err=%v", out, err)
+			}
+		})
+		t.Run(tool+"-larger-overflow", func(t *testing.T) {
+			out, err := runCommand(context.Background(), tool, exe, helperArgs("larger-98"), input, 1024)
+			if out != nil || !errors.Is(err, errOutputLimit) {
+				t.Fatalf("output=%q err=%v", out, err)
+			}
+		})
+	}
+	t.Run("larger-output-deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		out, err := runCommand(ctx, "pngquant", exe, helperArgs("larger-wait"), input, 8192)
+		if out != nil || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("output=%q err=%v", out, err)
 		}
 	})
@@ -128,16 +193,126 @@ func TestCommandExecution(t *testing.T) {
 
 func TestBoundedWriters(t *testing.T) {
 	canceled := false
-	w := &limitedOutput{limit: 129, cancel: func() { canceled = true }}
+	w := &limitedOutput{input: bytes.Repeat([]byte("x"), 1024), limit: 129, cancel: func() { canceled = true }}
 	// io.Copy must not bypass Write via an accidentally promoted ReadFrom.
 	_, err := io.Copy(w, struct{ io.Reader }{bytes.NewReader(make([]byte, 1024))})
-	if !errors.Is(err, errOutputLimit) || w.buf.Len() != 129 || !canceled {
-		t.Fatalf("len=%d canceled=%v err=%v", w.buf.Len(), canceled, err)
+	if !errors.Is(err, errOutputLimit) || w.buf.Len() != 129 || w.size != 129 || !canceled {
+		t.Fatalf("len=%d size=%d canceled=%v err=%v", w.buf.Len(), w.size, canceled, err)
 	}
 	d := &limitedDiagnostic{limit: 8}
 	n, err := io.Copy(d, struct{ io.Reader }{bytes.NewReader(make([]byte, 1024))})
 	if n != 1024 || err != nil || d.buf.Len() != 8 {
 		t.Fatalf("n=%d len=%d err=%v", n, d.buf.Len(), err)
+	}
+}
+
+func TestOutputRetainsOnlySmallerCandidates(t *testing.T) {
+	input := []byte("abcdefghijkl")
+	for _, scenario := range []struct {
+		name   string
+		chunks []string
+	}{
+		{"empty", nil},
+		{"matching-prefix", []string{"", "abc", "", "def"}},
+		{"changed-first-chunk", []string{"Z", "bc", "def"}},
+		{"changed-later-chunk", []string{"abc", "dZ", "", "fgh", "ijk"}},
+		{"exact-input", []string{"abc", "def", "ghi", "jkl"}},
+		{"equal-changed-output", []string{"abc", "dZf", "ghi", "jkl"}},
+		{"larger-matching-prefix", []string{"abc", "defghijkl", "more", ""}},
+		{"larger-changed-prefix", []string{"Zbc", "defghi", "jklmore", ""}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			original := bytes.Clone(input)
+			canceled := false
+			output := &limitedOutput{
+				input: input, limit: maxPNGBytes + 1,
+				cancel: func() { canceled = true },
+			}
+			var expected string
+			for _, chunk := range scenario.chunks {
+				count, err := output.Write([]byte(chunk))
+				if count != len(chunk) || err != nil || canceled {
+					t.Fatalf("write count=%d canceled=%v err=%v", count, canceled, err)
+				}
+				expected += chunk
+				if output.size != len(expected) || !bytes.Equal(input, original) {
+					t.Fatalf("size=%d input=%q", output.size, input)
+				}
+				if len(expected) >= len(input) {
+					if output.buf.Cap() != 0 {
+						t.Fatal("retained output with no size saving")
+					}
+					continue
+				}
+				var retained []byte
+				if output.buf.Len() == 0 {
+					retained = input[:output.size]
+				} else {
+					retained = output.buf.Bytes()
+				}
+				if string(retained) != expected {
+					t.Fatalf("retained=%q expected=%q", retained, expected)
+				}
+			}
+			if len(expected) < len(input) && bytes.Equal([]byte(expected), input[:len(expected)]) && output.buf.Cap() != 0 {
+				t.Fatal("copied a matching input prefix")
+			}
+		})
+	}
+}
+
+func TestOutputLimitAfterDiscard(t *testing.T) {
+	canceled := false
+	output := &limitedOutput{
+		input: []byte("input"), limit: maxPNGBytes + 1,
+		cancel: func() { canceled = true },
+	}
+	chunk := make([]byte, 1<<20)
+	for range 64 {
+		count, err := output.Write(chunk)
+		if count != len(chunk) || err != nil || canceled || output.buf.Cap() != 0 {
+			t.Fatalf("count=%d size=%d canceled=%v err=%v", count, output.size, canceled, err)
+		}
+	}
+	if output.size != maxPNGBytes {
+		t.Fatalf("size=%d", output.size)
+	}
+	count, err := output.Write(nil)
+	if count != 0 || err != nil || canceled {
+		t.Fatalf("empty write count=%d canceled=%v err=%v", count, canceled, err)
+	}
+	count, err = output.Write(chunk[:1])
+	if count != 1 || !errors.Is(err, errOutputLimit) || !canceled || !output.overflow || output.buf.Cap() != 0 {
+		t.Fatalf("overflow count=%d canceled=%v err=%v", count, canceled, err)
+	}
+	count, err = output.Write(chunk)
+	if count != 0 || !errors.Is(err, errOutputLimit) {
+		t.Fatalf("write after overflow count=%d err=%v", count, err)
+	}
+}
+
+func TestOutputAcrossReadBoundaries(t *testing.T) {
+	input := bytes.Repeat([]byte("abcdefghijklmnop"), 256)
+	for _, chunkSize := range []int{1, 17, 1024, 4096} {
+		for _, mismatch := range []int{0, 2048, len(input) - 2} {
+			t.Run(fmt.Sprintf("chunk=%d/mismatch=%d", chunkSize, mismatch), func(t *testing.T) {
+				expected := bytes.Clone(input[:len(input)-1])
+				expected[mismatch] ^= 0xff
+				output := &limitedOutput{
+					input: input, limit: maxPNGBytes + 1,
+					cancel: func() { t.Fatal("unexpected cancellation") },
+				}
+				for start := 0; start < len(expected); start += chunkSize {
+					chunk := expected[start:min(start+chunkSize, len(expected))]
+					if count, err := output.Write(chunk); count != len(chunk) || err != nil {
+						t.Fatalf("count=%d err=%v", count, err)
+					}
+				}
+				if !bytes.Equal(output.buf.Bytes(), expected) || output.size != len(expected) {
+					t.Fatalf("retained length=%d size=%d", output.buf.Len(), output.size)
+				}
+			})
+		}
 	}
 }
 
