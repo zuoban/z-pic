@@ -14,13 +14,16 @@ func main() {
 	mygo.Theme.SetSource(app.effectiveThemeMode().source())
 	mygo.App.WhenReady(func() {
 		app.window = mygo.NewWindow(mygo.WindowOptions{
-			Title:          "Z Pic · 图片压缩",
-			Width:          980,
-			Height:         720,
-			MinWidth:       760,
-			MinHeight:      660,
-			UseContentSize: true,
-			Content:        ui.View(app.view),
+			Title:           "Z Pic · 图片压缩",
+			Width:           980,
+			Height:          720,
+			MinWidth:        760,
+			MinHeight:       660,
+			TitleBarStyle:   mygo.TitleBarHiddenInset,
+			TitleBarHeight:  mainTitleBarHeight,
+			BackgroundColor: "light-dark(#f7f7f8, #141416)",
+			UseContentSize:  true,
+			Content:         ui.View(app.view),
 		})
 		app.window.OnClosed(func() {
 			app.closed = true

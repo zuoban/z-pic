@@ -1335,3 +1335,62 @@ func TestUnchangedPreviewReusesSourceBitmap(test *testing.T) {
 		test.Fatal("unchanged batch preview must reuse loaded source preview bitmap")
 	}
 }
+
+func TestHiddenTitleBarKeepsToolbarClearOfWindowControls(t *testing.T) {
+	cases := []struct {
+		name  string
+		bar   ui.TitleBar
+		width int
+	}{
+		{name: "macos-default", bar: ui.TitleBar{Height: 52, Left: 84, Bottom: 33}, width: 980},
+		{name: "macos-min-width", bar: ui.TitleBar{Height: 52, Left: 84, Bottom: 33}, width: 760},
+		{name: "windows-min-width", bar: ui.TitleBar{Height: 52, Right: 138, Bottom: 52}, width: 760},
+		{name: "fullscreen", bar: ui.TitleBar{}, width: 980},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testSelectedApplication()
+			s.floatingOpen = true
+			s.batch = newBatchState([]batchItem{
+				{path: "/photos/pending.jpg", absPath: "/photos/pending.jpg", relPath: "pending.jpg", format: "jpeg", status: batchPending},
+				{path: "/photos/done.jpg", absPath: "/photos/done.jpg", relPath: "done.jpg", format: "jpeg", status: batchDone, originalSize: 4096, outputSize: 2048},
+			})
+			tt := ui.NewTester(s.view, tc.width, 660)
+			tt.SetTitleBar(tc.bar)
+			toolbar, ok := tt.AccessByRole(ui.RoleToolbar, "操作栏")
+			if !ok || toolbar.Bounds.Y != 0 || toolbar.Bounds.H < max(tc.bar.Height, mainTitleBarHeight) {
+				t.Fatalf("toolbar must span the hidden title bar band: %+v", toolbar)
+			}
+			var items []ui.AccessInfo
+			for _, item := range tt.AccessAll() {
+				if item.Name == "Z Pic" {
+					items = append(items, item)
+				}
+			}
+			for _, label := range []string{"选择预设", "重新压缩", "继续压缩", "收起悬浮窗", "主题", "设置"} {
+				role := ui.RoleButton
+				if label == "选择预设" || label == "主题" {
+					role = ui.RoleMenuButton
+				}
+				control, found := tt.AccessByRole(role, label)
+				if !found {
+					t.Fatalf("missing %s in toolbar", label)
+				}
+				items = append(items, control)
+			}
+			rightLimit := float32(tc.width) - tc.bar.Right
+			for index, item := range items {
+				b := item.Bounds
+				if item.Offscreen || b.X < tc.bar.Left || b.X+b.W > rightLimit || b.Y < 0 || b.Y+b.H > toolbar.Bounds.H {
+					t.Fatalf("%s (%+v) must stay clear of window controls %+v in %dpx width", item.Name, b, tc.bar, tc.width)
+				}
+				for _, other := range items[:index] {
+					o := other.Bounds
+					if b.X < o.X+o.W && o.X < b.X+b.W && b.Y < o.Y+o.H && o.Y < b.Y+b.H {
+						t.Fatalf("toolbar elements overlap: %+v and %+v", item, other)
+					}
+				}
+			}
+		})
+	}
+}

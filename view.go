@@ -9,6 +9,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+const mainTitleBarHeight = 52
+
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 	button := ui.PrimaryButton(c.Key(key), label).Radius(8).Disabled(disabled)
 	if disabled {
@@ -49,10 +51,13 @@ func (s *application) view(c *ui.Context) {
 	width, _ := c.Size()
 	mobile := width < 720
 	pagePadding, panelGap := float32(24), float32(20)
+	bodyTopPad := float32(8)
 	if mobile {
 		pagePadding, panelGap = 12, 12
+		bodyTopPad = panelGap
 	} else if width < 960 {
 		pagePadding, panelGap = 16, 16
+		bodyTopPad = 6
 	}
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
@@ -76,33 +81,37 @@ func (s *application) view(c *ui.Context) {
 			c.OnWindowShortcut(ui.Cmd, ui.Key1, s.zoomPreviewActual)
 		}
 	}
-	ui.Column(c).Fill().Padding(pagePadding).Gap(panelGap).Background(theme.Background).Children(func() {
-		s.topToolbar(c, width, mobile, pending, done, canRun)
-		if mobile {
-			ui.Scroll(c.Key("mobile-workspace")).Grow(1).MinHeight(0).FillWidth().Gap(panelGap).Children(func() {
-				s.previewPanel(c)
-				s.controlsPanel(c, showBatchOutput)
-			})
-		} else {
-			ui.Row(c).Grow(1).FillWidth().Gap(panelGap).AlignItems(ui.Stretch).Children(func() {
-				s.previewPanel(c)
-				s.controlsPanel(c, showBatchOutput)
-			})
-		}
-		ui.Row(c).Height(20).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本机压缩 · 网页图片仅在下载时联网").FontSize(12).
-				TextColor(metadataColor(c)).Width(0).Grow(1).SingleLine().
-				Tooltip("本地图片在本机处理；仅下载网页图片时需要联网")
-			if width >= 680 {
-				shortcutHint(c, "打开", "O")
-				shortcutHint(c, "压缩", "↵")
-				if s.batch == nil {
-					shortcutHint(c, "另存", "S")
-				} else if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
-					shortcutHint(c, "输出位置", "S")
-				}
-				shortcutHint(c, "设置", ",")
+	ui.Column(c).Fill().Background(theme.Background).Children(func() {
+		s.topToolbar(c, width, pagePadding, mobile, pending, done, canRun)
+		ui.Column(c).Grow(1).MinHeight(0).FillWidth().
+			Padding(bodyTopPad, pagePadding, pagePadding, pagePadding).
+			Gap(panelGap).Children(func() {
+			if mobile {
+				ui.Scroll(c.Key("mobile-workspace")).Grow(1).MinHeight(0).FillWidth().Gap(panelGap).Children(func() {
+					s.previewPanel(c)
+					s.controlsPanel(c, showBatchOutput)
+				})
+			} else {
+				ui.Row(c).Grow(1).MinHeight(0).FillWidth().Gap(panelGap).AlignItems(ui.Stretch).Children(func() {
+					s.previewPanel(c)
+					s.controlsPanel(c, showBatchOutput)
+				})
 			}
+			ui.Row(c).Height(20).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "本机压缩 · 网页图片仅在下载时联网").FontSize(12).
+					TextColor(metadataColor(c)).Width(0).Grow(1).SingleLine().
+					Tooltip("本地图片在本机处理；仅下载网页图片时需要联网")
+				if width >= 680 {
+					shortcutHint(c, "打开", "O")
+					shortcutHint(c, "压缩", "↵")
+					if s.batch == nil {
+						shortcutHint(c, "另存", "S")
+					} else if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
+						shortcutHint(c, "输出位置", "S")
+					}
+					shortcutHint(c, "设置", ",")
+				}
+			})
 		})
 	})
 	s.overwriteConfirmation(c)
@@ -114,8 +123,18 @@ func (s *application) view(c *ui.Context) {
 	s.invalidateFloatingWindow()
 }
 
-func (s *application) topToolbar(c *ui.Context, width float32, mobile bool, pending, done int, canRun bool) {
+func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobile bool, pending, done int, canRun bool) {
 	t := c.Theme()
+	bar := c.TitleBar()
+	leftPad := pagePadding
+	if bar.Left > 0 {
+		leftPad = max(pagePadding, bar.Left+12)
+	}
+	rightPad := pagePadding
+	if bar.Right > 0 {
+		rightPad = max(pagePadding, bar.Right+12)
+	}
+	availWidth := max(0, width-leftPad-rightPad)
 	utilityControls := func() {
 		floatingLabel := "悬浮窗"
 		if s.floatingOpen {
@@ -135,23 +154,38 @@ func (s *application) topToolbar(c *ui.Context, width float32, mobile bool, pend
 			Disabled(settingsDisabled).
 			OnClick(func() { s.setSettingsOpen(true) })
 	}
-	if mobile {
-		ui.Column(c).FillWidth().Gap(8).Role(ui.RoleToolbar).Label("操作栏").Children(func() {
-			ui.Row(c).Height(36).Gap(8).AlignItems(ui.Center).Children(func() {
+	if mobile || availWidth < 560 {
+		row1Height := float32(36)
+		topPad := pagePadding
+		if bar.Height > 0 {
+			row1Height = max(bar.Height, 44)
+			topPad = 0
+		}
+		ui.Column(c).FillWidth().Padding(topPad, 0, 0, 0).Gap(8).Role(ui.RoleToolbar).Label("操作栏").Children(func() {
+			ui.Row(c).FillWidth().Height(row1Height).Padding(0, rightPad, 0, leftPad).
+				Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 				brandLockup(c, false)
 				s.compressionControls(c, pending, done, canRun)
 			})
-			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-				s.presetControl(c)
+			ui.Row(c).FillWidth().Padding(0, pagePadding, 0, pagePadding).
+				Gap(8).Wrap().AlignItems(ui.Center).DragWindow().Children(func() {
+				s.presetControl(c, max(0, width-2*pagePadding), true)
 				ui.Box(c).Grow(1)
 				utilityControls()
 			})
 		})
 		return
 	}
-	ui.Row(c).Height(40).Gap(8).AlignItems(ui.Center).Role(ui.RoleToolbar).Label("操作栏").Children(func() {
-		brandLockup(c, width >= 920)
-		s.presetControl(c)
+	toolbarHeight := max(bar.Height, mainTitleBarHeight)
+	toolbarGap := float32(8)
+	if availWidth < 660 {
+		toolbarGap = 6
+	}
+	ui.Row(c).FillWidth().Height(toolbarHeight).Padding(0, rightPad, 0, leftPad).
+		Gap(toolbarGap).AlignItems(ui.Center).DragWindow().
+		Role(ui.RoleToolbar).Label("操作栏").Children(func() {
+		brandLockup(c, availWidth >= 850)
+		s.presetControl(c, availWidth, false)
 		s.compressionControls(c, pending, done, canRun)
 		ui.Box(c).Size(1, 16).Background(t.Border)
 		utilityControls()
@@ -439,17 +473,21 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 	})
 }
 
-func (s *application) presetControl(c *ui.Context) {
+func (s *application) presetControl(c *ui.Context, availWidth float32, compact bool) {
 	t := c.Theme()
-	width, _ := c.Size()
 	pickerWidth := float32(168)
-	if width < 720 {
+	switch {
+	case compact:
 		pickerWidth = 156
-	} else if width < 960 {
+	case availWidth < 660:
+		pickerWidth = 96
+	case availWidth < 850:
 		pickerWidth = 128
+	case availWidth < 912:
+		pickerWidth = 148
 	}
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if width >= 860 || width < 720 {
+		if availWidth >= 812 || compact {
 			ui.Text(c, "预设").FontSize(12).TextColor(metadataColor(c))
 		}
 		ui.PopoverMenuButton(c.Key("preset-picker"), s.scheme, func(m *ui.Menu) {
