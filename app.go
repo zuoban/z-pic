@@ -317,7 +317,7 @@ func (s *application) startCompression() {
 	if s.modalOpen() || s.batch != nil || s.file == nil {
 		return
 	}
-	path, data, options := s.file.path, s.file.data, s.compressionOptions()
+	path, data, sourcePreview, options := s.file.path, s.file.data, s.file.preview, s.compressionOptions()
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
 	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
@@ -328,7 +328,11 @@ func (s *application) startCompression() {
 		result, err := compress.Bytes(ctx, data, path, options)
 		var preview *ui.Bitmap
 		if err == nil {
-			preview, err = ui.DecodeBitmap(result.Data)
+			if result.Unchanged && sourcePreview != nil {
+				preview = sourcePreview
+			} else {
+				preview, err = ui.DecodeBitmap(result.Data)
+			}
 		}
 		if err == nil {
 			err = ctx.Err()

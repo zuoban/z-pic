@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1273,5 +1274,64 @@ func TestSuggestedPathAvoidsExistingCopies(t *testing.T) {
 	}
 	if path := suggestedPath(source, ".jpg"); path != filepath.Join(dir, "photo-compressed-2.jpg") {
 		t.Fatalf("suggested path would overwrite an existing copy: %q", path)
+	}
+}
+
+func TestUnchangedPreviewReusesSourceBitmap(test *testing.T) {
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2)), &jpeg.Options{Quality: 10}); err != nil {
+		test.Fatal(err)
+	}
+	dir := test.TempDir()
+	sourcePath := filepath.Join(dir, "tiny.jpg")
+	savedPath := filepath.Join(dir, "tiny-compressed.jpg")
+	if err := os.WriteFile(sourcePath, encoded.Bytes(), 0o600); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(savedPath, encoded.Bytes(), 0o600); err != nil {
+		test.Fatal(err)
+	}
+
+	selected, err := readSelection(context.Background(), sourcePath)
+	if err != nil {
+		test.Fatal(err)
+	}
+	appState := newApplication()
+	updates := make(chan func(), 2)
+	appState.dispatchUpdate = func(callback func()) {
+		updates <- callback
+	}
+	appState.file = selected
+	appState.preview = selected.preview
+	appState.quality = 98
+
+	appState.startCompression()
+	callback := <-updates
+	callback()
+	if appState.result == nil || !appState.result.Unchanged {
+		test.Fatalf("expected unchanged compression result, got %+v", appState.result)
+	}
+	if appState.preview != selected.preview {
+		test.Fatal("unchanged single-image compression must reuse source preview bitmap")
+	}
+
+	appState.batch = newBatchState([]batchItem{{
+		path:         sourcePath,
+		absPath:      sourcePath,
+		relPath:      "tiny.jpg",
+		format:       "jpeg",
+		width:        2,
+		height:       2,
+		originalSize: int64(encoded.Len()),
+		outputSize:   int64(encoded.Len()),
+		unchanged:    true,
+		savedPath:    savedPath,
+		status:       batchDone,
+	}})
+	appState.openBatchPreview(0)
+	batchCallback := <-updates
+	batchCallback()
+	if !appState.batch.previewOpen || appState.preview != appState.file.preview {
+		test.Fatal("unchanged batch preview must reuse loaded source preview bitmap")
 	}
 }

@@ -98,14 +98,14 @@ func (s *application) floatingSelectedImage() (batchItem, bool) {
 }
 
 func (s *application) floatingIndices() []int {
+	if s.batch != nil {
+		return s.batch.floatingIndices(s.floating.filter, s.floating.sort)
+	}
 	indices := make([]int, 0, s.floatingImageCount())
 	for index := range s.floatingImageCount() {
 		if matchesBatchFilter(s.floatingImage(index), s.floating.filter, "") {
 			indices = append(indices, index)
 		}
-	}
-	if s.batch != nil {
-		sortBatchIndices(s.batch.items, indices, s.floating.sort)
 	}
 	return indices
 }

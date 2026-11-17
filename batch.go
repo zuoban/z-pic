@@ -9,8 +9,10 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -93,6 +95,47 @@ type batchState struct {
 	done            int
 	total           int
 	currentName     string
+
+	cacheReady     bool
+	cachedStates   []batchItemSnapshot
+	cachedNameKeys []batchNameKey
+	cachedStats    batchStatsSummary
+	visibleReady   bool
+	visibleFilter  int
+	visibleSort    int
+	visibleQuery   string
+	cachedVisible  []int
+	floatingReady  bool
+	floatingFilter int
+	floatingSort   int
+	cachedFloating []int
+}
+
+type batchNameKey struct {
+	raw   string
+	slash string
+	lower string
+}
+
+type batchItemSnapshot struct {
+	relPath      string
+	originalSize int64
+	outputSize   int64
+	status       batchStatus
+	unchanged    bool
+	invalidInput bool
+}
+
+type batchStatsSummary struct {
+	total           int
+	pending         int
+	done            int
+	failed          int
+	retryableFailed int
+	invalidFailed   int
+	origTotal       int64
+	outTotal        int64
+	canRun          bool
 }
 
 type batchScanResult struct {
@@ -531,74 +574,214 @@ func (s *application) batchFilterActive() bool {
 	return s.batch != nil && (s.batch.filter != batchFilterAll || strings.TrimSpace(s.batch.query) != "")
 }
 
-func matchesBatchFilter(item batchItem, filter int, query string) bool {
+func normalizeBatchQuery(query string) string {
+	return strings.ToLower(strings.TrimSpace(filepath.ToSlash(query)))
+}
+
+func matchesBatchStatus(status batchStatus, filter int) bool {
 	switch filter {
 	case batchFilterPending:
-		if item.status != batchPending && item.status != batchProcessing {
-			return false
-		}
+		return status == batchPending || status == batchProcessing
 	case batchFilterDone:
-		if item.status != batchDone {
-			return false
-		}
+		return status == batchDone
 	case batchFilterFailed:
-		if item.status != batchFailed {
-			return false
-		}
-	}
-	q := strings.ToLower(strings.TrimSpace(filepath.ToSlash(query)))
-	if q == "" {
+		return status == batchFailed
+	default:
 		return true
 	}
-	return strings.Contains(strings.ToLower(filepath.ToSlash(item.relPath)), q)
+}
+
+func matchesBatchFilter(item batchItem, filter int, query string) bool {
+	if !matchesBatchStatus(item.status, filter) {
+		return false
+	}
+	normalizedQuery := normalizeBatchQuery(query)
+	if normalizedQuery == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(filepath.ToSlash(item.relPath)), normalizedQuery)
+}
+
+func snapshotOfBatchItem(item batchItem) batchItemSnapshot {
+	return batchItemSnapshot{
+		relPath:      item.relPath,
+		originalSize: item.originalSize,
+		outputSize:   item.outputSize,
+		status:       item.status,
+		unchanged:    item.unchanged,
+		invalidInput: item.invalidInput,
+	}
+}
+
+func (state *batchState) syncItemsCache() {
+	if state.cacheReady && len(state.cachedStates) == len(state.items) {
+		unchanged := true
+		for index, item := range state.items {
+			if snapshotOfBatchItem(item) != state.cachedStates[index] {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			return
+		}
+	}
+	count := len(state.items)
+	if cap(state.cachedStates) < count {
+		state.cachedStates = make([]batchItemSnapshot, count)
+	} else {
+		state.cachedStates = state.cachedStates[:count]
+	}
+	if cap(state.cachedNameKeys) < count {
+		grown := make([]batchNameKey, count)
+		copy(grown, state.cachedNameKeys)
+		state.cachedNameKeys = grown
+	} else {
+		state.cachedNameKeys = state.cachedNameKeys[:count]
+	}
+	var summary batchStatsSummary
+	summary.total = count
+	for index, item := range state.items {
+		state.cachedStates[index] = snapshotOfBatchItem(item)
+		key := &state.cachedNameKeys[index]
+		if key.raw != item.relPath || (item.relPath == "" && key.slash != "") {
+			slash := filepath.ToSlash(item.relPath)
+			*key = batchNameKey{
+				raw:   item.relPath,
+				slash: slash,
+				lower: strings.ToLower(slash),
+			}
+		}
+		summary.origTotal += item.originalSize
+		if !item.invalidInput {
+			summary.canRun = true
+		}
+		switch item.status {
+		case batchPending, batchProcessing:
+			summary.pending++
+		case batchDone:
+			summary.done++
+			summary.outTotal += item.outputSize
+		case batchFailed:
+			summary.failed++
+			if item.invalidInput {
+				summary.invalidFailed++
+			} else {
+				summary.retryableFailed++
+			}
+		}
+	}
+	state.cachedStats = summary
+	state.cacheReady = true
+	state.visibleReady = false
+	state.floatingReady = false
+}
+
+func (state *batchState) filteredIndices(filter, sortMode int, query string) []int {
+	state.syncItemsCache()
+	if state.visibleReady && state.visibleFilter == filter && state.visibleSort == sortMode && state.visibleQuery == query {
+		return state.cachedVisible
+	}
+	normalizedQuery := normalizeBatchQuery(query)
+	visible := make([]int, 0, len(state.items))
+	for index, item := range state.items {
+		if !matchesBatchStatus(item.status, filter) {
+			continue
+		}
+		if normalizedQuery != "" && !strings.Contains(state.cachedNameKeys[index].lower, normalizedQuery) {
+			continue
+		}
+		visible = append(visible, index)
+	}
+	sortBatchIndicesWithKeys(state.items, state.cachedNameKeys, visible, sortMode)
+	state.cachedVisible = visible
+	state.visibleFilter = filter
+	state.visibleSort = sortMode
+	state.visibleQuery = query
+	state.visibleReady = true
+	return visible
+}
+
+func (state *batchState) floatingIndices(filter, sortMode int) []int {
+	state.syncItemsCache()
+	if state.floatingReady && state.floatingFilter == filter && state.floatingSort == sortMode {
+		return state.cachedFloating
+	}
+	visible := make([]int, 0, len(state.items))
+	for index, item := range state.items {
+		if matchesBatchStatus(item.status, filter) {
+			visible = append(visible, index)
+		}
+	}
+	sortBatchIndicesWithKeys(state.items, state.cachedNameKeys, visible, sortMode)
+	state.cachedFloating = visible
+	state.floatingFilter = filter
+	state.floatingSort = sortMode
+	state.floatingReady = true
+	return visible
 }
 
 func (s *application) filteredBatchIndices() []int {
 	if s.batch == nil {
 		return nil
 	}
-	visible := make([]int, 0, len(s.batch.items))
-	for i, item := range s.batch.items {
-		if matchesBatchFilter(item, s.batch.filter, s.batch.query) {
-			visible = append(visible, i)
-		}
-	}
-	sortBatchIndices(s.batch.items, visible, s.batch.sort)
-	return visible
+	return s.batch.filteredIndices(s.batch.filter, s.batch.sort, s.batch.query)
 }
 
 func sortBatchIndices(items []batchItem, indices []int, sortMode int) {
 	if sortMode == batchSortDefault || len(indices) < 2 {
 		return
 	}
-	slices.SortFunc(indices, func(a, b int) int {
+	keys := make([]batchNameKey, len(items))
+	for index, item := range items {
+		slash := filepath.ToSlash(item.relPath)
+		keys[index] = batchNameKey{raw: item.relPath, slash: slash, lower: strings.ToLower(slash)}
+	}
+	sortBatchIndicesWithKeys(items, keys, indices, sortMode)
+}
+
+func sortBatchIndicesWithKeys(items []batchItem, keys []batchNameKey, indices []int, sortMode int) {
+	if sortMode == batchSortDefault || len(indices) < 2 {
+		return
+	}
+	slices.SortFunc(indices, func(left, right int) int {
 		switch sortMode {
 		case batchSortName:
-			return compareBatchItemsByName(items, a, b)
+			return compareBatchNameKeys(keys, left, right)
 		case batchSortOriginalSize:
-			if c := cmp.Compare(items[b].originalSize, items[a].originalSize); c != 0 {
-				return c
+			if diff := cmp.Compare(items[right].originalSize, items[left].originalSize); diff != 0 {
+				return diff
 			}
-			return compareBatchItemsByName(items, a, b)
+			return compareBatchNameKeys(keys, left, right)
 		case batchSortSavings:
-			rankA, rankB := batchSavingsRank(items[a]), batchSavingsRank(items[b])
-			if c := cmp.Compare(rankA, rankB); c != 0 {
-				return c
+			rankLeft, rankRight := batchSavingsRank(items[left]), batchSavingsRank(items[right])
+			if diff := cmp.Compare(rankLeft, rankRight); diff != 0 {
+				return diff
 			}
-			if rankA == 0 {
-				if c := compareBatchSavingsRatioDesc(items[a], items[b]); c != 0 {
-					return c
+			if rankLeft == 0 {
+				if diff := compareBatchSavingsRatioDesc(items[left], items[right]); diff != 0 {
+					return diff
 				}
-				return compareBatchItemsByName(items, a, b)
+				return compareBatchNameKeys(keys, left, right)
 			}
-			if rankA == 1 {
-				return compareBatchItemsByName(items, a, b)
+			if rankLeft == 1 {
+				return compareBatchNameKeys(keys, left, right)
 			}
-			return cmp.Compare(a, b)
+			return cmp.Compare(left, right)
 		default:
-			return cmp.Compare(a, b)
+			return cmp.Compare(left, right)
 		}
 	})
+}
+
+func compareBatchNameKeys(keys []batchNameKey, left, right int) int {
+	if diff := cmp.Compare(keys[left].lower, keys[right].lower); diff != 0 {
+		return diff
+	}
+	if diff := cmp.Compare(keys[left].slash, keys[right].slash); diff != 0 {
+		return diff
+	}
+	return cmp.Compare(left, right)
 }
 
 func compareBatchItemsByName(items []batchItem, a, b int) int {
@@ -660,17 +843,8 @@ func (s *application) batchFailureCounts() (retryable, invalid int) {
 	if s.batch == nil {
 		return 0, 0
 	}
-	for _, item := range s.batch.items {
-		if item.status != batchFailed {
-			continue
-		}
-		if item.invalidInput {
-			invalid++
-		} else {
-			retryable++
-		}
-	}
-	return retryable, invalid
+	s.batch.syncItemsCache()
+	return s.batch.cachedStats.retryableFailed, s.batch.cachedStats.invalidFailed
 }
 
 func batchItemOutputPath(item batchItem) string {
@@ -834,23 +1008,9 @@ func (s *application) batchStats() (total, pending, done, failed int, origTotal,
 	if s.batch == nil {
 		return
 	}
-	total = len(s.batch.items)
-	for _, item := range s.batch.items {
-		origTotal += item.originalSize
-		if !item.invalidInput {
-			canRun = true
-		}
-		switch item.status {
-		case batchPending, batchProcessing:
-			pending++
-		case batchDone:
-			done++
-			outTotal += item.outputSize
-		case batchFailed:
-			failed++
-		}
-	}
-	return
+	s.batch.syncItemsCache()
+	stats := s.batch.cachedStats
+	return stats.total, stats.pending, stats.done, stats.failed, stats.origTotal, stats.outTotal, stats.canRun
 }
 
 func (s *application) startBatchCompression() {
@@ -1082,6 +1242,29 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 	return tasks, usedPaths
 }
 
+func batchWorkerCount(taskCount int) int {
+	if taskCount <= 1 {
+		return 1
+	}
+	available := runtime.GOMAXPROCS(0)
+	if available <= 1 {
+		return 1
+	}
+	workers := max(2, min(6, available/2))
+	return min(taskCount, workers)
+}
+
+type batchCompressionOutcome struct {
+	result  *compress.Result
+	err     error
+	started bool
+}
+
+type batchInFlightTask struct {
+	task    batchTask
+	outcome chan batchCompressionOutcome
+}
+
 func (s *application) runBatchTasks(
 	ctx context.Context,
 	tasks []batchTask,
@@ -1112,31 +1295,95 @@ func (s *application) runBatchTasks(
 		usedPaths = make(map[string]bool)
 	}
 	total := len(tasks)
-	for step, task := range tasks {
-		if ctx.Err() != nil {
-			return
-		}
-		name := filepath.Base(task.path)
-		deliver(func() {
-			if s.batch != nil && task.index < len(s.batch.items) {
-				s.batch.items[task.index].status = batchProcessing
-				s.batch.currentName = name
-				if !s.canceling {
-					s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", step+1, total, name)
+	if total == 0 || ctx.Err() != nil {
+		return
+	}
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
+
+	var deliverMu sync.Mutex
+	emit := func(fn func()) {
+		deliverMu.Lock()
+		defer deliverMu.Unlock()
+		deliver(fn)
+	}
+
+	workers := batchWorkerCount(total)
+	window := make(chan struct{}, workers)
+	jobs := make(chan batchInFlightTask, workers)
+	ordered := make(chan batchInFlightTask, workers)
+
+	var workerGroup sync.WaitGroup
+	for range workers {
+		workerGroup.Add(1)
+		go func() {
+			defer workerGroup.Done()
+			for inFlight := range jobs {
+				if workCtx.Err() != nil {
+					inFlight.outcome <- batchCompressionOutcome{}
+					continue
 				}
+				name := filepath.Base(inFlight.task.path)
+				emit(func() {
+					if workCtx.Err() != nil {
+						return
+					}
+					if s.batch != nil && inFlight.task.index < len(s.batch.items) {
+						s.batch.items[inFlight.task.index].status = batchProcessing
+						s.batch.currentName = name
+						if !s.canceling {
+							s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", min(total, s.batch.done+1), total, name)
+						}
+					}
+				})
+				res, err := compress.File(workCtx, inFlight.task.path, options)
+				inFlight.outcome <- batchCompressionOutcome{result: res, err: err, started: true}
 			}
-		})
-		res, err := compress.File(ctx, task.path, options)
-		if ctx.Err() != nil {
-			deliver(func() {
-				if s.batch != nil && task.index < len(s.batch.items) && s.batch.items[task.index].status == batchProcessing {
-					s.batch.items[task.index].status = batchPending
-				}
-			})
-			return
+		}()
+	}
+
+	workerGroup.Add(1)
+	go func() {
+		defer workerGroup.Done()
+		defer close(jobs)
+		defer close(ordered)
+		for _, task := range tasks {
+			select {
+			case <-workCtx.Done():
+				return
+			case window <- struct{}{}:
+			}
+			if workCtx.Err() != nil {
+				<-window
+				return
+			}
+			inFlight := batchInFlightTask{
+				task:    task,
+				outcome: make(chan batchCompressionOutcome, 1),
+			}
+			ordered <- inFlight
+			jobs <- inFlight
 		}
+	}()
+
+	for inFlight := range ordered {
+		outcome := <-inFlight.outcome
+		<-window
+		task := inFlight.task
+		if ctx.Err() != nil || workCtx.Err() != nil {
+			cancelWork()
+			if outcome.started {
+				emit(func() {
+					if s.batch != nil && task.index < len(s.batch.items) && s.batch.items[task.index].status == batchProcessing {
+						s.batch.items[task.index].status = batchPending
+					}
+				})
+			}
+			continue
+		}
+		res, err := outcome.result, outcome.err
 		if err != nil {
-			deliver(func() {
+			emit(func() {
 				s.applyBatchItemUpdate(batchItemUpdate{
 					index: task.index, status: batchFailed, errMsg: err.Error(), advanceDone: true,
 				})
@@ -1146,7 +1393,6 @@ func (s *application) runBatchTasks(
 		if outputMode == batchOutputFolder {
 			output := task.output
 			output.UseSubfolder = output.supportsSubfolder() && output.UseSubfolder
-			// A nonempty destination is the immutable directory chosen for this run.
 			if outputDir != "" {
 				output.Mode = presetSaveFixed
 			}
@@ -1158,14 +1404,14 @@ func (s *application) runBatchTasks(
 				pathErr = res.Save(dest)
 			}
 			if pathErr != nil {
-				deliver(func() {
+				emit(func() {
 					s.applyBatchItemUpdate(batchItemUpdate{
 						index: task.index, status: batchFailed, errMsg: pathErr.Error(), advanceDone: true,
 					})
 				})
 				continue
 			}
-			deliver(func() {
+			emit(func() {
 				s.applyBatchItemUpdate(batchItemUpdate{
 					index:        task.index,
 					status:       batchDone,
@@ -1181,9 +1427,8 @@ func (s *application) runBatchTasks(
 			})
 			continue
 		}
-		// batchOutputOverwrite
 		if res.Unchanged || res.OutputSize >= res.OriginalSize {
-			deliver(func() {
+			emit(func() {
 				s.applyBatchItemUpdate(batchItemUpdate{
 					index:        task.index,
 					status:       batchDone,
@@ -1200,14 +1445,14 @@ func (s *application) runBatchTasks(
 			continue
 		}
 		if owErr := res.Overwrite(); owErr != nil {
-			deliver(func() {
+			emit(func() {
 				s.applyBatchItemUpdate(batchItemUpdate{
 					index: task.index, status: batchFailed, errMsg: owErr.Error(), advanceDone: true,
 				})
 			})
 			continue
 		}
-		deliver(func() {
+		emit(func() {
 			s.applyBatchItemUpdate(batchItemUpdate{
 				index:        task.index,
 				status:       batchDone,
@@ -1222,6 +1467,7 @@ func (s *application) runBatchTasks(
 			})
 		})
 	}
+	workerGroup.Wait()
 }
 
 func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
@@ -1250,6 +1496,13 @@ func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 	item.errMsg = update.errMsg
 	if update.advanceDone {
 		s.batch.done++
+		if s.busy && !s.canceling && s.batch.done < s.batch.total {
+			if s.batch.currentName != "" {
+				s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", s.batch.done+1, s.batch.total, s.batch.currentName)
+			} else {
+				s.phase = fmt.Sprintf("正在压缩 %d / %d", s.batch.done+1, s.batch.total)
+			}
+		}
 	}
 }
 
@@ -1379,10 +1632,17 @@ func (s *application) openBatchPreview(index int) {
 			if item.overwritten {
 				outputPreview = selected.preview
 			} else if item.savedPath != "" {
-				var outSelected *selectedImage
-				outSelected, err = readSelection(ctx, item.savedPath)
-				if err == nil {
-					outputPreview = outSelected.preview
+				if item.unchanged && selected.size == item.originalSize {
+					if savedInfo, statErr := os.Stat(item.savedPath); statErr == nil && savedInfo.Mode().IsRegular() && savedInfo.Size() == selected.size {
+						outputPreview = selected.preview
+					}
+				}
+				if outputPreview == nil {
+					var outSelected *selectedImage
+					outSelected, err = readSelection(ctx, item.savedPath)
+					if err == nil {
+						outputPreview = outSelected.preview
+					}
 				}
 			}
 		}

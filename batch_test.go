@@ -1922,3 +1922,92 @@ func TestBatchOutputDirectoryActionStaysWithResults(t *testing.T) {
 		})
 	}
 }
+
+func TestBatchConcurrentPipelinePreservesCollisionOrder(test *testing.T) {
+	root := test.TempDir()
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		test.Fatal(err)
+	}
+	var inputs []string
+	for index := range 6 {
+		folder := filepath.Join(root, fmt.Sprintf("dir-%d", index))
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			test.Fatal(err)
+		}
+		filePath := filepath.Join(folder, "same.jpg")
+		writeTestJPEG(test, filePath, 96+index*8, 72+index*4, 95)
+		inputs = append(inputs, filePath)
+	}
+	scan, err := scanBatchPaths(context.Background(), inputs, nil, 0)
+	if err != nil {
+		test.Fatal(err)
+	}
+	app := newApplication()
+	app.batch = newBatchState(scan.items)
+	app.batch.outputMode = batchOutputFolder
+	app.batch.outputDir = outDir
+
+	tasks, used := app.collectBatchTasks()
+	app.batch.total = len(tasks)
+	app.runBatchTasks(context.Background(), tasks, app.compressionOptions(), batchOutputFolder, outDir, used, func(fn func()) { fn() })
+	app.completeBatchRun(context.Background())
+
+	expectedNames := []string{
+		"same.jpg",
+		"same-compressed.jpg",
+		"same-compressed-2.jpg",
+		"same-compressed-3.jpg",
+		"same-compressed-4.jpg",
+		"same-compressed-5.jpg",
+	}
+	for index, wantName := range expectedNames {
+		item := app.batch.items[index]
+		wantPath := filepath.Join(outDir, wantName)
+		if item.status != batchDone || item.savedPath != wantPath {
+			test.Fatalf("item %d deterministic output mismatch: got=%+v wantPath=%s", index, item, wantPath)
+		}
+		if _, statErr := os.Stat(wantPath); statErr != nil {
+			test.Fatalf("missing saved file %s: %v", wantPath, statErr)
+		}
+	}
+}
+
+func TestBatchDerivedCacheReuseAndInvalidation(test *testing.T) {
+	app := newApplication()
+	app.batch = newBatchState([]batchItem{
+		{path: "/p/b.jpg", absPath: "/p/b.jpg", relPath: "Sub/B.jpg", originalSize: 3000, status: batchPending},
+		{path: "/p/a.jpg", absPath: "/p/a.jpg", relPath: "sub/a.jpg", originalSize: 5000, status: batchDone, outputSize: 2000},
+		{path: "/p/c.jpg", absPath: "/p/c.jpg", relPath: "c.jpg", originalSize: 1000, status: batchFailed},
+	})
+	app.batch.sort = batchSortName
+	first := app.filteredBatchIndices()
+	second := app.filteredBatchIndices()
+	if !slices.Equal(first, []int{2, 1, 0}) || len(second) == 0 || &first[0] != &second[0] {
+		test.Fatalf("expected cached visible slice reuse: first=%v second=%v", first, second)
+	}
+	floatingFirst := app.floatingIndices()
+	floatingSecond := app.floatingIndices()
+	if len(floatingFirst) == 0 || &floatingFirst[0] != &floatingSecond[0] {
+		test.Fatalf("expected cached floating slice reuse: first=%v second=%v", floatingFirst, floatingSecond)
+	}
+
+	app.batch.items[0].status = batchDone
+	app.batch.items[0].outputSize = 1500
+	total, pending, done, failed, _, outTotal, _ := app.batchStats()
+	if total != 3 || pending != 0 || done != 2 || failed != 1 || outTotal != 3500 {
+		test.Fatalf("direct item mutation must invalidate cached stats: total=%d pending=%d done=%d failed=%d out=%d", total, pending, done, failed, outTotal)
+	}
+	retryable, invalid := app.batchFailureCounts()
+	if retryable != 1 || invalid != 0 {
+		test.Fatalf("unexpected failure counts: retryable=%d invalid=%d", retryable, invalid)
+	}
+	app.batch.filter = batchFilterDone
+	filteredDone := app.filteredBatchIndices()
+	if !slices.Equal(filteredDone, []int{1, 0}) {
+		test.Fatalf("filter change must recompute visible items: got=%v", filteredDone)
+	}
+	if !slices.Equal(first, []int{2, 1, 0}) {
+		test.Fatalf("recomputing visible items must not mutate previously returned slice: %v", first)
+	}
+}
