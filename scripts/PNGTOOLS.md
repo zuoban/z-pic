@@ -64,9 +64,11 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
   Exit 98/99 discards stdout and returns the exact original input without error.
   Caller then runs Optimize and validates dimensions/output PNG.
 
-Each invocation extracts only the selected binary into a new 0700 directory,
-uses a 0700 executable, and removes both after Wait. No shell or inherited PATH
-is used. Runtime is capped at two minutes per tool, stdout at 64 MiB + 1 sentinel
+Each invocation stages and reuses the selected binary inside a content-addressed
+0700 cache directory under the user cache root (verifying permissions, size, and
+SHA-256 integrity, falling back to an ephemeral 0700 directory removed after Wait
+when the user cache directory is unavailable). No shell or inherited PATH is
+used. Runtime is capped at two minutes per tool, stdout at 64 MiB + 1 sentinel
 byte (overflow cancels the process), and stored stderr at 32 KiB (excess drained).
 `CommandContext` propagates cancellation/deadline errors via wrapping;
 `WaitDelay=1s` bounds pipe cleanup. Successful outputs without savings return

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -162,5 +163,96 @@ func TestInputGuards(t *testing.T) {
 		if _, err := Encode(context.Background(), input, 75); err == nil || !strings.Contains(err.Error(), "未捆绑") {
 			t.Fatalf("unsupported platform error=%v", err)
 		}
+	}
+}
+
+func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
+	if len(bundledTool()) == 0 {
+		test.Skip("native asset unavailable for this platform")
+	}
+	originalDir := userCacheDir
+	toolCacheMu.Lock()
+	savedCache := toolCache
+	toolCache = cachedToolState{}
+	toolCacheMu.Unlock()
+	test.Cleanup(func() {
+		toolCacheMu.Lock()
+		userCacheDir = originalDir
+		toolCache = savedCache
+		toolCacheMu.Unlock()
+	})
+
+	cacheRoot := test.TempDir()
+	userCacheDir = func() (string, error) { return cacheRoot, nil }
+
+	firstPath, firstCleanup, err := acquireTool()
+	if err != nil {
+		test.Fatal(err)
+	}
+	firstCleanup()
+	firstInfo, err := os.Stat(firstPath)
+	if err != nil {
+		test.Fatal(err)
+	}
+	secondPath, secondCleanup, err := acquireTool()
+	if err != nil {
+		test.Fatal(err)
+	}
+	secondCleanup()
+	secondInfo, err := os.Stat(secondPath)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if firstPath != secondPath || !os.SameFile(firstInfo, secondInfo) {
+		test.Fatalf("expected cached executable reuse: first=%s second=%s", firstPath, secondPath)
+	}
+
+	if err := os.WriteFile(firstPath, []byte("corrupted"), 0700); err != nil {
+		test.Fatal(err)
+	}
+	repairedPath, repairedCleanup, err := acquireTool()
+	if err != nil {
+		test.Fatal(err)
+	}
+	repairedCleanup()
+	repairedData, err := os.ReadFile(repairedPath)
+	if err != nil || !bytes.Equal(repairedData, bundledTool()) {
+		test.Fatalf("expected corrupted cache entry to self-heal: err=%v len=%d", err, len(repairedData))
+	}
+
+	var group sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			path, cleanup, acquireErr := acquireTool()
+			if acquireErr != nil {
+				errs <- acquireErr
+				return
+			}
+			cleanup()
+			if _, statErr := os.Stat(path); statErr != nil {
+				errs <- statErr
+			}
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for acquireErr := range errs {
+		test.Fatal(acquireErr)
+	}
+
+	userCacheDir = func() (string, error) { return "", errors.New("unavailable") }
+	fallbackPath, fallbackCleanup, err := acquireTool()
+	if err != nil {
+		test.Fatal(err)
+	}
+	if _, err := os.Stat(fallbackPath); err != nil {
+		test.Fatal(err)
+	}
+	fallbackCleanup()
+	if _, err := os.Stat(fallbackPath); !os.IsNotExist(err) {
+		test.Fatalf("expected fallback temporary binary removal, got err=%v", err)
 	}
 }

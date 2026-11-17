@@ -9,6 +9,10 @@ import (
 var tools embed.FS
 
 func bundledTool() []byte {
-	data, _ := tools.ReadFile("assets/" + runtime.GOOS + "_" + runtime.GOARCH + "/cwebp")
+	name := "cwebp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	data, _ := tools.ReadFile("assets/" + runtime.GOOS + "_" + runtime.GOARCH + "/" + name)
 	return data
 }

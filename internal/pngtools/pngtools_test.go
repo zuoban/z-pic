@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -169,4 +170,98 @@ func encodePNG(t *testing.T, img image.Image) []byte {
 		t.Fatal(err)
 	}
 	return b.Bytes()
+}
+
+func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
+	if len(bundledTool("oxipng")) == 0 || len(bundledTool("pngquant")) == 0 {
+		test.Skip("native assets unavailable for this platform")
+	}
+	originalDir := userCacheDir
+	toolCacheMu.Lock()
+	savedCache := make(map[string]cachedToolEntry, len(toolCache))
+	for key, value := range toolCache {
+		savedCache[key] = value
+	}
+	toolCache = make(map[string]cachedToolEntry)
+	toolCacheMu.Unlock()
+	test.Cleanup(func() {
+		toolCacheMu.Lock()
+		userCacheDir = originalDir
+		toolCache = savedCache
+		toolCacheMu.Unlock()
+	})
+
+	cacheRoot := test.TempDir()
+	userCacheDir = func() (string, error) { return cacheRoot, nil }
+
+	firstPath, firstCleanup, err := acquireTool("oxipng")
+	if err != nil {
+		test.Fatal(err)
+	}
+	firstCleanup()
+	firstInfo, err := os.Stat(firstPath)
+	if err != nil {
+		test.Fatal(err)
+	}
+	secondPath, secondCleanup, err := acquireTool("oxipng")
+	if err != nil {
+		test.Fatal(err)
+	}
+	secondCleanup()
+	secondInfo, err := os.Stat(secondPath)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if firstPath != secondPath || !os.SameFile(firstInfo, secondInfo) {
+		test.Fatalf("expected cached executable reuse: first=%s second=%s", firstPath, secondPath)
+	}
+
+	if err := os.WriteFile(firstPath, []byte("corrupted"), 0700); err != nil {
+		test.Fatal(err)
+	}
+	repairedPath, repairedCleanup, err := acquireTool("oxipng")
+	if err != nil {
+		test.Fatal(err)
+	}
+	repairedCleanup()
+	repairedData, err := os.ReadFile(repairedPath)
+	if err != nil || !bytes.Equal(repairedData, bundledTool("oxipng")) {
+		test.Fatalf("expected corrupted cache entry to self-heal: err=%v len=%d", err, len(repairedData))
+	}
+
+	var group sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			path, cleanup, acquireErr := acquireTool("pngquant")
+			if acquireErr != nil {
+				errs <- acquireErr
+				return
+			}
+			cleanup()
+			if _, statErr := os.Stat(path); statErr != nil {
+				errs <- statErr
+			}
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for acquireErr := range errs {
+		test.Fatal(acquireErr)
+	}
+
+	userCacheDir = func() (string, error) { return "", errors.New("unavailable") }
+	fallbackPath, fallbackCleanup, err := acquireTool("oxipng")
+	if err != nil {
+		test.Fatal(err)
+	}
+	if _, err := os.Stat(fallbackPath); err != nil {
+		test.Fatal(err)
+	}
+	fallbackCleanup()
+	if _, err := os.Stat(fallbackPath); !os.IsNotExist(err) {
+		test.Fatalf("expected fallback temporary binary removal, got err=%v", err)
+	}
 }

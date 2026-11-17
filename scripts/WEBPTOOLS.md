@@ -63,8 +63,10 @@ encoding dimension limits (16383 per axis). Animated input is unsupported.
 The wrapper returns the encoder output even when it is larger; the caller
 decides whether the original should be retained.
 
-Each call extracts the embedded executable into a new private 0700 directory
-as a 0700 file and removes both after process completion, including errors.
+Each call stages and reuses the embedded executable inside a content-addressed
+private 0700 directory under the user cache root (verifying permissions, size,
+and SHA-256 integrity, falling back to an ephemeral 0700 directory removed after
+process completion when the user cache directory is unavailable).
 The absolute executable path is used with no shell, PATH lookup, inherited
 environment, or dynamic-library override. The child receives only `LC_ALL=C`.
 The context budget includes extraction and is capped at two minutes.
