@@ -144,7 +144,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		if err != nil {
 			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 		}
-		img = normalizeOrientation(img, jpegOrientation(data))
+		img = orientForJPEGEncode(img, jpegOrientation(data))
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
@@ -153,26 +153,22 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
 		encoded = output.Bytes()
 	} else if format == "webp" {
-		if _, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); err != nil {
-			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
-		}
 		if config.Width > 16383 || config.Height > 16383 {
+			if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
+			}
 			encoded = data
 		} else {
 			encoded, err = webptools.Encode(ctx, data, options.Quality)
 			if err == nil {
-				err = validateWebPOutput(ctx, encoded, config)
+				if len(encoded) < len(data) {
+					err = validateWebPOutput(ctx, encoded, config)
+				} else if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+					return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
+				}
 			}
 		}
 	} else {
-		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("压缩已取消：%w", err)
-		}
-		// Quantize the original PNG directly so the tool can use its palette,
-		// color profile, and transparency when choosing the reduced colors.
 		encoded, err = compressPNG(ctx, data, config, options.PNG)
 	}
 	if cancelErr := ctx.Err(); cancelErr != nil {
@@ -219,6 +215,9 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 		candidate = optimized
 	}
 	if sameBytesBacking(candidate, data) {
+		if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
+		}
 		return candidate, nil
 	}
 	if err := validatePNGOutput(ctx, candidate, config); err != nil {

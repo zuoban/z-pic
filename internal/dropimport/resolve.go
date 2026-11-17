@@ -22,6 +22,14 @@ import (
 // unchanged only after header inspection and full static JPEG/PNG/WebP decoding.
 // The caller owns successful downloaded files and their eventual removal.
 func Resolve(ctx context.Context, item Item, dir string) (path string, downloaded bool, err error) {
+	return ResolveWithTransport(ctx, item, dir, nil)
+}
+
+func NewTransport() *http.Transport {
+	return &http.Transport{Proxy: http.ProxyFromEnvironment, DisableCompression: true}
+}
+
+func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTransport *http.Transport) (path string, downloaded bool, err error) {
 	if item.Path != "" {
 		return item.Path, false, nil
 	}
@@ -36,8 +44,11 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 			return "", false, err
 		}
 		name = filename(parsed)
-		transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DisableCompression: true}
-		defer transport.CloseIdleConnections()
+		transport := sharedTransport
+		if transport == nil {
+			transport = NewTransport()
+			defer transport.CloseIdleConnections()
+		}
 		client := &http.Client{
 			Transport: transport,
 			Timeout:   30 * time.Second,
@@ -84,8 +95,14 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 	if err != nil {
 		return "", false, err
 	}
-	defer os.Remove(temp.Name())
-	defer temp.Close()
+	tempName := temp.Name()
+	tempClosed := false
+	defer func() {
+		if !tempClosed {
+			_ = temp.Close()
+		}
+		_ = os.Remove(tempName)
+	}()
 	size, err := io.Copy(temp, io.LimitReader(cancelReader{ctx, reader}, maxImage+1))
 	if err != nil {
 		return "", false, err
@@ -93,7 +110,7 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 	if size > maxImage {
 		return "", false, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	info, err := compress.Inspect(ctx, temp.Name())
+	info, err := compress.Inspect(ctx, tempName)
 	if err != nil {
 		return "", false, err
 	}
@@ -111,6 +128,11 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
+	if err := temp.Close(); err != nil {
+		tempClosed = true
+		return "", false, err
+	}
+	tempClosed = true
 	extension := ".png"
 	if info.Format == "jpeg" {
 		extension = ".jpg"
@@ -123,6 +145,17 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 			stem = fmt.Sprintf("%s-%d", name, suffix)
 		}
 		target := filepath.Join(dir, stem+extension)
+		linkErr := os.Link(tempName, target)
+		if linkErr == nil {
+			if err := ctx.Err(); err != nil {
+				_ = os.Remove(target)
+				return "", false, err
+			}
+			return target, true, nil
+		}
+		if os.IsExist(linkErr) {
+			continue
+		}
 		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if os.IsExist(err) {
 			continue
@@ -130,9 +163,16 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 		if err != nil {
 			return "", false, err
 		}
-		_, err = temp.Seek(0, io.SeekStart)
+		sourceFile, openErr := os.Open(tempName)
+		if openErr != nil {
+			_ = output.Close()
+			_ = os.Remove(target)
+			return "", false, openErr
+		}
+		_, err = io.Copy(output, cancelReader{ctx, sourceFile})
+		sourceCloseErr := sourceFile.Close()
 		if err == nil {
-			_, err = io.Copy(output, cancelReader{ctx, temp})
+			err = sourceCloseErr
 		}
 		closeErr := output.Close()
 		if err == nil {

@@ -269,3 +269,29 @@ func TestThumbnailRasterDoesNotRetainSource(t *testing.T) {
 		}
 	}
 }
+
+func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
+	bounds := image.Rect(4, 6, 20, 18)
+	source := image.NewNRGBA(bounds)
+	for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
+		for column := bounds.Min.X; column < bounds.Max.X; column++ {
+			source.SetNRGBA(column, row, color.NRGBA{
+				R: uint8(column * 13),
+				G: uint8(row * 17),
+				B: uint8((column ^ row) * 23),
+				A: uint8(64 + (column+row)%190),
+			})
+		}
+	}
+	fastThumb, err := thumbnailRaster(context.Background(), source, 7)
+	if err != nil {
+		test.Fatal(err)
+	}
+	slowThumb, err := thumbnailRaster(context.Background(), plainColorImage{bounds: bounds, pixels: source}, 7)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if fastThumb.Rect != slowThumb.Rect || !bytes.Equal(fastThumb.Pix, slowThumb.Pix) {
+		test.Fatal("RGBA64Image thumbnail fast path diverged from Color.RGBA fallback")
+	}
+}

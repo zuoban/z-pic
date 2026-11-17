@@ -108,6 +108,56 @@ func normalizeOrientation(img image.Image, orientation int) image.Image {
 	return orientedImage{Image: img, orientation: orientation}
 }
 
+func orientForJPEGEncode(img image.Image, orientation int) image.Image {
+	if orientation < 2 || orientation > 8 {
+		return img
+	}
+	oriented := orientedImage{Image: img, orientation: orientation}
+	bounds := oriented.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	switch source := img.(type) {
+	case *image.YCbCr:
+		output := image.NewYCbCr(bounds, image.YCbCrSubsampleRatio444)
+		for row := 0; row < height; row++ {
+			rowBase := row * output.YStride
+			chromaBase := row * output.CStride
+			for column := 0; column < width; column++ {
+				mappedX, mappedY := oriented.mapCoords(column, row)
+				yIndex := source.YOffset(mappedX, mappedY)
+				cIndex := source.COffset(mappedX, mappedY)
+				output.Y[rowBase+column] = source.Y[yIndex]
+				output.Cb[chromaBase+column] = source.Cb[cIndex]
+				output.Cr[chromaBase+column] = source.Cr[cIndex]
+			}
+		}
+		return output
+	case *image.Gray:
+		output := image.NewGray(bounds)
+		for row := 0; row < height; row++ {
+			rowBase := row * output.Stride
+			for column := 0; column < width; column++ {
+				mappedX, mappedY := oriented.mapCoords(column, row)
+				output.Pix[rowBase+column] = source.GrayAt(mappedX, mappedY).Y
+			}
+		}
+		return output
+	default:
+		output := image.NewRGBA(bounds)
+		for row := 0; row < height; row++ {
+			rowBase := row * output.Stride
+			for column := 0; column < width; column++ {
+				pixel := oriented.RGBA64At(column, row)
+				offset := rowBase + column*4
+				output.Pix[offset] = uint8(pixel.R >> 8)
+				output.Pix[offset+1] = uint8(pixel.G >> 8)
+				output.Pix[offset+2] = uint8(pixel.B >> 8)
+				output.Pix[offset+3] = uint8(pixel.A >> 8)
+			}
+		}
+		return output
+	}
+}
+
 func (img orientedImage) Bounds() image.Rectangle {
 	bounds := img.Image.Bounds()
 	if img.orientation >= 5 {
@@ -116,24 +166,43 @@ func (img orientedImage) Bounds() image.Rectangle {
 	return image.Rect(0, 0, bounds.Dx(), bounds.Dy())
 }
 
-func (img orientedImage) At(x, y int) color.Color {
+func (img orientedImage) mapCoords(column, row int) (int, int) {
 	bounds := img.Image.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
+	width, height := bounds.Dx(), bounds.Dy()
 	switch img.orientation {
 	case 2:
-		x = w - 1 - x
+		column = width - 1 - column
 	case 3:
-		x, y = w-1-x, h-1-y
+		column, row = width-1-column, height-1-row
 	case 4:
-		y = h - 1 - y
+		row = height - 1 - row
 	case 5:
-		x, y = y, x
+		column, row = row, column
 	case 6:
-		x, y = y, h-1-x
+		column, row = row, height-1-column
 	case 7:
-		x, y = w-1-y, h-1-x
+		column, row = width-1-row, height-1-column
 	case 8:
-		x, y = w-1-y, x
+		column, row = width-1-row, column
 	}
-	return img.Image.At(x+bounds.Min.X, y+bounds.Min.Y)
+	return column + bounds.Min.X, row + bounds.Min.Y
+}
+
+func (img orientedImage) At(column, row int) color.Color {
+	mappedX, mappedY := img.mapCoords(column, row)
+	return img.Image.At(mappedX, mappedY)
+}
+
+func (img orientedImage) RGBA64At(column, row int) color.RGBA64 {
+	mappedX, mappedY := img.mapCoords(column, row)
+	if rgba64Image, ok := img.Image.(image.RGBA64Image); ok {
+		return rgba64Image.RGBA64At(mappedX, mappedY)
+	}
+	red, green, blue, alpha := img.Image.At(mappedX, mappedY).RGBA()
+	return color.RGBA64{
+		R: uint16(red),
+		G: uint16(green),
+		B: uint16(blue),
+		A: uint16(alpha),
+	}
 }

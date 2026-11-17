@@ -199,3 +199,113 @@ func TestMalformedEXIFDoesNotRejectJPEG(t *testing.T) {
 		t.Fatalf("invalid EXIF changed dimensions: %dx%d", result.Width, result.Height)
 	}
 }
+
+type plainColorImage struct {
+	bounds image.Rectangle
+	pixels *image.NRGBA
+}
+
+func (plain plainColorImage) ColorModel() color.Model {
+	return color.NRGBAModel
+}
+
+func (plain plainColorImage) Bounds() image.Rectangle {
+	return plain.bounds
+}
+
+func (plain plainColorImage) At(column, row int) color.Color {
+	return plain.pixels.NRGBAAt(column, row)
+}
+
+func TestOrientedImageRGBA64AtParity(test *testing.T) {
+	sourceBounds := image.Rect(3, 5, 8, 9)
+	source := image.NewNRGBA(sourceBounds)
+	for row := sourceBounds.Min.Y; row < sourceBounds.Max.Y; row++ {
+		for column := sourceBounds.Min.X; column < sourceBounds.Max.X; column++ {
+			source.SetNRGBA(column, row, color.NRGBA{
+				R: uint8(column * 29),
+				G: uint8(row * 37),
+				B: uint8((column + row) * 19),
+				A: uint8(120 + (column*row)%135),
+			})
+		}
+	}
+	fallbackSource := plainColorImage{bounds: sourceBounds, pixels: source}
+	for orientation := 2; orientation <= 8; orientation++ {
+		fastOriented, ok := normalizeOrientation(source, orientation).(image.RGBA64Image)
+		if !ok {
+			test.Fatalf("orientation %d did not implement image.RGBA64Image", orientation)
+		}
+		slowOriented, ok := normalizeOrientation(fallbackSource, orientation).(image.RGBA64Image)
+		if !ok {
+			test.Fatalf("fallback orientation %d did not implement image.RGBA64Image", orientation)
+		}
+		bounds := fastOriented.Bounds()
+		for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
+			for column := bounds.Min.X; column < bounds.Max.X; column++ {
+				red, green, blue, alpha := fastOriented.At(column, row).RGBA()
+				want := color.RGBA64{
+					R: uint16(red),
+					G: uint16(green),
+					B: uint16(blue),
+					A: uint16(alpha),
+				}
+				if got := fastOriented.RGBA64At(column, row); got != want {
+					test.Fatalf("orientation %d fast RGBA64At(%d,%d) = %+v, want %+v", orientation, column, row, got, want)
+				}
+				if got := slowOriented.RGBA64At(column, row); got != want {
+					test.Fatalf("orientation %d fallback RGBA64At(%d,%d) = %+v, want %+v", orientation, column, row, got, want)
+				}
+			}
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			_ = fastOriented.RGBA64At(0, 0)
+		})
+		if allocs != 0 {
+			test.Fatalf("orientation %d RGBA64At allocated %.1f objects per call", orientation, allocs)
+		}
+	}
+}
+
+func TestOrientForJPEGEncodePlanes(test *testing.T) {
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	nrgba.SetNRGBA(0, 0, color.NRGBA{R: 240, G: 20, B: 30, A: 255})
+	nrgba.SetNRGBA(3, 1, color.NRGBA{R: 20, G: 210, B: 230, A: 255})
+
+	var rawJPEG bytes.Buffer
+	if err := jpeg.Encode(&rawJPEG, nrgba, &jpeg.Options{Quality: 100}); err != nil {
+		test.Fatal(err)
+	}
+	ycbcrSource, err := jpeg.Decode(&rawJPEG)
+	if err != nil {
+		test.Fatal(err)
+	}
+	graySource := image.NewGray(image.Rect(0, 0, 4, 2))
+	graySource.SetGray(0, 0, color.Gray{Y: 200})
+	graySource.SetGray(3, 1, color.Gray{Y: 40})
+
+	for _, source := range []image.Image{ycbcrSource, graySource, nrgba} {
+		if unchanged := orientForJPEGEncode(source, 1); unchanged != source {
+			test.Fatalf("orientation 1 must return original %T", source)
+		}
+		for orientation := 2; orientation <= 8; orientation++ {
+			got := orientForJPEGEncode(source, orientation)
+			want := normalizeOrientation(source, orientation)
+			if got.Bounds() != want.Bounds() {
+				test.Fatalf("%T orientation %d bounds = %v, want %v", source, orientation, got.Bounds(), want.Bounds())
+			}
+			bounds := want.Bounds()
+			for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
+				for column := bounds.Min.X; column < bounds.Max.X; column++ {
+					gotR, gotG, gotB, _ := got.At(column, row).RGBA()
+					wantR, wantG, wantB, _ := want.At(column, row).RGBA()
+					if gotR>>8 != wantR>>8 || gotG>>8 != wantG>>8 || gotB>>8 != wantB>>8 {
+						test.Fatalf("%T orientation %d pixel (%d,%d) = (%d,%d,%d), want (%d,%d,%d)",
+							source, orientation, column, row,
+							gotR>>8, gotG>>8, gotB>>8, wantR>>8, wantG>>8, wantB>>8)
+					}
+				}
+			}
+		}
+	}
+}

@@ -357,6 +357,40 @@ func TestResolveValidationAndSafeName(t *testing.T) {
 	}
 }
 
+func TestResolveWithSharedTransportPreservesOriginals(test *testing.T) {
+	payload := imageBytes(test, "png")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write(payload)
+	}))
+	defer server.Close()
+
+	dir := filepath.Join(test.TempDir(), "downloads")
+	transport := NewTransport()
+	defer transport.CloseIdleConnections()
+
+	first, firstSaved, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/batch.png"}, dir, transport)
+	if err != nil || !firstSaved {
+		test.Fatalf("first ResolveWithTransport = %q, %v, %v", first, firstSaved, err)
+	}
+	second, secondSaved, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/batch.png"}, dir, transport)
+	if err != nil || !secondSaved || second == first {
+		test.Fatalf("second ResolveWithTransport = %q, %v, %v", second, secondSaved, err)
+	}
+	if requests != 2 {
+		test.Fatalf("expected 2 HTTP requests, got %d", requests)
+	}
+	for _, resolvedPath := range []string{first, second} {
+		actual, readErr := os.ReadFile(resolvedPath)
+		if readErr != nil || !bytes.Equal(actual, payload) {
+			test.Fatalf("resolved payload mismatch for %s: %v", resolvedPath, readErr)
+		}
+	}
+	assertFileCount(test, dir, 2)
+}
+
 func pngChunk(kind string, payload []byte) []byte {
 	chunk := make([]byte, 12+len(payload))
 	binary.BigEndian.PutUint32(chunk, uint32(len(payload)))
