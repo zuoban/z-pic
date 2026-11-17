@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,108 @@ import (
 
 	"zpic/internal/compress"
 )
+
+func themeContrast(foreground, background ui.Color) float64 {
+	luminance := func(value ui.Color) float64 {
+		channel := func(component uint8) float64 {
+			normalized := float64(component) / 255
+			if normalized <= 0.04045 {
+				return normalized / 12.92
+			}
+			return math.Pow((normalized+0.055)/1.055, 2.4)
+		}
+		return 0.2126*channel(value.R) + 0.7152*channel(value.G) + 0.0722*channel(value.B)
+	}
+	first, second := luminance(foreground.Over(background)), luminance(background)
+	return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+}
+
+func TestThemeTextContrast(t *testing.T) {
+	for _, mode := range []themeMode{themeLight, themeDark} {
+		t.Run(string(mode), func(t *testing.T) {
+			tester := ui.NewTester(func(c *ui.Context) {
+				applyThemeMode(c, mode)
+				theme := c.Theme()
+				backgrounds := map[string]ui.Color{
+					"window": theme.Background, "panel": theme.Surface,
+					"stage": stageBackground(c), "subtle": subtleSurface(c),
+					"selection": selectionBackground(c),
+				}
+				foregrounds := map[string]ui.Color{
+					"body": theme.Text, "secondary": theme.TextMuted, "metadata": metadataColor(c),
+					"accent": accentForeground(theme), "danger": theme.Danger,
+					"warning": theme.Warning, "success": theme.Success,
+				}
+				for backgroundName, background := range backgrounds {
+					for foregroundName, foreground := range foregrounds {
+						if ratio := themeContrast(foreground, background); ratio < 4.5 {
+							t.Errorf("%s text on %s: contrast %.2f, want at least 4.5", foregroundName, backgroundName, ratio)
+						}
+					}
+				}
+				for name, fill := range map[string]ui.Color{
+					"default": theme.Accent, "hover": theme.AccentHover, "pressed": theme.AccentPressed,
+				} {
+					if ratio := themeContrast(theme.AccentText, fill); ratio < 4.5 {
+						t.Errorf("primary %s: contrast %.2f, want at least 4.5", name, ratio)
+					}
+				}
+			}, 100, 100)
+			tester.Frame()
+		})
+	}
+}
+
+func TestThemePreservesAccessibilityPreferences(t *testing.T) {
+	for _, mode := range []themeMode{themeSystem, themeLight, themeDark} {
+		t.Run(string(mode), func(t *testing.T) {
+			var theme ui.Theme
+			var glass bool
+			var metadata, border, selection ui.Color
+			tester := ui.NewTester(func(c *ui.Context) {
+				applyThemeMode(c, mode)
+				theme = *c.Theme()
+				glass = usesGlass(c)
+				metadata, border, selection = metadataColor(c), controlBorder(c), selectionBorder(c)
+			}, 100, 100)
+			tester.SetVibrancy(true)
+			for _, dark := range []bool{false, true} {
+				tester.SetDark(dark)
+				tester.SetPreferences(ui.Preferences{})
+				if !glass {
+					t.Fatal("ordinary appearance must retain native glass")
+				}
+				normalBorder := border
+				tester.SetPreferences(ui.Preferences{
+					HighContrast: true, TextScale: 1.25, Accent: ui.Hex("#e11d48"),
+				})
+				for range 3 {
+					tester.Frame()
+					if glass || theme.Focus.A != 255 || border.A <= normalBorder.A {
+						t.Fatalf("high contrast must use opaque surfaces, solid focus and stronger borders: glass=%v focus=%v border=%v", glass, theme.Focus, border)
+					}
+					if metadata != theme.TextMuted || selection.A != 255 {
+						t.Fatal("high contrast must strengthen metadata and selection outlines")
+					}
+					if theme.FontSize != 16.25 {
+						t.Fatalf("text scale must apply once, got font size %v", theme.FontSize)
+					}
+					if theme.Accent != ui.Hex("#2563eb") {
+						t.Fatal("accessibility preferences must retain the product accent")
+					}
+					wantDark := mode == themeDark || mode == themeSystem && dark
+					if theme.Dark != wantDark {
+						t.Fatalf("appearance mode %q on dark=%v resolved to dark=%v", mode, dark, theme.Dark)
+					}
+				}
+				tester.SetPreferences(ui.Preferences{})
+				if !glass || theme.FontSize != 13 {
+					t.Fatal("clearing accessibility preferences must restore glass and default font size")
+				}
+			}
+		})
+	}
+}
 
 func TestThemePickerSelectionKeyboardAndDismissal(t *testing.T) {
 	s := testSelectedApplication()

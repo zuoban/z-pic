@@ -26,7 +26,7 @@ func presetActiveIndicator(c *ui.Context) {
 	}
 	ui.Box(c).Size(16, 16).Radius(radius).Background(glassSelectionBackground(c)).
 		Border(1, selectionBorder(c)).Center().Children(func() {
-		ui.Icon(c, presetCheckIcon).Size(12, 12).TextColor(t.Accent)
+		ui.Icon(c, presetCheckIcon).Size(12, 12).TextColor(accentForeground(t))
 	})
 }
 
@@ -93,7 +93,7 @@ func (s *application) settingsView(c *ui.Context) {
 					button.Background(glassControlHover(c))
 				}
 				if preset.favorite {
-					button.TextColor(t.Accent).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+					button.TextColor(accentForeground(t)).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 				} else {
 					button.TextColor(t.TextMuted)
 				}

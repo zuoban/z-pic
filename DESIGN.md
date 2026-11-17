@@ -87,10 +87,12 @@ One main window, one modal child settings window, and an optional floating drop 
 ## Visual language
 
 - Follow the desktop's light/dark theme by default (`跟随系统`), with instant top-bar overrides for `浅色` and `深色` persisted in `settings.json` and synchronized across native window chrome (`mygo.Theme.SetSource`), main window, settings dialog, and floating drop window.
-- Use the system font: 24-point window headings, 16-point peer section headings, 13-point body/control text and 12-point metadata. Primary and secondary text use theme roles; metadata uses #707078 in light mode and #92929c in dark mode.
+- Use the system font: 24-point window headings, 16-point peer section headings, 13-point body/control text and 12-point metadata. Primary and secondary text use theme roles; metadata uses #626875 in light mode and #969ba8 in dark mode. High contrast promotes metadata to the stronger secondary-text role.
 - Spacing: a four-point grid, 8/12-point control gaps and 16/20-point panel padding. Main page edges are 24 points on desktop and 16 below 960 points wide.
-- A single blue #2563eb accent for primary actions, selection outlines and keyboard focus. Selected surfaces mix 6% accent in light mode and 12% in dark mode, with a 1-point 60%-opacity accent border and ordinary text colors; focus remains independently visible. Disabled primary actions use neutral surfaces and preserve their disabled semantics.
-- Controls use 8-point corners; panels use 16-point corners. Surfaces and hairlines remain neutral.
+- Keep blue #2563eb for primary-action fills, with #1d4ed8 hover and #1e40af pressed states so white labels retain contrast. Blue text and small icons use #93b4ff in dark mode; selection outlines and keyboard focus follow that readable foreground. Selected opaque surfaces mix 7% accent in light mode and 14% in dark mode and retain ordinary text colors. Disabled primary actions use neutral surfaces and preserve their disabled semantics.
+- Controls use 8-point corners and opaque panels use 12-point corners. Native glass uses 16-point panels, pill-shaped action buttons and 12-point input corners; input fields retain their field shape rather than becoming pills. Action buttons and fields have stronger neutral outlines than panel hairlines, with distinct hover and pressed feedback.
+- Dark surfaces progress from #141416 window chrome to #1e2026 panels, with #181a1f inset summaries and #101216 preview stages. Light panels remain white over #f7f7f8 chrome. Success, warning and error text have separate appearance-specific colors and retain textual status labels.
+- Native glass keeps transparent window roots and translucent panels. Either Reduce Transparency or Increase Contrast uses opaque theme surfaces across the main window, settings and floating panel. Apply accessibility preferences after the app palette so stronger borders, opaque keyboard focus and the default font's text scale survive theme changes; retain the product accent.
 - Text weights are 400–600. Source/output summary figures use 18/24 points on desktop and 16/20 points below 960 points wide, with a wider output column, tabular digits and status on its own line.
 - Images are contained without cropping. Transparent pixels and unused canvas space show the plain theme background.
 - No nonessential animation.
@@ -175,3 +177,7 @@ Concise Chinese. Use “压缩图片”, “图片质量”, “另存副本”,
 - [ ] Owner: user. Which operating systems should receive release installers? The first build and runtime check target the available macOS machine.
 - [ ] Owner: user. Is batch processing needed next? It is excluded from this first release.
 - [x] Batch processing implemented: multi-file/folder/CLI/drag-drop entry, sequential execution, collision-free folder export and confirmed atomic overwrite, mid-batch cancel/resume, and single-item preview.
+
+## Theme refinement verification · 2026-11-17
+
+The Go suite, Go vet, MyGo vet and native automation build passed. New regression checks cover 4.5:1 text contrast across opaque window, panel, preview, inset and selected surfaces, primary-action labels in all three pointer states, and accessibility preferences across system/light/dark overrides without accumulating text scaling. Light/dark renders cover empty, batch, settings, floating and 760-point layouts. Native smoke checks cover switching light → dark → light, settings cancellation and floating compact/expanded states, with captures under `build/verification/theme-native/`. Native captures preserve alpha; composited review images use the corresponding opaque window color to inspect glass layers without a desktop backdrop.

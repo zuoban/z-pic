@@ -33,10 +33,10 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 			p.Stroke(frame, selectionBorder(c), 4, 1)
 			p.StrokePolyline([][2]float32{
 				{r.X + 6, r.Y + 10}, {r.X + 6, r.Y + 6}, {r.X + 10, r.Y + 6},
-			}, 1.5, t.Accent)
+			}, 1.5, accentForeground(t))
 			p.StrokePolyline([][2]float32{
 				{r.X + 14, r.Y + 18}, {r.X + 18, r.Y + 18}, {r.X + 18, r.Y + 14},
-			}, 1.5, t.Accent)
+			}, 1.5, accentForeground(t))
 		})
 		ui.Text(c, "Z Pic").FontSize(18).FontWeight(600).SingleLine()
 		if showSubtitle {
@@ -267,10 +267,10 @@ func (s *application) previewPanel(c *ui.Context) {
 						p.Stroke(card, glassBorder(c), 8, 1)
 						p.StrokePolyline([][2]float32{
 							{bounds.X + 12, bounds.Y + 20}, {bounds.X + 12, bounds.Y + 14}, {bounds.X + 18, bounds.Y + 14},
-						}, 1.5, t.Accent)
+						}, 1.5, accentForeground(t))
 						p.StrokePolyline([][2]float32{
 							{bounds.X + 38, bounds.Y + 42}, {bounds.X + 44, bounds.Y + 42}, {bounds.X + 44, bounds.Y + 36},
-						}, 1.5, t.Accent)
+						}, 1.5, accentForeground(t))
 						p.Stroke(ui.Rect{X: bounds.X + 33, Y: bounds.Y + 17, W: 5, H: 5}, t.TextMuted, 2.5, 1.5)
 						p.StrokePolyline([][2]float32{
 							{bounds.X + 14, bounds.Y + 38},
@@ -506,7 +506,7 @@ func (s *application) presetControl(c *ui.Context, availWidth float32, compact b
 				if preset.favorite {
 					presetName := preset.name
 					item.Content(func(x ui.MenuItemContent) {
-						iconColor := t.Accent
+						iconColor := accentForeground(t)
 						if x.Highlighted {
 							iconColor = x.Text
 						}

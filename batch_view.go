@@ -317,7 +317,7 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 func batchItemStatus(item batchItem, t *ui.Theme) (string, ui.Color) {
 	switch item.status {
 	case batchProcessing:
-		return "处理中", t.Accent
+		return "处理中", accentForeground(t)
 	case batchDone:
 		if item.unchanged {
 			return "未减小", t.TextMuted
@@ -631,7 +631,7 @@ func (s *application) batchResultSummary(c *ui.Context) {
 	ratio := -1.0
 	switch {
 	case s.busy && s.batch.total > 0:
-		label, color = fmt.Sprintf("处理中 %d / %d", s.batch.done, s.batch.total), t.Accent
+		label, color = fmt.Sprintf("处理中 %d / %d", s.batch.done, s.batch.total), accentForeground(t)
 		if done > 0 {
 			output = formatSize(outTotal)
 			if doneOrig > 0 {
