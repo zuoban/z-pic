@@ -283,6 +283,36 @@ func TestParseTransferBudgetStopsProviders(t *testing.T) {
 	}
 }
 
+func TestParseLocalItemLimitStopsProviders(t *testing.T) {
+	for _, format := range []transfer.Format{transfer.FileList, transfer.URIList, transfer.Text} {
+		t.Run(string(format), func(t *testing.T) {
+			value := strings.Repeat("file:///tmp/repeated.png\n", maxItems)
+			items, err := Parse(transfer.New(transfer.NewItem(representation(format, value))))
+			if err != nil || len(items) != 1 {
+				t.Fatalf("at limit = %v, %v", items, err)
+			}
+			data := transfer.New(
+				transfer.NewItem(
+					representation(format, value+"file:///tmp/repeated.png"),
+					transfer.Lazy(transfer.PNG, func() ([]byte, error) {
+						t.Fatal("read fallback after local item limit")
+						return nil, nil
+					}),
+				),
+				transfer.NewItem(transfer.Lazy(transfer.Text, func() ([]byte, error) {
+					t.Fatal("read later provider after local item limit")
+					return nil, nil
+				})),
+			)
+			items, err = Parse(data)
+			var limit resourceLimitError
+			if items != nil || !errors.As(err, &limit) {
+				t.Fatalf("over limit = %v, %v", items, err)
+			}
+		})
+	}
+}
+
 func TestParseWebPBytes(t *testing.T) {
 	payload := imageBytes(t, "webp")
 	data := transfer.New(transfer.NewItem(

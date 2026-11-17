@@ -127,7 +127,7 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 测试持久化时可设置 `ZPIC_CONFIG_FILE=/absolute/path/to/test-settings.json`，将配置读写隔离到指定文件；退出并重启应用后核对方案列表、参数和当前选择。
 
-界面约定见 [DESIGN.md](DESIGN.md)。图片核心位于 `internal/compress`；原生工具执行、输出限制、超时与取消处理位于 `internal/pngtools` 和 `internal/webptools`。JPEG 编码及 PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
+界面约定见 [DESIGN.md](DESIGN.md)，清理记录与防回归经验见 [LESSONS.md](LESSONS.md)。图片核心位于 `internal/compress`；原生工具执行、输出限制、超时与取消处理位于 `internal/pngtools` 和 `internal/webptools`。JPEG 编码及 PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
 
 批处理调度与保存位于 `batch_runner.go`，图片工作内存预算位于 `image_budget.go`；PNG/WebP 共用的原生工具缓存、完整性验证与原子释放逻辑位于 `internal/toolcache`。GitHub Actions 在 macOS ARM64 上执行竞态检测、Go 与 MyGo 静态检查、捆绑编码器验证和构建；编码器的真实集成测试随 `go test -race ./...` 一起运行。
 

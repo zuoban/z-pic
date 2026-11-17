@@ -116,12 +116,12 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 		return value
 	}
 	files := string(read(transfer.FileList, maxText))
-	if items := localItems(files); len(items) > 0 {
-		return items, nil
+	if items, err := localItems(files); err != nil || len(items) > 0 {
+		return items, err
 	}
 	uris := string(read(transfer.URIList, maxText))
-	if items := localItems(uris); len(items) > 0 {
-		return items, nil
+	if items, err := localItems(uris); err != nil || len(items) > 0 {
+		return items, err
 	}
 	markup := read(transfer.HTML, maxText)
 	hadImage := false
@@ -174,8 +174,8 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 	}
 	text := string(read(transfer.Text, maxText))
 	if !hadImage {
-		if items := localItems(text); len(items) > 0 {
-			return items, nil
+		if items, err := localItems(text); err != nil || len(items) > 0 {
+			return items, err
 		}
 		for _, representation := range []string{uris, text} {
 			var items []Item
@@ -217,7 +217,7 @@ func lines(text string) iter.Seq[string] {
 	}
 }
 
-func localItems(text string) []Item {
+func localItems(text string) ([]Item, error) {
 	var result []Item
 	for line := range lines(text) {
 		path := line
@@ -232,10 +232,13 @@ func localItems(text string) []Item {
 			path = filepath.FromSlash(parsed.Path)
 		}
 		if filepath.IsAbs(path) && !strings.ContainsRune(path, 0) {
+			if len(result) == maxItems {
+				return nil, itemLimit()
+			}
 			result = append(result, Item{Path: path})
 		}
 	}
-	return result
+	return result, nil
 }
 
 func httpURL(raw string) (*url.URL, error) {
