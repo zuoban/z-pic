@@ -50,7 +50,7 @@ func presetSaveDescription(options presetSaveOptions) string {
 }
 
 func (s *application) settingsView(c *ui.Context) {
-	applyTheme(c)
+	s.applyTheme(c)
 	editor := s.editor
 	if editor == nil || editor.selectedPreset() == nil {
 		return

@@ -246,6 +246,7 @@ func TestLoadSettingsRejectsInvalidFilesWithoutChangingThem(test *testing.T) {
 		"invalid-original-subfolder": strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"use_subfolder":true,"subfolder":"../outside"}`, 1),
 		"invalid-output-suffix":      strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"use_suffix":true,"suffix":"bad/name"}`, 1),
 		"relative-output-directory":  strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"mode":"fixed","directory":"exports"}`, 1),
+		"invalid-theme":              strings.Replace(validStoredSettings, `"version":1,`, `"version":1,"theme":"neon",`, 1),
 	}
 	for name, contents := range files {
 		test.Run(name, func(test *testing.T) {

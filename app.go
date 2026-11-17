@@ -43,6 +43,7 @@ type application struct {
 	file           *selectedImage
 	quality        float64
 	scheme         string
+	theme          themeMode
 	png            compress.PNGOptions
 	output         presetSaveOptions
 	settingsOpen   bool
@@ -75,6 +76,7 @@ type application struct {
 	lastSavedPath         string
 	dispatchUpdate        func(func())
 	showInFolder          func(string)
+	applyNativeTheme      func(mygo.ThemeSource)
 	floatingWindow        *mygo.Window
 	floatingOpen          bool
 	floating              floatingState
@@ -91,7 +93,7 @@ type application struct {
 
 func newApplication() *application {
 	return &application{
-		quality: 80, scheme: "均衡", png: compress.DefaultPNGOptions(),
+		quality: 80, scheme: "均衡", theme: themeSystem, png: compress.DefaultPNGOptions(),
 		presets:           slices.Clone(compressionPresets),
 		comparison:        comparisonView{split: 50},
 		pendingBatchIndex: -1,

@@ -152,9 +152,9 @@ func TestPresetPickerFitsTopBarAcrossViews(t *testing.T) {
 					if floating {
 						floatingLabel = "收起悬浮窗"
 					}
-					labels := []string{"选择预设", "设置", floatingLabel, "开始压缩"}
+					labels := []string{"选择预设", "主题", "设置", floatingLabel, "开始压缩"}
 					if state == "result" || state == "partial-queue" {
-						labels[3] = "重新压缩"
+						labels[4] = "重新压缩"
 					}
 					if state == "partial-queue" {
 						labels = append(labels, "继续压缩")
@@ -162,7 +162,7 @@ func TestPresetPickerFitsTopBarAcrossViews(t *testing.T) {
 					var controls []ui.AccessInfo
 					for _, label := range labels {
 						role := ui.RoleButton
-						if label == "选择预设" {
+						if label == "选择预设" || label == "主题" {
 							role = ui.RoleMenuButton
 						}
 						control, ok := tt.AccessByRole(role, label)

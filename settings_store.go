@@ -23,6 +23,14 @@ type storedSettings struct {
 	Selected       string         `json:"selected"`
 	Presets        []storedPreset `json:"presets"`
 	BatchOutputDir string         `json:"batch_output_dir,omitempty"`
+	Theme          string         `json:"theme,omitempty"`
+}
+
+type appSettings struct {
+	presets        []compressionPreset
+	selected       string
+	batchOutputDir string
+	theme          themeMode
 }
 
 type storedPreset struct {
@@ -101,49 +109,61 @@ func sanitizeStoredBatchOutputDir(dir string) string {
 }
 
 func loadAppSettings(path string) ([]compressionPreset, string, string, error) {
+	cfg, err := loadFullSettings(path)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return cfg.presets, cfg.selected, cfg.batchOutputDir, nil
+}
+
+func loadFullSettings(path string) (appSettings, error) {
 	if path == "" {
-		return nil, "", "", errors.New("设置文件路径不能为空")
+		return appSettings{}, errors.New("设置文件路径不能为空")
 	}
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return defaultPresets(), "均衡", "", nil
+		return appSettings{presets: defaultPresets(), selected: "均衡", theme: themeSystem}, nil
 	}
 	if err != nil {
-		return nil, "", "", fmt.Errorf("无法读取设置文件信息：%w", err)
+		return appSettings{}, fmt.Errorf("无法读取设置文件信息：%w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, "", "", errors.New("设置文件必须是普通文件")
+		return appSettings{}, errors.New("设置文件必须是普通文件")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("无法打开设置文件：%w", err)
+		return appSettings{}, fmt.Errorf("无法打开设置文件：%w", err)
 	}
 	defer file.Close()
 	info, err = file.Stat()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("无法读取设置文件信息：%w", err)
+		return appSettings{}, fmt.Errorf("无法读取设置文件信息：%w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, "", "", errors.New("设置文件必须是普通文件")
+		return appSettings{}, errors.New("设置文件必须是普通文件")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxSettingsBytes+1))
 	if err != nil {
-		return nil, "", "", fmt.Errorf("无法读取设置文件：%w", err)
+		return appSettings{}, fmt.Errorf("无法读取设置文件：%w", err)
 	}
 	if len(data) > maxSettingsBytes {
-		return nil, "", "", errors.New("设置文件超过 1 MiB 限制")
+		return appSettings{}, errors.New("设置文件超过 1 MiB 限制")
 	}
 	var stored storedSettings
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
-		return nil, "", "", fmt.Errorf("设置文件格式无效：%w", err)
+		return appSettings{}, fmt.Errorf("设置文件格式无效：%w", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, "", "", errors.New("设置文件包含多余内容")
+		return appSettings{}, errors.New("设置文件包含多余内容")
 	}
 	if stored.Version != 1 {
-		return nil, "", "", fmt.Errorf("不支持的设置文件版本：%d", stored.Version)
+		return appSettings{}, fmt.Errorf("不支持的设置文件版本：%d", stored.Version)
+	}
+	mode := themeMode(stored.Theme)
+	if err := mode.validate(); err != nil {
+		return appSettings{}, fmt.Errorf("设置文件内容无效：%w", err)
 	}
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
@@ -158,9 +178,14 @@ func loadAppSettings(path string) ([]compressionPreset, string, string, error) {
 		}
 	}
 	if err := validatePresets(presets, stored.Selected); err != nil {
-		return nil, "", "", fmt.Errorf("设置文件内容无效：%w", err)
+		return appSettings{}, fmt.Errorf("设置文件内容无效：%w", err)
 	}
-	return presets, stored.Selected, sanitizeStoredBatchOutputDir(stored.BatchOutputDir), nil
+	return appSettings{
+		presets:        presets,
+		selected:       stored.Selected,
+		batchOutputDir: sanitizeStoredBatchOutputDir(stored.BatchOutputDir),
+		theme:          mode.normalized(),
+	}, nil
 }
 
 func saveSettings(path string, presets []compressionPreset, selected string) error {
@@ -168,20 +193,33 @@ func saveSettings(path string, presets []compressionPreset, selected string) err
 }
 
 func saveAppSettings(path string, presets []compressionPreset, selected, batchOutputDir string) error {
+	return saveFullSettings(path, appSettings{
+		presets:        presets,
+		selected:       selected,
+		batchOutputDir: batchOutputDir,
+		theme:          themeSystem,
+	})
+}
+
+func saveFullSettings(path string, cfg appSettings) error {
 	if path == "" {
 		return errors.New("设置文件路径不能为空")
 	}
-	if err := validatePresets(presets, selected); err != nil {
+	if err := validatePresets(cfg.presets, cfg.selected); err != nil {
 		return err
 	}
-	batchOutputDir = sanitizeStoredBatchOutputDir(batchOutputDir)
+	if err := cfg.theme.validate(); err != nil {
+		return err
+	}
+	batchOutputDir := sanitizeStoredBatchOutputDir(cfg.batchOutputDir)
 	stored := storedSettings{
 		Version:        1,
-		Selected:       selected,
-		Presets:        make([]storedPreset, len(presets)),
+		Selected:       cfg.selected,
+		Presets:        make([]storedPreset, len(cfg.presets)),
 		BatchOutputDir: batchOutputDir,
+		Theme:          cfg.theme.storedValue(),
 	}
-	for index, preset := range presets {
+	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{
 			Name: preset.name, Quality: preset.quality, PNG: preset.png, Favorite: preset.favorite,
 		}

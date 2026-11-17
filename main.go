@@ -11,6 +11,7 @@ import (
 func main() {
 	app := newApplication()
 	app.restoreSettings()
+	mygo.Theme.SetSource(app.effectiveThemeMode().source())
 	mygo.App.WhenReady(func() {
 		app.window = mygo.NewWindow(mygo.WindowOptions{
 			Title:          "Z Pic · 图片压缩",

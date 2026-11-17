@@ -182,7 +182,7 @@ func (s *application) floatingBitmap(item batchItem) *ui.Bitmap {
 }
 
 func (s *application) floatingView(c *ui.Context) {
-	applyTheme(c)
+	s.applyTheme(c)
 	theme := c.Theme()
 	theme.Radius = 8
 	c.SetTheme(theme)

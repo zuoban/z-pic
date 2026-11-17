@@ -9,29 +9,6 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func applyTheme(c *ui.Context) {
-	theme := c.Theme().WithAccent(ui.Hex("#2563eb"))
-	theme.Radius, theme.FontSize = 8, 13
-	if theme.Dark {
-		theme.Background = ui.Hex("#141416")
-		theme.Surface = ui.Hex("#1d1d20")
-		theme.SurfaceHover = ui.Hex("#29292e")
-		theme.SurfacePressed = ui.Hex("#34343a")
-		theme.Text = ui.Hex("#ededee")
-		theme.TextMuted = ui.Hex("#b0b0b8")
-	} else {
-		theme.Background = ui.Hex("#f7f7f8")
-		theme.Surface = ui.Hex("#ffffff")
-		theme.SurfaceHover = ui.Hex("#f0f0f3")
-		theme.SurfacePressed = ui.Hex("#e6e6eb")
-		theme.Text = ui.Hex("#202025")
-		theme.TextMuted = ui.Hex("#565660")
-		theme.Success = ui.Hex("#15803d")
-	}
-	theme.Border = theme.Text.Alpha(0.08)
-	c.SetTheme(theme)
-}
-
 func metadataColor(c *ui.Context) ui.Color {
 	if c.Theme().Dark {
 		return ui.Hex("#92929c")
@@ -56,7 +33,7 @@ func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 }
 
 func (s *application) view(c *ui.Context) {
-	applyTheme(c)
+	s.applyTheme(c)
 	s.prepareBatchThumbnails()
 	theme := c.Theme()
 	_, pending, done, _, _, _, canRun := s.batchStats()
@@ -104,6 +81,7 @@ func (s *application) view(c *ui.Context) {
 			ui.Button(c.Key("toggle-floating"), floatingLabel).Height(32).
 				Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 				OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
+			s.themeControl(c)
 			ui.Button(c.Key("open-settings"), "设置").Height(32).
 				KeyShortcuts(ui.Cmd, ui.KeyComma).
 				Tooltip("打开设置（" + shortcutLabel(",") + "）").
@@ -389,6 +367,11 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 }
 
 func (s *application) presetControl(c *ui.Context) {
+	width, _ := c.Size()
+	pickerWidth := float32(176)
+	if width < 960 {
+		pickerWidth = 136
+	}
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "预设").FontSize(13).TextColor(metadataColor(c))
 		ui.PopoverMenuButton(c.Key("preset-picker"), s.scheme, func(m *ui.Menu) {
@@ -409,7 +392,7 @@ func (s *application) presetControl(c *ui.Context) {
 			}
 		}, ui.PopoverMenuButtonOptions{
 			At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-		}).Label("选择预设").Tooltip(s.scheme).Width(176).Height(32).Disabled(s.modalOpen())
+		}).Label("选择预设").Tooltip(s.scheme).Width(pickerWidth).Height(32).Disabled(s.modalOpen())
 	})
 }
 

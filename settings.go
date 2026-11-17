@@ -83,16 +83,18 @@ func (s *application) restoreSettings() {
 		return
 	}
 	s.settingsFile = path
-	presets, selected, batchDir, err := loadAppSettings(path)
+	cfg, err := loadFullSettings(path)
 	if err != nil {
+		s.syncTheme(themeSystem)
 		s.settingsError = "读取压缩预设失败，暂用默认预设：" + err.Error()
 		s.setMessage(s.settingsError, true)
 		return
 	}
 	s.settingsError = ""
-	s.presets = presets
-	s.batchOutputDir = usableBatchOutputDir(batchDir)
-	s.applyScheme(selected)
+	s.presets = cfg.presets
+	s.batchOutputDir = usableBatchOutputDir(cfg.batchOutputDir)
+	s.syncTheme(cfg.theme)
+	s.applyScheme(cfg.selected)
 }
 
 func (s *application) setSettingsOpen(open bool) {
@@ -151,7 +153,7 @@ func (s *application) setScheme(name string) {
 	for _, preset := range s.presets {
 		if preset.name == name {
 			if s.settingsFile != "" && s.settingsError == "" {
-				if err := saveAppSettings(s.settingsFile, s.presets, name, usableBatchOutputDir(s.batchOutputDir)); err != nil {
+				if err := s.saveCurrentSettings(s.presets, name, s.batchOutputDir, s.effectiveThemeMode()); err != nil {
 					s.setMessage("保存预设选择失败："+err.Error(), true)
 					return
 				}
@@ -271,7 +273,7 @@ func (s *application) savePresetEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := saveAppSettings(s.settingsFile, presets, selected, usableBatchOutputDir(s.batchOutputDir)); err != nil {
+	if err := s.saveCurrentSettings(presets, selected, s.batchOutputDir, s.effectiveThemeMode()); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
@@ -282,6 +284,15 @@ func (s *application) savePresetEdits() {
 	s.settingsError = ""
 	s.applyScheme(selected)
 	s.setSettingsOpen(false)
+}
+
+func (s *application) saveCurrentSettings(presets []compressionPreset, selected, batchOutputDir string, theme themeMode) error {
+	return saveFullSettings(s.settingsFile, appSettings{
+		presets:        presets,
+		selected:       selected,
+		batchOutputDir: usableBatchOutputDir(batchOutputDir),
+		theme:          theme,
+	})
 }
 
 // Capture all settings on the UI thread before launching compression.
@@ -309,5 +320,5 @@ func (s *application) rememberBatchOutputDir(dir string) {
 	if s.settingsFile == "" || s.settingsError != "" {
 		return
 	}
-	_ = saveAppSettings(s.settingsFile, s.presets, s.scheme, s.batchOutputDir)
+	_ = s.saveCurrentSettings(s.presets, s.scheme, s.batchOutputDir, s.effectiveThemeMode())
 }
