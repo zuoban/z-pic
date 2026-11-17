@@ -150,9 +150,13 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
 		width, height = img.Bounds().Dx(), img.Bounds().Dy()
-		var output bytes.Buffer
+		output := jpegOutput{limit: len(data)}
 		err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
-		encoded = output.Bytes()
+		if output.discarded {
+			encoded = data
+		} else {
+			encoded = output.buf.Bytes()
+		}
 	} else if format == "webp" {
 		if config.Width > 16383 || config.Height > 16383 {
 			if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {

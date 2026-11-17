@@ -226,6 +226,38 @@ func BenchmarkJPEGCompression12MP(bench *testing.B) {
 	}
 }
 
+func BenchmarkJPEGNoSavings12MP(bench *testing.B) {
+	source := benchmarkSourceNRGBA(4000, 3000)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 30}); err != nil {
+		bench.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name        string
+		orientation uint16
+	}{
+		{"Normal", 1},
+		{"Rotated", 6},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			data := withEXIF(encoded.Bytes(), exifTIFF(binary.LittleEndian, scenario.orientation))
+			ctx := context.Background()
+			options := Options{Quality: 100}
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				result, err := Bytes(ctx, data, "photo.jpg", options)
+				if err != nil {
+					sub.Fatal(err)
+				}
+				if !result.Unchanged || !sameBytesBacking(result.Data, data) {
+					sub.Fatal("fixture did not retain the original bytes")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkThumbnailRaster(bench *testing.B) {
 	source := benchmarkSourceNRGBA(1600, 1200)
 	fallbackSource := plainColorImage{bounds: source.Bounds(), pixels: source}
