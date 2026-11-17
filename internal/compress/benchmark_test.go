@@ -7,9 +7,32 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
+
+func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
+	source := benchmarkSourceNRGBA(4000, 3000)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, source, &jpeg.Options{Quality: 90}); err != nil {
+		bench.Fatal(err)
+	}
+	path := filepath.Join(bench.TempDir(), "photo.jpg")
+	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
+		bench.Fatal(err)
+	}
+	ctx := context.Background()
+	bench.SetBytes(int64(encoded.Len()))
+	bench.ReportAllocs()
+	bench.ResetTimer()
+	for iter := 0; iter < bench.N; iter++ {
+		if _, err := Thumbnail(ctx, path, 144); err != nil {
+			bench.Fatal(err)
+		}
+	}
+}
 
 func benchmarkSourceNRGBA(width, height int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))

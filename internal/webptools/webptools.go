@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"zpic/internal/toolcache"
 )
 
 const (
@@ -96,131 +97,28 @@ func cachedToolPath(asset []byte) (string, error) {
 	}
 	entryDir := filepath.Join(cacheRoot, "z-pic", "tools", fmt.Sprintf("cwebp-%x", toolCache.sum[:16]))
 	binaryPath := filepath.Join(entryDir, executableFilename())
-	if toolCache.path == binaryPath && toolCache.info != nil && matchesVerifiedTool(entryDir, binaryPath, int64(len(asset)), toolCache.info) {
+	if toolCache.path == binaryPath && toolCache.info != nil && toolcache.MatchesVerified(entryDir, binaryPath, int64(len(asset)), toolCache.info) {
 		return binaryPath, nil
 	}
-	if err := ensurePrivateDir(filepath.Join(cacheRoot, "z-pic")); err != nil {
+	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic")); err != nil {
 		return "", err
 	}
-	if err := ensurePrivateDir(filepath.Join(cacheRoot, "z-pic", "tools")); err != nil {
+	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic", "tools")); err != nil {
 		return "", err
 	}
-	if err := ensurePrivateDir(entryDir); err != nil {
+	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
 		return "", err
 	}
-	if info, err := verifyDiskTool(binaryPath, int64(len(asset)), toolCache.sum); err == nil {
+	if info, err := toolcache.Verify(binaryPath, int64(len(asset)), toolCache.sum); err == nil {
 		toolCache.path, toolCache.info = binaryPath, info
 		return binaryPath, nil
 	}
-	info, err := stageCachedTool(entryDir, binaryPath, asset)
+	info, err := toolcache.Stage(entryDir, binaryPath, asset)
 	if err != nil {
 		return "", err
 	}
 	toolCache.path, toolCache.info = binaryPath, info
 	return binaryPath, nil
-}
-
-func matchesVerifiedTool(entryDir, binaryPath string, expectedSize int64, verified os.FileInfo) bool {
-	dirInfo, err := os.Lstat(entryDir)
-	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0700 {
-		return false
-	}
-	fileInfo, err := os.Lstat(binaryPath)
-	if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() != expectedSize {
-		return false
-	}
-	if runtime.GOOS != "windows" && fileInfo.Mode().Perm() != 0700 {
-		return false
-	}
-	return os.SameFile(verified, fileInfo) && fileInfo.ModTime().Equal(verified.ModTime())
-}
-
-func ensurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("缓存路径不是普通目录")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
-		if err := os.Chmod(dir, 0700); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func verifyDiskTool(binaryPath string, expectedSize int64, expectedSum [sha256.Size]byte) (os.FileInfo, error) {
-	fileInfo, err := os.Lstat(binaryPath)
-	if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() != expectedSize {
-		return nil, errors.New("缓存工具不存在或大小不匹配")
-	}
-	if runtime.GOOS != "windows" && fileInfo.Mode().Perm() != 0700 {
-		return nil, errors.New("缓存工具权限无效")
-	}
-	file, err := os.Open(binaryPath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	openedInfo, err := file.Stat()
-	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(fileInfo, openedInfo) {
-		return nil, errors.New("缓存工具身份不匹配")
-	}
-	hash := sha256.New()
-	copied, err := io.Copy(hash, io.LimitReader(file, expectedSize+1))
-	if err != nil || copied != expectedSize {
-		return nil, errors.New("读取缓存工具失败")
-	}
-	var actualSum [sha256.Size]byte
-	copy(actualSum[:], hash.Sum(nil))
-	if actualSum != expectedSum {
-		return nil, errors.New("缓存工具校验和不匹配")
-	}
-	return openedInfo, nil
-}
-
-func stageCachedTool(entryDir, binaryPath string, asset []byte) (os.FileInfo, error) {
-	tempFile, err := os.CreateTemp(entryDir, ".stage-*")
-	if err != nil {
-		return nil, err
-	}
-	tempName := tempFile.Name()
-	defer func() {
-		_ = tempFile.Close()
-		_ = os.Remove(tempName)
-	}()
-	written, err := tempFile.Write(asset)
-	if err != nil {
-		return nil, err
-	}
-	if written != len(asset) {
-		return nil, io.ErrShortWrite
-	}
-	if err := tempFile.Chmod(0700); err != nil {
-		return nil, err
-	}
-	if err := tempFile.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tempName, binaryPath); err != nil {
-		return nil, err
-	}
-	info, err := os.Lstat(binaryPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("缓存工具替换失败")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
-		return nil, errors.New("缓存工具权限不匹配")
-	}
-	return info, nil
 }
 
 func extractTool() (string, func(), error) {

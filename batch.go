@@ -9,10 +9,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -1242,234 +1240,6 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 	return tasks, usedPaths
 }
 
-func batchWorkerCount(taskCount int) int {
-	if taskCount <= 1 {
-		return 1
-	}
-	available := runtime.GOMAXPROCS(0)
-	if available <= 1 {
-		return 1
-	}
-	workers := max(2, min(6, available/2))
-	return min(taskCount, workers)
-}
-
-type batchCompressionOutcome struct {
-	result  *compress.Result
-	err     error
-	started bool
-}
-
-type batchInFlightTask struct {
-	task    batchTask
-	outcome chan batchCompressionOutcome
-}
-
-func (s *application) runBatchTasks(
-	ctx context.Context,
-	tasks []batchTask,
-	options compress.Options,
-	outputMode int,
-	outputDir string,
-	usedPaths map[string]bool,
-	deliver func(func()),
-) {
-	if outputMode == batchOutputFolder && outputDir != "" {
-		info, err := os.Stat(outputDir)
-		if err != nil || !info.IsDir() {
-			errText := "输出文件夹不存在或不可访问"
-			if err != nil {
-				errText = "无法读取输出文件夹：" + err.Error()
-			}
-			deliver(func() {
-				for _, task := range tasks {
-					s.applyBatchItemUpdate(batchItemUpdate{
-						index: task.index, status: batchFailed, errMsg: errText, advanceDone: true,
-					})
-				}
-			})
-			return
-		}
-	}
-	if usedPaths == nil {
-		usedPaths = make(map[string]bool)
-	}
-	total := len(tasks)
-	if total == 0 || ctx.Err() != nil {
-		return
-	}
-	workCtx, cancelWork := context.WithCancel(ctx)
-	defer cancelWork()
-
-	var deliverMu sync.Mutex
-	emit := func(fn func()) {
-		deliverMu.Lock()
-		defer deliverMu.Unlock()
-		deliver(fn)
-	}
-
-	workers := batchWorkerCount(total)
-	window := make(chan struct{}, workers)
-	jobs := make(chan batchInFlightTask, workers)
-	ordered := make(chan batchInFlightTask, workers)
-
-	var workerGroup sync.WaitGroup
-	for range workers {
-		workerGroup.Add(1)
-		go func() {
-			defer workerGroup.Done()
-			for inFlight := range jobs {
-				if workCtx.Err() != nil {
-					inFlight.outcome <- batchCompressionOutcome{}
-					continue
-				}
-				name := filepath.Base(inFlight.task.path)
-				emit(func() {
-					if workCtx.Err() != nil {
-						return
-					}
-					if s.batch != nil && inFlight.task.index < len(s.batch.items) {
-						s.batch.items[inFlight.task.index].status = batchProcessing
-						s.batch.currentName = name
-						if !s.canceling {
-							s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", min(total, s.batch.done+1), total, name)
-						}
-					}
-				})
-				res, err := compress.File(workCtx, inFlight.task.path, options)
-				inFlight.outcome <- batchCompressionOutcome{result: res, err: err, started: true}
-			}
-		}()
-	}
-
-	workerGroup.Add(1)
-	go func() {
-		defer workerGroup.Done()
-		defer close(jobs)
-		defer close(ordered)
-		for _, task := range tasks {
-			select {
-			case <-workCtx.Done():
-				return
-			case window <- struct{}{}:
-			}
-			if workCtx.Err() != nil {
-				<-window
-				return
-			}
-			inFlight := batchInFlightTask{
-				task:    task,
-				outcome: make(chan batchCompressionOutcome, 1),
-			}
-			ordered <- inFlight
-			jobs <- inFlight
-		}
-	}()
-
-	for inFlight := range ordered {
-		outcome := <-inFlight.outcome
-		<-window
-		task := inFlight.task
-		if ctx.Err() != nil || workCtx.Err() != nil {
-			cancelWork()
-			if outcome.started {
-				emit(func() {
-					if s.batch != nil && task.index < len(s.batch.items) && s.batch.items[task.index].status == batchProcessing {
-						s.batch.items[task.index].status = batchPending
-					}
-				})
-			}
-			continue
-		}
-		res, err := outcome.result, outcome.err
-		if err != nil {
-			emit(func() {
-				s.applyBatchItemUpdate(batchItemUpdate{
-					index: task.index, status: batchFailed, errMsg: err.Error(), advanceDone: true,
-				})
-			})
-			continue
-		}
-		if outputMode == batchOutputFolder {
-			output := task.output
-			output.UseSubfolder = output.supportsSubfolder() && output.UseSubfolder
-			if outputDir != "" {
-				output.Mode = presetSaveFixed
-			}
-			dest, pathErr := output.copyPath(task.path, outputDir, task.relPath, usedPaths)
-			if pathErr == nil {
-				pathErr = os.MkdirAll(filepath.Dir(dest), 0o755)
-			}
-			if pathErr == nil {
-				pathErr = res.Save(dest)
-			}
-			if pathErr != nil {
-				emit(func() {
-					s.applyBatchItemUpdate(batchItemUpdate{
-						index: task.index, status: batchFailed, errMsg: pathErr.Error(), advanceDone: true,
-					})
-				})
-				continue
-			}
-			emit(func() {
-				s.applyBatchItemUpdate(batchItemUpdate{
-					index:        task.index,
-					status:       batchDone,
-					format:       res.Format,
-					width:        res.Width,
-					height:       res.Height,
-					originalSize: res.OriginalSize,
-					outputSize:   res.OutputSize,
-					unchanged:    res.Unchanged,
-					savedPath:    dest,
-					advanceDone:  true,
-				})
-			})
-			continue
-		}
-		if res.Unchanged || res.OutputSize >= res.OriginalSize {
-			emit(func() {
-				s.applyBatchItemUpdate(batchItemUpdate{
-					index:        task.index,
-					status:       batchDone,
-					format:       res.Format,
-					width:        res.Width,
-					height:       res.Height,
-					originalSize: res.OriginalSize,
-					outputSize:   res.OriginalSize,
-					unchanged:    true,
-					overwritten:  false,
-					advanceDone:  true,
-				})
-			})
-			continue
-		}
-		if owErr := res.Overwrite(); owErr != nil {
-			emit(func() {
-				s.applyBatchItemUpdate(batchItemUpdate{
-					index: task.index, status: batchFailed, errMsg: owErr.Error(), advanceDone: true,
-				})
-			})
-			continue
-		}
-		emit(func() {
-			s.applyBatchItemUpdate(batchItemUpdate{
-				index:        task.index,
-				status:       batchDone,
-				format:       res.Format,
-				width:        res.Width,
-				height:       res.Height,
-				originalSize: res.OriginalSize,
-				outputSize:   res.OutputSize,
-				unchanged:    false,
-				overwritten:  true,
-				advanceDone:  true,
-			})
-		})
-	}
-	workerGroup.Wait()
-}
-
 func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 	if s.batch == nil || update.index < 0 || update.index >= len(s.batch.items) {
 		return
@@ -1633,19 +1403,11 @@ func (s *application) openBatchPreview(index int) {
 				outputPreview = selected.preview
 				result.Data = selected.data
 			} else if item.savedPath != "" {
-				if item.unchanged && selected.size == item.originalSize {
-					if savedInfo, statErr := os.Stat(item.savedPath); statErr == nil && savedInfo.Mode().IsRegular() && savedInfo.Size() == selected.size {
-						outputPreview = selected.preview
-						result.Data = selected.data
-					}
-				}
-				if outputPreview == nil {
-					var outSelected *selectedImage
-					outSelected, err = readSelection(ctx, item.savedPath)
-					if err == nil {
-						outputPreview = outSelected.preview
-						result.Data = outSelected.data
-					}
+				var saved *selectedImage
+				saved, err = readSelectionWithPreview(ctx, item.savedPath, selected)
+				if err == nil {
+					outputPreview = saved.preview
+					result.Data = saved.data
 				}
 			}
 		}

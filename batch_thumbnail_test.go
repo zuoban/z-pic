@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,6 +11,98 @@ import (
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestBatchThumbnailRechecksFileVersion(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "photo.png")
+	writeTestPNG(t, path, 240, 120, false)
+	app := newApplication()
+	app.batch = newBatchState(nil)
+	app.prepareBatchThumbnails()
+	entry := app.batchThumbnail(batchItem{path: path})
+	updates := make(chan func(), 1)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	initialBitmap := entry.bitmap
+	initialInfo := entry.info
+	if initialBitmap == nil || initialInfo == nil {
+		t.Fatal("initial thumbnail must retain a file version")
+	}
+
+	entry.checked = time.Time{}
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if entry.bitmap != initialBitmap {
+		t.Fatal("an unchanged file must reuse its decoded thumbnail")
+	}
+
+	replacement := filepath.Join(root, "replacement.png")
+	writeTestPNG(t, replacement, 120, 240, false)
+	if err := os.Chtimes(replacement, initialInfo.ModTime(), initialInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	entry.checked = time.Time{}
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if entry.bitmap == initialBitmap || entry.failed {
+		t.Fatal("replaced files must refresh the bitmap even with the old modification time")
+	}
+	width, height := entry.bitmap.Size()
+	if width >= height {
+		t.Fatalf("expected replacement portrait, got %dx%d", width, height)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	entry.checked = time.Time{}
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if !entry.failed || entry.bitmap != nil {
+		t.Fatal("deleted files must discard stale thumbnails")
+	}
+	writeTestPNG(t, path, 240, 120, false)
+	entry.checked = time.Time{}
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if entry.failed || entry.bitmap == nil {
+		t.Fatal("restored files must recover from cached failures")
+	}
+}
+
+func TestBatchThumbnailCancelsDemandOutsideBothSurfaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photo.png")
+	writeTestPNG(t, path, 240, 120, false)
+	app := newApplication()
+	app.batch = newBatchState(nil)
+	app.prepareBatchThumbnails()
+	entry := app.batchThumbnail(batchItem{path: path})
+	updates := make(chan func(), 1)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	release, err := app.imageMemory.acquire(context.Background(), imageMemoryLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	app.startNextBatchThumbnail()
+	app.prepareBatchThumbnails()
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if entry.bitmap != nil || entry.failed || !entry.checked.IsZero() || app.thumbnails.active != nil {
+		t.Fatal("invisible work must cancel without caching a failure")
+	}
+	release()
+	app.batchThumbnail(batchItem{path: path})
+	app.startNextBatchThumbnail()
+	nextThumbnailUpdate(t, updates)()
+	if entry.bitmap == nil || entry.failed {
+		t.Fatal("a canceled thumbnail must load when visible again")
+	}
+}
 
 func TestBatchThumbnailSurfacesKeepIndependentDemand(t *testing.T) {
 	s := newApplication()

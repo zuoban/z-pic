@@ -67,6 +67,7 @@ type application struct {
 	overwritten           bool
 	batch                 *batchState
 	thumbnails            batchThumbnailCache
+	imageMemory           *imageMemoryBudget
 	confirmBatchOverwrite bool
 	pendingBatchRestart   bool
 	pendingBatchRun       batchRunMode
@@ -101,6 +102,7 @@ func newApplication() *application {
 		presets:           slices.Clone(compressionPresets),
 		comparison:        comparisonView{split: 50},
 		pendingBatchIndex: -1,
+		imageMemory:       newImageMemoryBudget(imageMemoryLimit),
 	}
 }
 
@@ -224,6 +226,10 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 }
 
 func readSelection(ctx context.Context, path string) (*selectedImage, error) {
+	return readSelectionWithPreview(ctx, path, nil)
+}
+
+func readSelectionWithPreview(ctx context.Context, path string, reusable *selectedImage) (*selectedImage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -249,12 +255,20 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 	if info.Size() > maxInputBytes {
 		return nil, errors.New("图片超过 64 MiB，请选择较小的文件")
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxInputBytes+1))
+	data, err := io.ReadAll(io.LimitReader(selectionReader{ctx: ctx, reader: f}, maxInputBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("无法读取图片：%w", err)
 	}
 	if len(data) > maxInputBytes {
 		return nil, errors.New("图片超过 64 MiB，请选择较小的文件")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if reusable != nil && reusable.preview != nil && bytes.Equal(data, reusable.data) {
+		selected := *reusable
+		selected.path = path
+		return &selected, nil
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -289,6 +303,18 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 		path: path, format: format, width: width, height: height,
 		size: int64(len(data)), data: data, preview: preview,
 	}, nil
+}
+
+type selectionReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader selectionReader) Read(buffer []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(buffer)
 }
 
 func (s *application) invalidateResult() {

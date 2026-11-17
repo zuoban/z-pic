@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"image"
+	"os"
+	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -11,12 +15,15 @@ import (
 const (
 	batchThumbnailPixels = 144
 	maxBatchThumbnails   = 96
+	thumbnailRecheck     = 2 * time.Second
 )
 
 type batchThumbnail struct {
-	bitmap *ui.Bitmap
-	failed bool
-	used   uint64
+	bitmap  *ui.Bitmap
+	failed  bool
+	used    uint64
+	info    os.FileInfo
+	checked time.Time
 }
 
 type batchThumbnailCache struct {
@@ -27,6 +34,7 @@ type batchThumbnailCache struct {
 	floatingNext   bool
 	clock          uint64
 	active         *batchThumbnail
+	activePath     string
 	cancel         context.CancelFunc
 }
 
@@ -97,7 +105,14 @@ func (s *application) requestBatchThumbnail(item batchItem, wanted *[]string) *b
 
 func (s *application) startNextBatchThumbnail() {
 	cache := &s.thumbnails
-	if s.closed || s.batch == nil || cache.owner != s.batch || cache.active != nil ||
+	if cache.active != nil {
+		if !slices.Contains(cache.wanted, cache.activePath) && !slices.Contains(cache.floatingWanted, cache.activePath) &&
+			cache.cancel != nil {
+			cache.cancel()
+		}
+		return
+	}
+	if s.closed || s.batch == nil || cache.owner != s.batch ||
 		(s.window == nil && s.dispatchUpdate == nil) {
 		return
 	}
@@ -109,21 +124,34 @@ func (s *application) startNextBatchThumbnail() {
 		}
 		for _, path := range demands[surface] {
 			entry := cache.entries[path]
-			if entry == nil || entry.bitmap != nil || entry.failed {
+			if entry == nil || (!entry.checked.IsZero() && time.Since(entry.checked) < thumbnailRecheck) {
 				continue
 			}
 			owner := s.batch
+			previousInfo, previousBitmap, previousFailed := entry.info, entry.bitmap, entry.failed
 			ctx, cancel := context.WithCancel(context.Background())
 			cache.active, cache.cancel = entry, cancel
+			cache.activePath = path
 			cache.floatingNext = surface == 0
 			go func() {
-				thumbnail, err := compress.Thumbnail(ctx, path, batchThumbnailPixels)
+				info, statErr := os.Stat(path)
+				reused := sameThumbnailFile(previousInfo, info) && (previousBitmap != nil || previousFailed)
+				var thumbnail image.Image
+				err := statErr
+				if err == nil && !reused {
+					thumbnail, err = s.loadBatchThumbnail(ctx, path)
+				}
 				s.update(func() {
 					cache.active, cache.cancel = nil, nil
+					cache.activePath = ""
 					if s.batch == owner && cache.owner == owner && cache.entries[path] == entry && ctx.Err() == nil {
-						entry.failed = err != nil
-						if err == nil {
-							entry.bitmap = ui.NewBitmap(thumbnail)
+						entry.info, entry.checked = info, time.Now()
+						if !reused {
+							entry.failed = err != nil
+							entry.bitmap = nil
+							if err == nil {
+								entry.bitmap = ui.NewBitmap(thumbnail)
+							}
 						}
 					}
 					cancel()
@@ -133,6 +161,25 @@ func (s *application) startNextBatchThumbnail() {
 			return
 		}
 	}
+}
+
+func sameThumbnailFile(previous, current os.FileInfo) bool {
+	return previous != nil && current != nil && os.SameFile(previous, current) &&
+		previous.Size() == current.Size() && previous.ModTime().Equal(current.ModTime()) &&
+		previous.Mode() == current.Mode()
+}
+
+func (s *application) loadBatchThumbnail(ctx context.Context, path string) (image.Image, error) {
+	info, err := compress.Inspect(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.imageMemory.acquire(ctx, imageMemoryEstimate(info, true))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return compress.Thumbnail(ctx, path, batchThumbnailPixels)
 }
 
 func (s *application) invalidateBatchThumbnail(path string) {

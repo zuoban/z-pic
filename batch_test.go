@@ -413,8 +413,8 @@ func TestBatchMidRunCancellationResumesRemaining(t *testing.T) {
 
 	// Resuming processes only the remaining pending task.
 	remTasks, remUsed := s.collectBatchTasks()
-	if len(remTasks) != 1 || remTasks[0].index != 1 {
-		t.Fatalf("resume must only queue pending task 1, got %+v", remTasks)
+	if len(remTasks) != 1 || s.batch.items[remTasks[0].index].status != batchPending {
+		t.Fatalf("resume must only queue the remaining pending task, got %+v", remTasks)
 	}
 	s.runBatchTasks(context.Background(), remTasks, s.compressionOptions(), batchOutputFolder, outDir, remUsed, func(fn func()) { fn() })
 	s.completeBatchRun(context.Background())
