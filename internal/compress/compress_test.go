@@ -68,6 +68,10 @@ func inputMethods(data []byte) []struct {
 		{"Bytes", func(ctx context.Context, path string, options Options) (*Result, error) {
 			return Bytes(ctx, data, path, options)
 		}},
+		{"BytesWithPreview", func(ctx context.Context, path string, options Options) (*Result, error) {
+			result, _, err := BytesWithPreview(ctx, data, path, options)
+			return result, err
+		}},
 	}
 }
 

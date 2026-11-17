@@ -318,11 +318,13 @@ func (s *application) startCompression() {
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 	go func() {
-		result, err := compress.Bytes(ctx, data, path, options)
+		result, decoded, err := compress.BytesWithPreview(ctx, data, path, options)
 		var preview *ui.Bitmap
 		if err == nil {
 			if result.Unchanged && sourcePreview != nil {
 				preview = sourcePreview
+			} else if decoded != nil {
+				preview = ui.NewBitmap(decoded)
 			} else {
 				preview, err = ui.DecodeBitmap(result.Data)
 			}

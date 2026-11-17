@@ -472,12 +472,18 @@ func TestValidatePNGOutput(t *testing.T) {
 			if err := validatePNGOutput(context.Background(), output, input); err == nil {
 				t.Fatal("invalid native output was accepted")
 			}
+			if preview, err := decodePNGOutput(context.Background(), output, input); err == nil || preview != nil {
+				t.Fatal("invalid native output returned a preview")
+			}
 		})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := validatePNGOutput(ctx, data, input); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled output validation, got %v", err)
+	}
+	if preview, err := decodePNGOutput(ctx, data, input); preview != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled PNG validation returned preview=%T err=%v", preview, err)
 	}
 }
 

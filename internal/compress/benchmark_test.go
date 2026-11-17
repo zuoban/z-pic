@@ -53,6 +53,36 @@ func BenchmarkThumbnailFileJPEG12MP(bench *testing.B) {
 	}
 }
 
+func BenchmarkValidatedPNGPreview12MP(bench *testing.B) {
+	source := benchmarkSourceNRGBA(4000, 3000)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, source); err != nil {
+		bench.Fatal(err)
+	}
+	data := encoded.Bytes()
+	config := image.Config{Width: 4000, Height: 3000}
+	ctx := context.Background()
+	bench.Run("DecodeTwice", func(sub *testing.B) {
+		sub.ReportAllocs()
+		for iter := 0; iter < sub.N; iter++ {
+			if err := validatePNGOutput(ctx, data, config); err != nil {
+				sub.Fatal(err)
+			}
+			if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+				sub.Fatal(err)
+			}
+		}
+	})
+	bench.Run("ReuseDecoded", func(sub *testing.B) {
+		sub.ReportAllocs()
+		for iter := 0; iter < sub.N; iter++ {
+			if _, err := decodePNGOutput(ctx, data, config); err != nil {
+				sub.Fatal(err)
+			}
+		}
+	})
+}
+
 func benchmarkSourceNRGBA(width, height int) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	for row := 0; row < height; row++ {

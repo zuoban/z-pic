@@ -70,7 +70,7 @@ func File(ctx context.Context, path string, options Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return compressData(ctx, data, path, sourcePath, options)
+	return compressData(ctx, data, path, sourcePath, options, nil)
 }
 
 // Bytes compresses an immutable snapshot without reading sourcePath. The path
@@ -82,7 +82,7 @@ func Bytes(ctx context.Context, data []byte, sourcePath string, options Options)
 	if err != nil {
 		return nil, err
 	}
-	return compressData(ctx, data, sourcePath, absolutePath, options)
+	return compressData(ctx, data, sourcePath, absolutePath, options, nil)
 }
 
 func validateRequest(ctx context.Context, path string, options Options) (string, error) {
@@ -108,7 +108,7 @@ func validateRequest(ctx context.Context, path string, options Options) (string,
 	return sourcePath, nil
 }
 
-func compressData(ctx context.Context, data []byte, path, sourcePath string, options Options) (*Result, error) {
+func compressData(ctx context.Context, data []byte, path, sourcePath string, options Options, preview *image.Image) (*Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", err)
 	}
@@ -163,14 +163,18 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			encoded, err = webptools.Encode(ctx, data, options.Quality)
 			if err == nil {
 				if len(encoded) < len(data) {
-					err = validateWebPOutput(ctx, encoded, config)
+					var decoded image.Image
+					decoded, err = decodeWebPOutput(ctx, encoded, config)
+					if err == nil && preview != nil {
+						*preview = decoded
+					}
 				} else if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
 					return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 				}
 			}
 		}
 	} else {
-		encoded, err = compressPNG(ctx, data, config, options.PNG)
+		encoded, err = compressPNG(ctx, data, config, options.PNG, preview)
 	}
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
@@ -194,7 +198,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	return result, nil
 }
 
-func compressPNG(ctx context.Context, data []byte, config image.Config, options PNGOptions) ([]byte, error) {
+func compressPNG(ctx context.Context, data []byte, config image.Config, options PNGOptions, preview *image.Image) ([]byte, error) {
 	candidate := data
 	quantized, err := pngtools.QuantizeWithOptions(ctx, data, options)
 	if err != nil {
@@ -221,11 +225,15 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 		}
 		return candidate, nil
 	}
-	if err := validatePNGOutput(ctx, candidate, config); err != nil {
+	decoded, err := decodePNGOutput(ctx, candidate, config)
+	if err != nil {
 		if sameBytesBacking(candidate, quantized) {
 			return nil, fmt.Errorf("pngquant 输出无效：%w", err)
 		}
 		return nil, fmt.Errorf("Oxipng 输出无效：%w", err)
+	}
+	if preview != nil {
+		*preview = decoded
 	}
 	return candidate, nil
 }
@@ -235,23 +243,32 @@ func sameBytesBacking(a, b []byte) bool {
 }
 
 func validatePNGOutput(ctx context.Context, data []byte, input image.Config) error {
+	_, err := decodePNGOutput(ctx, data, input)
+	return err
+}
+
+func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if len(data) == 0 || len(data) > maxInputSize {
-		return fmt.Errorf("输出为空或超过 64 MiB 限制")
+		return nil, fmt.Errorf("输出为空或超过 64 MiB 限制")
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("无法读取 PNG 头部：%w", err)
+		return nil, fmt.Errorf("无法读取 PNG 头部：%w", err)
 	}
 	if format != "png" || config.Width != input.Width || config.Height != input.Height || animatedPNG(data) {
-		return fmt.Errorf("输出格式或图片尺寸发生了变化")
+		return nil, fmt.Errorf("输出格式或图片尺寸发生了变化")
 	}
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("PNG 数据损坏：%w", err)
+	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	if err != nil {
+		return nil, fmt.Errorf("PNG 数据损坏：%w", err)
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 // readInput enforces the limit on bytes actually read, even if the file grows

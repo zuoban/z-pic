@@ -81,18 +81,27 @@ func validateWebPContainer(ctx context.Context, reader io.ReadSeeker, size int64
 }
 
 func validateWebPOutput(ctx context.Context, data []byte, input image.Config) error {
+	_, err := decodeWebPOutput(ctx, data, input)
+	return err
+}
+
+func decodeWebPOutput(ctx context.Context, data []byte, input image.Config) (image.Image, error) {
 	if err := ValidateWebP(ctx, data); err != nil {
-		return err
+		return nil, err
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("无法读取 WebP 头部：%w", err)
+		return nil, fmt.Errorf("无法读取 WebP 头部：%w", err)
 	}
 	if format != "webp" || config.Width != input.Width || config.Height != input.Height {
-		return fmt.Errorf("输出格式或图片尺寸发生了变化")
+		return nil, fmt.Errorf("输出格式或图片尺寸发生了变化")
 	}
-	if _, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); err != nil {
-		return fmt.Errorf("WebP 数据损坏：%w", err)
+	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	if err != nil {
+		return nil, fmt.Errorf("WebP 数据损坏：%w", err)
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }

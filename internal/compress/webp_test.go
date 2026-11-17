@@ -265,3 +265,33 @@ func TestWebPOutputValidation(t *testing.T) {
 		t.Fatal("animated WebP output must be rejected")
 	}
 }
+
+func TestWebPOutputPreviewRejectsDamageAndCancellation(t *testing.T) {
+	data := webpFixture(t, "opaque")
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := appendWebPChunk(data[:12], "VP8 ", data[20:40])
+	if _, _, err := image.DecodeConfig(bytes.NewReader(corrupt)); err != nil {
+		t.Fatalf("corruption fixture must retain a readable image header: %v", err)
+	}
+	for name, output := range map[string][]byte{
+		"empty":          nil,
+		"truncated":      data[:len(data)/2],
+		"animated":       extendedWebP(data, 2, config.Width, config.Height),
+		"dimensions":     webpFixture(t, "tiny"),
+		"corrupt pixels": corrupt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if preview, err := decodeWebPOutput(context.Background(), output, config); err == nil || preview != nil {
+				t.Fatal("invalid WebP output returned a preview")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if preview, err := decodeWebPOutput(ctx, data, config); preview != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled WebP validation returned preview=%T err=%v", preview, err)
+	}
+}

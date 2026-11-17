@@ -133,10 +133,14 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 压缩、缩略图和单图预览共用 `internal/imageinput` 读取文件内容，按已打开文件的大小预分配缓冲区，减少逐步扩容带来的分配和复制。读取期间文件增长或截短时以实际读取内容为准，增长后仍按实际字节数执行 64 MiB 上限，并检查取消。
 
+单图压缩使用 `compress.BytesWithPreview`，将 PNG/WebP 输出完整校验时解码出的像素直接用于预览，避免再次解码。JPEG 预览仍从实际压缩结果解码，保持导出方向与预览一致。未减小的结果复用原图位图；批量压缩使用 `File`/`Bytes`，结果对象只保存编码数据，不保留预览像素。PNG 输出解码也会在读取数据时检查取消。
+
 性能基线可运行：
 
 ```sh
-go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode' -benchmem
+go test . ./internal/compress -run '^$' -bench 'BenchmarkBatchFrameQueries1000Items|BenchmarkReadInputJPEG12MP|BenchmarkThumbnailFileJPEG12MP|BenchmarkThumbnailRaster|BenchmarkOrientedJPEGEncode|BenchmarkValidatedPNGPreview12MP' -benchmem
 ```
 
 `BenchmarkReadInputJPEG12MP` 单独测量文件读取，`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。
+
+`BenchmarkValidatedPNGPreview12MP` 对比 PNG 输出校验后再次解码与直接复用校验像素两种路径。Apple M1、Go 1.27.3 下，4000×3000 合成图片使用 `-benchtime=10x -count=3` 测得约 231–233 ms/op → 115–118 ms/op，分配量约 96.2 MB/op → 48.1 MB/op。该数据只覆盖输出校验与预览解码阶段，不包含原生编码、界面位图转换或绘制，也不代表完整压缩流程的提速比例。
