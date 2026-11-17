@@ -10,8 +10,44 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/transfer"
 )
+
+func BenchmarkParse2000Images(bench *testing.B) {
+	var files, uris, urls, markup strings.Builder
+	for index := 0; index < maxItems; index++ {
+		fmt.Fprintf(&files, "/photos/album/photo_%04d.jpg\r\n", index)
+		fmt.Fprintf(&uris, "file:///photos/album/photo_%04d.jpg\r\n", index)
+		fmt.Fprintf(&urls, "https://example.test/photos/album/photo_%04d.jpg\r\n", index)
+		fmt.Fprintf(&markup, `<img src="https://example.test/photos/album/photo_%04d.jpg">`, index)
+	}
+	for _, scenario := range []struct {
+		name    string
+		format  transfer.Format
+		payload string
+	}{
+		{"FilePaths", transfer.FileList, files.String()},
+		{"FileURIs", transfer.URIList, uris.String()},
+		{"URLList", transfer.URIList, urls.String()},
+		{"TextURLs", transfer.Text, urls.String()},
+		{"HTMLImages", transfer.HTML, markup.String()},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			data := transfer.New(transfer.NewItem(transfer.Bytes(scenario.format, []byte(scenario.payload))))
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				items, err := Parse(data)
+				if err != nil || len(items) != maxItems {
+					sub.Fatalf("Parse = %d images, %v; want %d", len(items), err, maxItems)
+				}
+			}
+		})
+	}
+}
 
 func BenchmarkResolve1000Images(bench *testing.B) {
 	var encoded bytes.Buffer

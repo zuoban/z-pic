@@ -2,10 +2,12 @@
 package dropimport
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -113,69 +115,71 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 		*budget -= len(value)
 		return value
 	}
-	files := read(transfer.FileList, maxText)
-	if items := localItems(string(files)); len(items) > 0 {
+	files := string(read(transfer.FileList, maxText))
+	if items := localItems(files); len(items) > 0 {
 		return items, nil
 	}
-	uris := read(transfer.URIList, maxText)
-	if items := localItems(string(uris)); len(items) > 0 {
+	uris := string(read(transfer.URIList, maxText))
+	if items := localItems(uris); len(items) > 0 {
 		return items, nil
 	}
 	markup := read(transfer.HTML, maxText)
-	var base *url.URL
-	for _, line := range lines(string(uris)) {
-		if parsed, err := httpURL(line); err == nil {
-			base = parsed
-			break
-		}
-	}
-	var images []Item
 	hadImage := false
-	tokenizer := html.NewTokenizer(strings.NewReader(string(markup)))
-	for {
-		tokenType := tokenizer.Next()
-		if tokenType == html.ErrorToken {
-			if err := tokenizer.Err(); err != io.EOF {
-				readErrors = append(readErrors, err)
+	if len(markup) > 0 {
+		var base *url.URL
+		for line := range lines(uris) {
+			if parsed, err := httpURL(line); err == nil {
+				base = parsed
+				break
 			}
-			break
 		}
-		if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
-			continue
-		}
-		token := tokenizer.Token()
-		if token.Data != "img" {
-			continue
-		}
-		hadImage = true
-		for _, attr := range token.Attr {
-			if attr.Key != "src" {
+		var images []Item
+		tokenizer := html.NewTokenizer(bytes.NewReader(markup))
+		for {
+			tokenType := tokenizer.Next()
+			if tokenType == html.ErrorToken {
+				if err := tokenizer.Err(); err != io.EOF {
+					readErrors = append(readErrors, err)
+				}
+				break
+			}
+			if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
 				continue
 			}
-			raw := strings.TrimSpace(attr.Val)
-			if parsed, err := url.Parse(raw); err == nil && base != nil && raw != "" {
-				raw = base.ResolveReference(parsed).String()
+			token := tokenizer.Token()
+			if token.Data != "img" {
+				continue
 			}
-			if item, err := reference(raw); err == nil {
-				images = append(images, item)
+			hadImage = true
+			for _, attr := range token.Attr {
+				if attr.Key != "src" {
+					continue
+				}
+				raw := strings.TrimSpace(attr.Val)
+				if parsed, err := url.Parse(raw); err == nil && base != nil && raw != "" {
+					raw = base.ResolveReference(parsed).String()
+				}
+				if item, err := reference(raw); err == nil {
+					images = append(images, item)
+				}
+				break
 			}
-			break
+			if len(images) > maxItems {
+				return nil, itemLimit()
+			}
 		}
-		if len(images) > maxItems {
-			return nil, itemLimit()
+		if len(images) > 0 {
+			return images, nil
 		}
 	}
-	if len(images) > 0 {
-		return images, nil
-	}
-	text := read(transfer.Text, maxText)
+	text := string(read(transfer.Text, maxText))
 	if !hadImage {
-		if items := localItems(string(text)); len(items) > 0 {
+		if items := localItems(text); len(items) > 0 {
 			return items, nil
 		}
-		for _, representation := range []string{string(uris), string(text)} {
+		for _, representation := range []string{uris, text} {
 			var items []Item
-			for _, line := range lines(representation) {
+			for line := range lines(representation) {
 				if item, err := reference(line); err == nil {
 					items = append(items, item)
 				}
@@ -200,22 +204,28 @@ func unsupported() error {
 	return fmt.Errorf("无法导入此拖放内容：请拖入本地 JPEG/PNG/WebP、图片的 HTTP(S) 直链或图片数据；blob 图片请先保存到本地再拖入")
 }
 
-func lines(text string) []string {
-	var result []string
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			result = append(result, line)
+func lines(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for line := range strings.SplitSeq(text, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				if !yield(line) {
+					return
+				}
+			}
 		}
 	}
-	return result
 }
 
 func localItems(text string) []Item {
 	var result []Item
-	for _, line := range lines(text) {
+	for line := range lines(text) {
 		path := line
-		if parsed, err := url.Parse(line); err == nil && parsed.Scheme == "file" {
+		if scheme, _, ok := strings.Cut(line, ":"); ok && strings.EqualFold(scheme, "file") {
+			parsed, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
 			if parsed.User != nil || (parsed.Host != "" && parsed.Host != "localhost") || parsed.RawQuery != "" || parsed.Fragment != "" {
 				continue
 			}

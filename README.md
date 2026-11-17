@@ -137,6 +137,8 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 拖放或粘贴的一次导入共用 `dropimport.Resolver`，按顺序处理图片，记录本次成功保存的名称与后继编号，减少同名图片重复尝试硬链接的开销。记录仅在本次导入内使用；其他文件、目录和符号链接仍重新检查，外部占用释放后可再次使用。失败、取消与本地文件路径不预留下载名称，图片仍完整解码校验，实际落盘仍通过硬链接或独占创建拒绝覆盖。下一次导入会重新建立记录，HTTP 连接继续由调用方传入的 transport 复用和管理。
 
+拖放文本解析按需逐行遍历，省去整体 CRLF 替换与临时行切片；文本表示只转换一次，HTML 直接从字节读取，未提供 HTML 时省去分词器与基准地址查找。只有 `file:` 开头的行进入文件 URL 解析，其余行直接按本地路径检查；大小写、转义、空白与注释规则、表示优先级、provider 读取顺序和资源限制保持原有行为。
+
 压缩、缩略图和单图预览共用 `internal/imageinput` 读取文件内容，按已打开文件的大小预分配缓冲区，减少逐步扩容带来的分配和复制。读取期间文件增长或截短时以实际读取内容为准，增长后仍按实际字节数执行 64 MiB 上限，并检查取消。
 
 PNG 工具输出先与输入逐段比较，相同前缀复用原数据，首次不同后才分配候选缓冲；输出达到输入长度时释放候选缓冲，继续排空并统计后续输出。64 MiB 上限按实际接收字节数检查，工具失败、超时、取消和超限仍按原有规则处理。
@@ -161,6 +163,7 @@ go test ./internal/compress -run '^$' -bench 'BenchmarkOrientYCbCr42012MP|Benchm
 go test ./internal/pngtools -run '^$' -bench 'BenchmarkPNGOutputBuffer|BenchmarkCommandOutputFallback6MiB' -benchmem -benchtime=20x -count=3
 go test ./internal/webptools -run '^$' -bench 'BenchmarkWebPOutputBuffer|BenchmarkCommandLargerOutput24MiB' -benchmem -benchtime=10x -count=3
 go test ./internal/dropimport -run '^$' -bench '^BenchmarkResolve1000Images$' -benchmem -benchtime=1x -count=3
+go test ./internal/dropimport -run '^$' -bench '^BenchmarkParse2000Images$' -benchmem -benchtime=500x -count=3
 ```
 
 `BenchmarkReadInputJPEG12MP` 单独测量文件读取，`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。
@@ -182,6 +185,18 @@ go test ./internal/dropimport -run '^$' -bench '^BenchmarkResolve1000Images$' -b
 `BenchmarkPlanBatchOutputs1000Files` 为不同源目录中的 1000 个文件规划输出，分别使用唯一名称和相同名称，目标目录初始为空。Apple M1、Go 1.27.3 下，使用 `-benchtime=1x -count=3` 测得同名场景优化前后约 6.96–7.01 s/op → 37–40 ms/op，Go 累计分配量约 2.10 GB/op → 10.5 MB/op；唯一名称场景约 36–37 ms/op → 37–43 ms/op。该基准只覆盖路径规划与文件系统检查，源文件内容不参与处理，不包含图片扫描、解码、压缩或保存；分配量是单次操作的累计值，不是峰值内存。
 
 `BenchmarkResolve1000Images` 从本机 HTTP 测试服务器依次导入 1000 张 32×24 合成 PNG，分别使用唯一名称和相同名称，目标目录初始为空。Apple M1、Go 1.27.3 下，使用 `-benchtime=1x -count=3` 测得同名场景优化前后约 86.9–89.3 s/op → 447–450 ms/op，Go 累计分配量约 317.9 MB/op → 100.4 MB/op；唯一名称约 453–488 ms/op → 453–483 ms/op，分配量约 100.0 MB/op → 100.1 MB/op。基准覆盖 HTTP 下载、临时文件、完整图片校验、命名与保存，分配量包含进程内测试服务器的开销，不包含真实外网延迟、后续队列扫描、压缩或界面操作，也不代表峰值内存。缓存只跳过本次成功保存的名称，目标目录已有大量同名文件时仍会重新检查这些外部占用。
+
+`BenchmarkParse2000Images` 使用内存中的 `transfer.Bytes` 表示解析 2000 个输入，文件和 URL 列表使用 CRLF 分行。Apple M1、Go 1.27.3 下，使用 `-benchtime=500x -count=3` 测得优化前后如下：
+
+| 输入表示 | 耗时 ms/op，优化前 → 后 | Go 累计分配 MB/op，优化前 → 后 |
+| --- | --- | --- |
+| 本地文件路径列表 | 0.835–0.967 → 0.441–0.464 | 1.620 → 1.133 |
+| 文件 URI 列表 | 0.846–0.930 → 0.744–0.784 | 1.661 → 1.454 |
+| HTTP URL 列表 | 1.638–1.663 → 0.854–0.880 | 2.736 → 1.535 |
+| 纯文本 HTTP URL 列表 | 1.441–1.489 → 0.870–0.884 | 2.397 → 1.535 |
+| HTML 图片标签 | 2.089–2.113 → 2.048–2.072 | 2.212 → 2.089 |
+
+该基准只覆盖表示读取、文本解析和去重，不包含系统拖放或剪贴板读取、网络下载、文件扫描、图片解码或压缩；累计分配量不代表峰值内存。时间受 CPU 状态影响，HTML 场景的主要变化是减少文本副本。
 
 `BenchmarkPNGOutputBuffer` 使用 6 MiB 合成输入，分块接收不同大小的输出。Apple M1、Go 1.27.3 下，使用 `-benchtime=20x -count=3` 测得 Go 累计分配量：原样输出约 16.78 MB/op → 0.033 MB/op，24 MiB 不同内容输出约 67.11 MB/op → 16.78 MB/op；同体积但内容不同的输出均约 16.78 MB/op，4 MiB 不同内容的较小输出均约 8.39 MB/op，1 KiB 小输出均约 0.034 MB/op，没有按输入体积预分配。`BenchmarkCommandOutputFallback6MiB` 让测试子进程原样回传 6 MiB 输入，覆盖实际管道及回退处理，分配量约 16.81 MB/op → 0.070 MB/op。两项基准只测输出接收与缓冲，不运行原生 PNG 编码器，也不包含 PNG 校验或界面操作；累计分配量不代表峰值内存。
 
