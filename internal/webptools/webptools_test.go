@@ -27,6 +27,11 @@ func TestToolProcess(t *testing.T) {
 	switch mode {
 	case "success":
 		_, _ = io.Copy(os.Stdout, os.Stdin)
+	case "larger":
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 4096))
+	case "large-output":
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 24<<20))
 	case "error":
 		fmt.Fprint(os.Stdout, "partial output")
 		fmt.Fprint(os.Stderr, "diagnostic from child")
@@ -137,30 +142,40 @@ func TestBoundedWriters(t *testing.T) {
 }
 
 func TestInputGuards(t *testing.T) {
+	for name, encode := range map[string]func(context.Context, []byte, int) ([]byte, error){
+		"Encode":        Encode,
+		"EncodeSmaller": EncodeSmaller,
+	} {
+		t.Run(name, func(t *testing.T) { testInputGuards(t, encode) })
+	}
+}
+
+func testInputGuards(t *testing.T, encode func(context.Context, []byte, int) ([]byte, error)) {
+	t.Helper()
 	input, err := os.ReadFile("testdata/alpha-metadata.webp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if output, err := Encode(ctx, input, 75); output != nil || !errors.Is(err, context.Canceled) {
+	if output, err := encode(ctx, input, 75); output != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
 	for _, quality := range []int{-1, 101} {
-		if output, err := Encode(context.Background(), input, quality); output != nil || err == nil {
+		if output, err := encode(context.Background(), input, quality); output != nil || err == nil {
 			t.Fatalf("quality=%d output=%q err=%v", quality, output, err)
 		}
 	}
 	for _, data := range [][]byte{nil, []byte("PNG"), []byte("RIFFxxxxPNG ")} {
-		if output, err := Encode(context.Background(), data, 75); output != nil || err == nil {
+		if output, err := encode(context.Background(), data, 75); output != nil || err == nil {
 			t.Fatalf("output=%q err=%v", output, err)
 		}
 	}
-	if output, err := Encode(context.Background(), make([]byte, maxWebPBytes+1), 75); output != nil || err == nil || !strings.Contains(err.Error(), "64 MiB") {
+	if output, err := encode(context.Background(), make([]byte, maxWebPBytes+1), 75); output != nil || err == nil || !strings.Contains(err.Error(), "64 MiB") {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
 	if len(bundledTool()) == 0 {
-		if _, err := Encode(context.Background(), input, 75); err == nil || !strings.Contains(err.Error(), "未捆绑") {
+		if _, err := encode(context.Background(), input, 75); err == nil || !strings.Contains(err.Error(), "未捆绑") {
 			t.Fatalf("unsupported platform error=%v", err)
 		}
 	}

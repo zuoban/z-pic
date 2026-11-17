@@ -121,6 +121,58 @@ func TestExtractionVersionAndCleanup(t *testing.T) {
 	}
 }
 
+func TestNativeEncodeSmallerMatchesEncode(t *testing.T) {
+	if len(bundledTool()) == 0 {
+		t.Skip("native asset unavailable for this platform")
+	}
+	input, err := os.ReadFile("testdata/alpha-metadata.webp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	highQuality, err := Encode(context.Background(), input, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowQuality, err := Encode(context.Background(), highQuality, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		name    string
+		data    []byte
+		quality int
+		smaller bool
+	}{
+		{"Smaller", highQuality, 0, true},
+		{"Larger", lowQuality, 100, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			original := bytes.Clone(scenario.data)
+			full, err := Encode(context.Background(), scenario.data, scenario.quality)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(full) < len(scenario.data)) != scenario.smaller {
+				t.Fatalf("fixture output=%d input=%d", len(full), len(scenario.data))
+			}
+			actual, err := EncodeSmaller(context.Background(), scenario.data, scenario.quality)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := full
+			if !scenario.smaller {
+				expected = scenario.data
+				if &actual[0] != &scenario.data[0] {
+					t.Fatal("unchanged output did not reuse the input")
+				}
+			}
+			if !bytes.Equal(actual, expected) || !bytes.Equal(scenario.data, original) {
+				t.Fatal("smaller output differs from the full encoding or modified the input")
+			}
+		})
+	}
+}
+
 func webPChunk(t *testing.T, data []byte, kind string) []byte {
 	t.Helper()
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" || uint64(binary.LittleEndian.Uint32(data[4:8]))+8 != uint64(len(data)) {

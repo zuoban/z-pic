@@ -164,7 +164,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 			encoded = data
 		} else {
-			encoded, err = webptools.Encode(ctx, data, options.Quality)
+			encoded, err = webptools.EncodeSmaller(ctx, data, options.Quality)
 			if err == nil {
 				if len(encoded) < len(data) {
 					var decoded image.Image

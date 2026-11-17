@@ -40,6 +40,17 @@ var (
 )
 
 func Encode(ctx context.Context, data []byte, quality int) ([]byte, error) {
+	return encode(ctx, data, quality, false)
+}
+
+// EncodeSmaller returns the encoded output only when it is smaller than data.
+// Otherwise it returns data itself, which the caller must keep immutable.
+// Output limits, process failures and cancellation still return errors.
+func EncodeSmaller(ctx context.Context, data []byte, quality int) ([]byte, error) {
+	return encode(ctx, data, quality, true)
+}
+
+func encode(ctx context.Context, data []byte, quality int, smallerOnly bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("WebP 处理已取消：%w", err)
 	}
@@ -59,10 +70,14 @@ func Encode(ctx context.Context, data []byte, quality int) ([]byte, error) {
 		return nil, err
 	}
 	defer cleanup()
-	return runCommand(ctx, path, []string{
+	var fallback []byte
+	if smallerOnly {
+		fallback = data
+	}
+	return runCommandWithFallback(ctx, path, []string{
 		"-q", strconv.Itoa(quality), "-m", "4", "-alpha_q", "100",
 		"-metadata", "all", "-quiet", "-o", "-", "--", "-",
-	}, data, maxWebPBytes)
+	}, data, maxWebPBytes, fallback)
 }
 
 func executableFilename() string {
@@ -145,12 +160,16 @@ func extractBundledTool(asset []byte) (string, func(), error) {
 }
 
 func runCommand(ctx context.Context, path string, args []string, data []byte, limit int) ([]byte, error) {
+	return runCommandWithFallback(ctx, path, args, data, limit, nil)
+}
+
+func runCommandWithFallback(ctx context.Context, path string, args []string, data []byte, limit int, fallback []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("cwebp 已取消：%w", err)
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stdout := &limitedOutput{limit: limit, cancel: cancel}
+	stdout := &limitedOutput{limit: limit, cancel: cancel, fallback: fallback}
 	stderr := &limitedDiagnostic{limit: maxStderr}
 	cmd := exec.CommandContext(childCtx, path, args...)
 	cmd.Stdin = bytes.NewReader(data)
@@ -169,22 +188,35 @@ func runCommand(ctx context.Context, path string, args []string, data []byte, li
 		return nil, fmt.Errorf("cwebp 执行失败（请检查捆绑工具和系统执行权限）：%w；%s",
 			err, strings.TrimSpace(stderr.buf.String()))
 	}
-	if stdout.buf.Len() == 0 {
+	if stdout.size == 0 {
 		return nil, fmt.Errorf("cwebp 未生成 WebP 数据")
+	}
+	if stdout.discarded {
+		return fallback, nil
 	}
 	return stdout.buf.Bytes(), nil
 }
 
 type limitedOutput struct {
-	buf      bytes.Buffer
-	limit    int
-	overflow bool
-	cancel   context.CancelFunc
+	buf       bytes.Buffer
+	fallback  []byte
+	size      int
+	limit     int
+	discarded bool
+	overflow  bool
+	cancel    context.CancelFunc
 }
 
 func (w *limitedOutput) Write(data []byte) (int, error) {
-	size := min(len(data), w.limit-w.buf.Len())
-	_, _ = w.buf.Write(data[:size])
+	size := min(len(data), w.limit-w.size)
+	w.size += size
+	if !w.discarded && w.fallback != nil && w.size >= len(w.fallback) {
+		w.buf = bytes.Buffer{}
+		w.discarded = true
+	}
+	if !w.discarded {
+		_, _ = w.buf.Write(data[:size])
+	}
 	if size < len(data) {
 		w.overflow = true
 		w.cancel()
