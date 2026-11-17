@@ -344,16 +344,23 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 
 func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, existingDirs map[string]bool, existingCount int) (batchScanResult, error) {
 	var out batchScanResult
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
 	seen := make(map[string]bool, len(existing))
 	maps.Copy(seen, existing)
+	resolvedParents := make(map[string]batchParentPath)
 
 	uniqueDirs := make(map[string]bool, len(existingDirs))
 	maps.Copy(uniqueDirs, existingDirs)
 	isDir := make([]bool, len(inputs))
 	for i, input := range inputs {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		if info, err := os.Stat(input); err == nil && info.IsDir() {
 			isDir[i] = true
-			uniqueDirs[canonicalBatchKey(filepath.Clean(input))] = true
+			uniqueDirs[canonicalBatchKeyWithParents(filepath.Clean(input), resolvedParents)] = true
 		}
 	}
 	prefixRoot := len(uniqueDirs) > 1
@@ -366,7 +373,7 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 			out.truncated = true
 			return errBatchLimit
 		}
-		absPath := canonicalBatchKey(path)
+		absPath := canonicalBatchKeyWithParents(path, resolvedParents)
 		if seen[absPath] {
 			out.duplicates++
 			return nil
@@ -424,7 +431,7 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 			continue
 		}
 		rootClean := filepath.Clean(input)
-		canonDir := canonicalBatchKey(rootClean)
+		canonDir := canonicalBatchKeyWithParents(rootClean, resolvedParents)
 		rootBase := dirBaseName(rootClean)
 		err := filepath.WalkDir(rootClean, func(p string, d fs.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
@@ -528,15 +535,39 @@ func promoteBatchFolderPrefixes(items []batchItem) {
 }
 
 func canonicalBatchKey(path string) string {
+	return canonicalBatchKeyWithParents(path, nil)
+}
+
+type batchParentPath struct {
+	path string
+	info os.FileInfo
+}
+
+func canonicalBatchKeyWithParents(path string, resolvedParents map[string]batchParentPath) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return filepath.Clean(path)
 	}
 	// Resolve symlinks on the parent directory (e.g. /tmp -> /private/tmp on macOS)
 	// while keeping the file leaf intact so symlinked files stay identifiable.
-	dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	parent := filepath.Dir(abs)
+	if cached, found := resolvedParents[parent]; found {
+		current, currentErr := os.Stat(parent)
+		resolved, resolvedErr := os.Lstat(cached.path)
+		if currentErr == nil && resolvedErr == nil &&
+			os.SameFile(cached.info, current) && os.SameFile(current, resolved) {
+			return filepath.Join(cached.path, filepath.Base(abs))
+		}
+		delete(resolvedParents, parent)
+	}
+	dir, err := filepath.EvalSymlinks(parent)
 	if err != nil {
 		return filepath.Clean(abs)
+	}
+	if resolvedParents != nil {
+		if info, err := os.Stat(dir); err == nil {
+			resolvedParents[parent] = batchParentPath{path: dir, info: info}
+		}
 	}
 	return filepath.Join(dir, filepath.Base(abs))
 }

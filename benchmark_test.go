@@ -1,9 +1,60 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func BenchmarkScanBatchPaths1000Files(bench *testing.B) {
+	root := bench.TempDir()
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image.NewGray(image.Rect(0, 0, 32, 24)), &jpeg.Options{Quality: 80}); err != nil {
+		bench.Fatal(err)
+	}
+	paths := make([]string, 1000)
+	for album := range 10 {
+		dir := filepath.Join(root, "photos", "2026", fmt.Sprintf("album_%02d", album))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			bench.Fatal(err)
+		}
+		for photo := range 100 {
+			index := album*100 + photo
+			paths[index] = filepath.Join(dir, fmt.Sprintf("IMG_%04d.JPG", index))
+			if err := os.WriteFile(paths[index], encoded.Bytes(), 0o600); err != nil {
+				bench.Fatal(err)
+			}
+		}
+	}
+	for _, scenario := range []struct {
+		name   string
+		inputs []string
+	}{
+		{"Folder", []string{root}},
+		{"FileList", paths},
+	} {
+		bench.Run(scenario.name, func(sub *testing.B) {
+			sub.ReportAllocs()
+			ctx := context.Background()
+			sub.ResetTimer()
+			for iteration := 0; iteration < sub.N; iteration++ {
+				scan, err := scanBatchPaths(ctx, scenario.inputs, nil, 0)
+				if err != nil {
+					sub.Fatal(err)
+				}
+				if len(scan.items) != len(paths) || scan.duplicates != 0 || scan.truncated {
+					sub.Fatalf("unexpected scan result: items=%d duplicates=%d truncated=%v",
+						len(scan.items), scan.duplicates, scan.truncated)
+				}
+			}
+		})
+	}
+}
 
 func BenchmarkBatchFrameQueries1000Items(bench *testing.B) {
 	items := make([]batchItem, 1000)
