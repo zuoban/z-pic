@@ -140,28 +140,90 @@ func applyThemeMode(c *ui.Context, mode themeMode) {
 	theme.Radius, theme.FontSize = 8, 13
 	if theme.Dark {
 		theme.Background = ui.Hex("#141416")
-		theme.Surface = ui.Hex("#1d1d20")
-		theme.SurfaceHover = ui.Hex("#29292e")
-		theme.SurfacePressed = ui.Hex("#34343a")
-		theme.Text = ui.Hex("#ededee")
-		theme.TextMuted = ui.Hex("#b0b0b8")
+		theme.Surface = ui.Hex("#1c1d21")
+		theme.SurfaceHover = ui.Hex("#26282e")
+		theme.SurfacePressed = ui.Hex("#30333b")
+		theme.Text = ui.Hex("#ededf0")
+		theme.TextMuted = ui.Hex("#a6a8b3")
 	} else {
 		theme.Background = ui.Hex("#f7f7f8")
 		theme.Surface = ui.Hex("#ffffff")
-		theme.SurfaceHover = ui.Hex("#f0f0f3")
-		theme.SurfacePressed = ui.Hex("#e6e6eb")
-		theme.Text = ui.Hex("#202025")
-		theme.TextMuted = ui.Hex("#565660")
+		theme.SurfaceHover = ui.Hex("#f0f1f4")
+		theme.SurfacePressed = ui.Hex("#e5e7ec")
+		theme.Text = ui.Hex("#1c1d22")
+		theme.TextMuted = ui.Hex("#555863")
 		theme.Success = ui.Hex("#15803d")
 	}
 	theme.Border = theme.Text.Alpha(0.08)
 	c.SetTheme(theme)
 }
 
+func metadataColor(c *ui.Context) ui.Color {
+	if c.Theme().Dark {
+		return ui.Hex("#858894")
+	}
+	return ui.Hex("#70737f")
+}
+
+func stageBackground(c *ui.Context) ui.Color {
+	if c.Theme().Dark {
+		return ui.Hex("#101114")
+	}
+	return ui.Hex("#eff0f3")
+}
+
+func subtleSurface(c *ui.Context) ui.Color {
+	if c.Theme().Dark {
+		return ui.Hex("#17181c")
+	}
+	return ui.Hex("#fafafb")
+}
+
+func selectionBackground(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if t.Dark {
+		return t.Surface.Mix(t.Accent, 0.14)
+	}
+	return t.Surface.Mix(t.Accent, 0.07)
+}
+
+func selectionBorder(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if t.Dark {
+		return t.Accent.Alpha(0.55)
+	}
+	return t.Accent.Alpha(0.42)
+}
+
+func quietButton(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
+	t := c.Theme()
+	btn := ui.Button(c.Key(key), label).Height(height).Radius(8).
+		Background(t.Surface).Border(1, t.Border).TextColor(t.Text).Disabled(disabled)
+	if !disabled {
+		if btn.Pressed() {
+			btn.Background(t.SurfacePressed)
+		} else if btn.Hovered() {
+			btn.Background(t.SurfaceHover)
+		}
+	}
+	return btn
+}
+
+func quietToolbarButton(c *ui.Context, key, label string) ui.Element {
+	t := c.Theme()
+	btn := ui.Button(c.Key(key), label).Height(32).Radius(8).
+		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted)
+	if btn.Hovered() && !btn.IsDisabled() {
+		btn.Background(t.SurfaceHover).TextColor(t.Text)
+	}
+	return btn
+}
+
 func (s *application) themeControl(c *ui.Context) {
+	t := c.Theme()
 	current := s.effectiveThemeMode()
 	disabled := s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
-	ui.PopoverMenuButton(c.Key("theme-picker"), "主题", func(m *ui.Menu) {
+	btn := ui.PopoverMenuButton(c.Key("theme-picker"), "主题", func(m *ui.Menu) {
 		for _, option := range themeOptions {
 			if m.Item(option.label).Radio(current == option.mode).Disabled(disabled).Chosen() {
 				s.setTheme(option.mode)
@@ -169,5 +231,9 @@ func (s *application) themeControl(c *ui.Context) {
 		}
 	}, ui.PopoverMenuButtonOptions{
 		At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-	}).Label("主题").Tooltip("外观主题：" + current.label()).Height(32).Disabled(disabled)
+	}).Label("主题").Tooltip("外观主题："+current.label()).Height(32).Radius(8).
+		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted).Disabled(disabled)
+	if btn.Hovered() && !disabled {
+		btn.Background(t.SurfaceHover).TextColor(t.Text)
+	}
 }

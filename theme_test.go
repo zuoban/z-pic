@@ -314,3 +314,31 @@ func TestThemeErrorHandlingCorruptConfigBusyAndModalGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsiveMobileViewportFitsControlsWithoutHorizontalOverflow(t *testing.T) {
+	const mobileW, mobileH = 420, 860
+	s := testSelectedApplication()
+	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 1536}
+	singleTester := ui.NewTester(s.view, mobileW, mobileH)
+	for _, label := range []string{"重新压缩", "悬浮窗", "设置"} {
+		btn, ok := singleTester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.Bounds.W <= 0 || btn.Bounds.X < 0 || btn.Bounds.X+btn.Bounds.W > mobileW {
+			t.Fatalf("mobile toolbar button %q must fit horizontally within %dpx: %+v", label, mobileW, btn)
+		}
+	}
+	for _, label := range []string{"选择预设", "主题"} {
+		menuBtn, ok := singleTester.AccessByRole(ui.RoleMenuButton, label)
+		if !ok || menuBtn.Bounds.W <= 0 || menuBtn.Bounds.X < 0 || menuBtn.Bounds.X+menuBtn.Bounds.W > mobileW {
+			t.Fatalf("mobile menu button %q must fit horizontally within %dpx: %+v", label, mobileW, menuBtn)
+		}
+	}
+
+	s.setSettingsOpen(true)
+	settingsTester := ui.NewTester(s.settingsView, mobileW, 680)
+	for _, label := range []string{"新增预设", "复制预设", "删除预设", "取消", "保存"} {
+		btn, ok := settingsTester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.Bounds.W <= 0 || btn.Bounds.X < 0 || btn.Bounds.X+btn.Bounds.W > mobileW {
+			t.Fatalf("mobile settings button %q must fit horizontally within %dpx: %+v", label, mobileW, btn)
+		}
+	}
+}

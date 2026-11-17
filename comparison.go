@@ -103,10 +103,11 @@ func (s *application) zoomPreviewActual() {
 
 func (s *application) previewToolbar(c *ui.Context) {
 	t := c.Theme()
+	width, _ := c.Size()
 	locked := s.previewLocked()
 	bounds := s.comparison.viewport
 	scale := s.previewScale(bounds)
-	ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 		for _, action := range []struct {
 			key, label string
 			keyCode    ui.Key
@@ -116,37 +117,44 @@ func (s *application) previewToolbar(c *ui.Context) {
 			{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
 			{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
 		} {
-			button := ui.Button(c.Key(action.key), "").Label(action.label).
+			disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
+			strokeColor := t.Text
+			if disabled {
+				strokeColor = t.TextMuted.Alpha(0.5)
+			}
+			button := quietButton(c, action.key, "", 32, disabled).Label(action.label).
 				KeyShortcuts(ui.Cmd, action.keyCode).
 				Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
-				Size(32, 32).Disabled(locked || (action.factor < 1 && scale <= 0.01) ||
-				(action.factor > 1 && scale >= 16))
+				Size(32, 32)
 			button.DrawOver(func(p *ui.Painter, r ui.Rect) {
-				p.Line(r.X+11, r.Y+r.H/2, r.X+r.W-11, r.Y+r.H/2, 1.5, t.Text)
+				p.Line(r.X+10.5, r.Y+r.H/2, r.X+r.W-10.5, r.Y+r.H/2, 1.5, strokeColor)
 				if action.factor > 1 {
-					p.Line(r.X+r.W/2, r.Y+11, r.X+r.W/2, r.Y+r.H-11, 1.5, t.Text)
+					p.Line(r.X+r.W/2, r.Y+10.5, r.X+r.W/2, r.Y+r.H-10.5, 1.5, strokeColor)
 				}
 			}).OnClick(func() {
 				s.zoomPreviewBy(action.factor)
 			})
 		}
-		ui.Textf(c, "%.0f%%", scale*100).Width(52).FontSize(12).
-			FontFeatures("tnum").TextAlign(ui.Center).TextColor(metadataColor(c))
-		ui.Button(c.Key("preview-fit"), "适应").Height(32).Disabled(locked).
+		ui.Textf(c, "%.0f%%", scale*100).MinWidth(52).Padding(4, 8).Radius(4).
+			Background(subtleSurface(c)).Border(1, t.Border).FontSize(12).
+			FontFeatures("tnum").TextAlign(ui.Center).TextColor(metadataColor(c)).SingleLine()
+		quietButton(c, "preview-fit", "适应", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key0).
 			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
 			OnClick(s.resetPreviewFit)
-		ui.Button(c.Key("preview-actual"), "1:1").Height(32).Disabled(locked).
+		quietButton(c, "preview-actual", "1:1", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key1).
 			Tooltip("按原始尺寸查看（100%） · " + shortcutLabel("1")).
 			OnClick(s.zoomPreviewActual)
-		ui.Box(c).Grow(1)
-		hint := "滚轮缩放"
-		if s.comparing() {
-			hint = "拖动分隔线"
+		if width >= 560 {
+			ui.Box(c).Grow(1)
+			hint := "滚轮缩放"
+			if s.comparing() {
+				hint = "拖动分隔线"
+			}
+			ui.Text(c, hint).FontSize(12).TextColor(metadataColor(c)).
+				Tooltip("拖动分隔线对比；滚轮或捏合缩放；双指滚动平移图片")
 		}
-		ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).
-			Tooltip("拖动分隔线对比；滚轮或捏合缩放；双指滚动平移图片")
 	})
 }
 
@@ -227,13 +235,13 @@ func (s *application) previewCanvas(c *ui.Context) {
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
 				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(8).Radius(4).Background(t.Surface).TextColor(t.Text).
+					Padding(4, 8).Radius(4).Background(t.Surface.Alpha(0.92)).Border(1, t.Border).TextColor(t.Text).
 					SingleLine()
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
 				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(8).Radius(4).Background(t.Surface).TextColor(t.Text).
+					Padding(4, 8).Radius(4).Background(t.Surface.Alpha(0.92)).Border(1, t.Border).TextColor(t.Text).
 					SingleLine()
 			}
 		})
@@ -242,17 +250,17 @@ func (s *application) previewCanvas(c *ui.Context) {
 		canvas.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			centerX := bounds.X + bounds.W*float32(s.comparison.split/100)
 			centerY := bounds.Y + bounds.H/2
-			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 3, ui.RGBA(0, 0, 0, 0.25))
-			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1, ui.Hex("#ffffff"))
-			handleX := min(bounds.X+bounds.W-20, max(bounds.X+20, centerX))
-			handle := ui.Rect{X: handleX - 20, Y: centerY - 20, W: 40, H: 40}
-			p.Fill(handle, t.Surface, 20)
-			p.Stroke(handle, t.TextMuted, 20, 1)
+			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 3, ui.RGBA(0, 0, 0, 0.22))
+			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, ui.Hex("#ffffff"))
+			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
+			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
+			p.Fill(handle, t.Surface, 16)
+			p.Stroke(handle, t.Text.Alpha(0.24), 16, 1)
 			p.StrokePolyline([][2]float32{
-				{handleX - 5, centerY - 5}, {handleX - 10, centerY}, {handleX - 5, centerY + 5},
+				{handleX - 4, centerY - 4}, {handleX - 8, centerY}, {handleX - 4, centerY + 4},
 			}, 1.5, t.Text)
 			p.StrokePolyline([][2]float32{
-				{handleX + 5, centerY - 5}, {handleX + 10, centerY}, {handleX + 5, centerY + 5},
+				{handleX + 4, centerY - 4}, {handleX + 8, centerY}, {handleX + 4, centerY + 4},
 			}, 1.5, t.Text)
 		})
 	}
