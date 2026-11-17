@@ -20,7 +20,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 		minW = 0
 	}
 	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(16).Gap(12).
-		Radius(12).Background(t.Surface).Border(1, t.Border)
+		Radius(panelRadius(c)).Background(panelSurface(c)).Border(1, glassBorder(c))
 	if mobile {
 		panel.FillWidth().MinHeight(360)
 	}
@@ -53,8 +53,10 @@ func (s *application) batchListPanel(c *ui.Context) {
 			filterRow.Wrap()
 		}
 		filterRow.Children(func() {
-			filterChanged := ui.Segmented(c.Key("batch-filter"), &s.batch.filter, "全部", "待处理", "已完成", "失败").
-				Label("队列筛选").Height(32).Changed()
+			seg := ui.Segmented(c.Key("batch-filter"), &s.batch.filter, "全部", "待处理", "已完成", "失败").
+				Label("队列筛选").Height(32)
+			styleGlassSegmented(seg, c, 32)
+			filterChanged := seg.Changed()
 			ui.Box(c).Grow(1)
 			sortChanged := s.batchSortControl(c)
 			if filterChanged || sortChanged {
@@ -62,11 +64,13 @@ func (s *application) batchListPanel(c *ui.Context) {
 			}
 		})
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
-			queryChanged := ui.SearchField(c.Key("batch-search"), &s.batch.query).
+			searchField := ui.SearchField(c.Key("batch-search"), &s.batch.query).
 				Bind(&s.batchSearchRef).
 				Label("筛选文件名").Placeholder("搜索文件名").
 				Tooltip("搜索相对路径或文件名 · " + shortcutLabel("F")).
-				Height(32).Grow(1).Changed()
+				Height(32).Grow(1)
+			styleGlassField(searchField, c, 32)
+			queryChanged := searchField.Changed()
 			if queryChanged {
 				visible = s.filteredBatchIndices()
 			}
@@ -82,8 +86,8 @@ func (s *application) batchListPanel(c *ui.Context) {
 			default:
 				bannerText = fmt.Sprintf("%d 张无效图片无法处理", invalidCount)
 			}
-			bannerRow := ui.Row(c).MinHeight(36).Padding(4, 12).Gap(8).Radius(8).
-				Background(t.Surface.Mix(t.Danger, 0.06)).Border(1, t.Danger.Alpha(0.24)).AlignItems(ui.Center)
+			bannerRow := ui.Row(c).MinHeight(36).Padding(4, 12).Gap(8).Radius(innerRadius(c)).
+				Background(panelSurface(c).Mix(t.Danger, 0.08)).Border(1, t.Danger.Alpha(0.24)).AlignItems(ui.Center)
 			if narrow {
 				bannerRow.Wrap()
 			}
@@ -106,8 +110,8 @@ func (s *application) batchListPanel(c *ui.Context) {
 				}
 			})
 		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(8).
-			Background(stageBackground(c)).Border(1, t.Border).Clip().Children(func() {
+		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(innerRadius(c)).
+			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
 			if len(visible) == 0 {
 				s.batch.selected = -1
 				s.batch.listSelected = -1
@@ -191,7 +195,6 @@ func batchSortOptionFor(mode int) batchSortOption {
 }
 
 func (s *application) batchSortControl(c *ui.Context) bool {
-	t := c.Theme()
 	current := batchSortOptionFor(s.batch.sort)
 	changed := false
 	ui.PopoverMenuButton(c.Key("batch-sort"), current.label, func(m *ui.Menu) {
@@ -206,7 +209,7 @@ func (s *application) batchSortControl(c *ui.Context) bool {
 	}, ui.PopoverMenuButtonOptions{
 		At:   ui.AnchorBottomEnd,
 		Self: ui.AnchorTopEnd,
-	}).Label("队列排序").Height(32).Radius(8).Background(t.Surface).Border(1, t.Border).
+	}).Label("队列排序").Height(32).Radius(pillRadius(32, c)).Background(glassControlSurface(c)).Border(1, glassBorder(c)).
 		Tooltip("排序方式：" + current.menuLabel)
 	return changed
 }
@@ -236,15 +239,15 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 	item := s.batch.items[itemIndex]
 	statusText, statusColor := batchItemStatus(item, t)
 	detailText, detailColor := batchItemDetail(item, t)
-	background, border := t.Surface, t.Border
+	background, border := glassControlSurface(c), glassBorder(c)
 	if r.Selected() {
-		background, border = selectionBackground(c), selectionBorder(c)
+		background, border = glassSelectionBackground(c), selectionBorder(c)
 	} else if r.Hovered() {
-		background = t.SurfaceHover
+		background = glassControlHover(c)
 	}
 	ui.Box(c).FillWidth().Children(func() {
 		ui.Row(c).FillWidth().Padding(8, 12).Gap(12).AlignItems(ui.Center).
-			Radius(8).Background(background).Border(1, border).Children(func() {
+			Radius(innerRadius(c)).Background(background).Border(1, border).Children(func() {
 			s.batchThumbnailView(c, item)
 			ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -254,9 +257,9 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 					badge := ui.Text(c, statusText).FontSize(12).FontWeight(500).
 						FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
 					if item.status == batchDone && !item.unchanged {
-						badge.Padding(2, 8).Radius(4).Background(t.Surface.Mix(t.Success, 0.1))
+						badge.Padding(2, 8).Radius(pillRadius(20, c)).Background(panelSurface(c).Mix(t.Success, 0.14))
 					} else if item.status == batchFailed {
-						badge.Padding(2, 8).Radius(4).Background(t.Surface.Mix(t.Danger, 0.1))
+						badge.Padding(2, 8).Radius(pillRadius(20, c)).Background(panelSurface(c).Mix(t.Danger, 0.14))
 					}
 				})
 				meta := strings.ToUpper(item.format)
@@ -281,7 +284,11 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 	entry := s.batchThumbnail(item)
 	label := item.relPath + " 缩略图"
 	unavailable := item.invalidInput || entry == nil || entry.failed
-	ui.Box(c).Size(64, 64).Shrink(0).Radius(4).Background(stageBackground(c)).Border(1, t.Border).
+	thumbRadius := float32(4)
+	if usesGlass(c) {
+		thumbRadius = 6
+	}
+	ui.Box(c).Size(64, 64).Shrink(0).Radius(thumbRadius).Background(panelStageBackground(c)).Border(1, glassBorder(c)).
 		Clip().Role(ui.RoleImage).Label(label).Children(func() {
 		if entry != nil && entry.bitmap != nil {
 			ui.Image(c, entry.bitmap).Fill().Fit(ui.Contain)
@@ -425,7 +432,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 		minW = 0
 	}
 	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(16).Gap(12).
-		Radius(12).Background(t.Surface).Border(1, t.Border)
+		Radius(panelRadius(c)).Background(panelSurface(c)).Border(1, glassBorder(c))
 	if mobile {
 		panel.FillWidth()
 	}
@@ -450,24 +457,26 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				Tooltip("下一张 · " + shortcutLabel("]")).
 				OnClick(func() { s.stepBatchPreview(1) })
 			if s.result != nil && !s.overwritten && !compact {
-				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+				seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
 					Label("预览模式").FillEqually().Width(168).Height(32).
 					Disabled(s.previewLocked())
+				styleGlassSegmented(seg, c, 32)
 			}
 		})
 		if s.result != nil && !s.overwritten && compact {
 			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "预览模式").FontSize(12).TextColor(metadataColor(c)).Grow(1)
-				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+				seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
 					Label("预览模式").FillEqually().Width(168).Height(32).
 					Disabled(s.previewLocked())
+				styleGlassSegmented(seg, c, 32)
 			})
 		}
 		if s.preview != nil {
 			s.previewToolbar(c)
 		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(8).
-			Background(stageBackground(c)).Border(1, t.Border).Clip().Children(func() {
+		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
+			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
 			if s.preview != nil {
 				s.previewCanvas(c)
 			}
@@ -505,7 +514,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 					switch previewItem.status {
 					case batchPending:
 						quietButton(c, "batch-preview-compress", "压缩此张", 32, s.busy).
-							Background(selectionBackground(c)).Border(1, selectionBorder(c)).
+							Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).
 							Tooltip("仅压缩此图片，完成后可在队列中预览结果").
 							OnClick(func() { s.compressBatchItem(previewIdx) })
 					case batchFailed:
@@ -570,7 +579,7 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 
 func (s *application) batchOutputCard(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(subtleSurface(c)).Border(1, t.Border).Children(func() {
+	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 		ui.Text(c, "保存方式由当前预设决定").FontSize(12).TextColor(t.TextMuted)
 		if s.batch.outputMode == batchOutputFolder {

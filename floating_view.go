@@ -203,11 +203,7 @@ func (s *application) floatingView(c *ui.Context) {
 		},
 		Operations: transfer.Copy,
 	}
-	background := theme.Background
-	if c.Vibrancy() {
-		background = ui.Transparent
-		c.Root().Background(ui.Transparent)
-	}
+	background := windowRootBackground(c)
 	root := ui.Column(c).Fill().Padding(8).Gap(4).Background(background)
 	_, over := ui.DataDragOver(root, options)
 	if drop, ok := ui.DropData(root, options); ok {
@@ -251,11 +247,11 @@ func (s *application) floatingView(c *ui.Context) {
 		}
 		ui.Row(c).FillWidth().Center().Children(func() {
 			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 8).Gap(4).
-				Radius(8).Background(theme.Surface).Border(1, theme.Border).Label(label).
+				Radius(pillRadius(28, c)).Background(glassControlSurface(c)).Border(1, glassBorder(c)).Label(label).
 				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
 				OnClick(func() { s.setFloatingExpanded(true) })
 			if countBtn.Hovered() {
-				countBtn.Background(theme.SurfaceHover)
+				countBtn.Background(glassControlHover(c))
 			}
 			countBtn.Children(func() {
 				ui.Text(c, label).FontSize(12).FontWeight(500).FontFeatures("tnum")
@@ -298,14 +294,14 @@ func (s *application) floatingStack(c *ui.Context) {
 				}
 				p.Transform(ui.Rotation(angle), centerX, centerY, func() {
 					p.Shadow(rect, 8, 0, 2, 6, 0, ui.Hex("#000000").Alpha(0.12))
-					p.Fill(rect, theme.Surface, 8)
+					p.Fill(rect, panelSurface(c), 8)
 					if bitmap != nil {
 						p.Clip(rect, 8, func() { p.Image(bitmap, rect, ui.Contain) })
 					} else {
 						drawFloatingIcon(p, ui.Rect{X: centerX - 12, Y: centerY - 12, W: 24, H: 24},
 							"photo", theme.TextMuted)
 					}
-					p.Stroke(rect, theme.Border, 8, 1)
+					p.Stroke(rect, glassBorder(c), 8, 1)
 				})
 			}
 		})
@@ -316,7 +312,6 @@ func (s *application) floatingStack(c *ui.Context) {
 }
 
 func (s *application) floatingHeader(c *ui.Context) {
-	theme := c.Theme()
 	ui.Row(c).Height(40).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		floatingIconButton(c, "floating-collapse", "收起图片", "back",
 			func() { s.setFloatingExpanded(false) })
@@ -344,7 +339,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(0).Radius(8).Background(stageBackground(c)).Border(1, theme.Border).Children(func() {
+		ui.Row(c).Gap(0).Radius(pillRadius(28, c)).Background(panelStageBackground(c)).Border(1, glassBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -354,7 +349,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					func() { s.floating.listView = mode.list })
 				button.Selected(s.floating.listView == mode.list)
 				if s.floating.listView == mode.list {
-					button.Background(selectionBackground(c)).Border(1, selectionBorder(c))
+					button.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 				} else {
 					button.Background(ui.Transparent).Border(1, ui.Transparent)
 				}
@@ -424,16 +419,16 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	if position == len(indices) {
 		_, selected := s.floatingSelectedImage()
 		foreground, iconColor := theme.Text, theme.TextMuted
-		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(8).
-			Background(subtleSurface(c)).Border(1, theme.Border).
+		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(innerRadius(c)).
+			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
 			Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 			Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 			OnClick(s.revealFloatingSelection)
 		if button.Hovered() && selected && !s.modalOpen() {
-			button.Background(theme.SurfaceHover)
+			button.Background(glassControlHover(c))
 		}
 		if s.floating.cursor == position {
-			button.Background(selectionBackground(c)).Border(1, selectionBorder(c))
+			button.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 		}
 		if list {
 			button.Height(56).Row().Gap(8)
@@ -447,15 +442,15 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	item := s.floatingImage(indices[position])
 	bitmap := s.floatingBitmap(item)
 	selected := s.floating.cursor == position
-	background, border := theme.Surface, theme.Border
+	background, border := glassControlSurface(c), glassBorder(c)
 	foreground, secondary := theme.Text, metadataColor(c)
 	if selected {
-		background, border = selectionBackground(c), selectionBorder(c)
+		background, border = glassSelectionBackground(c), selectionBorder(c)
 	}
-	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(8).Background(background).
+	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(innerRadius(c)).Background(background).
 		Border(1, border).Tooltip(item.path)
 	if tile.Hovered() && !selected {
-		tile.Background(theme.SurfaceHover)
+		tile.Background(glassControlHover(c))
 	}
 	if list {
 		tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
@@ -547,10 +542,10 @@ func (s *application) floatingFeedback(c *ui.Context) {
 
 func floatingIconButton(c *ui.Context, key, label, icon string, action func()) ui.Element {
 	theme := c.Theme()
-	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(8).
-		Background(theme.Surface).Border(1, theme.Border).Label(label).Tooltip(label)
+	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(pillRadius(28, c)).
+		Background(glassControlSurface(c)).Border(1, glassBorder(c)).Label(label).Tooltip(label)
 	if button.Hovered() {
-		button.Background(theme.SurfaceHover)
+		button.Background(glassControlHover(c))
 	}
 	if action != nil {
 		button.OnClick(action)

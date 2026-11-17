@@ -195,15 +195,161 @@ func selectionBorder(c *ui.Context) ui.Color {
 	return t.Accent.Alpha(0.42)
 }
 
+func usesGlass(c *ui.Context) bool {
+	return c.Vibrancy() && !c.Preferences().ReduceTransparency
+}
+
+func windowRootBackground(c *ui.Context) ui.Color {
+	if usesGlass(c) {
+		c.Root().Background(ui.Transparent)
+		return ui.Transparent
+	}
+	bg := c.Theme().Background
+	c.Root().Background(bg)
+	return bg
+}
+
+func panelRadius(c *ui.Context) float32 {
+	if usesGlass(c) {
+		return 16
+	}
+	return 12
+}
+
+func innerRadius(c *ui.Context) float32 {
+	if usesGlass(c) {
+		return 12
+	}
+	return 8
+}
+
+func pillRadius(height float32, c *ui.Context) float32 {
+	if usesGlass(c) {
+		return height / 2
+	}
+	return 8
+}
+
+func panelSurface(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.Surface
+	}
+	if t.Dark {
+		return t.Surface.Alpha(0.64)
+	}
+	return t.Surface.Alpha(0.70)
+}
+
+func panelSubtleSurface(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		return subtleSurface(c)
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(255, 255, 255, 0.06)
+	}
+	return ui.RGBA(255, 255, 255, 0.52)
+}
+
+func panelStageBackground(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		return stageBackground(c)
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(12, 13, 16, 0.52)
+	}
+	return ui.RGBA(239, 240, 243, 0.58)
+}
+
+func glassControlSurface(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.Surface
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.09)
+	}
+	return ui.RGBA(255, 255, 255, 0.68)
+}
+
+func glassControlHover(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.SurfaceHover
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.16)
+	}
+	return ui.RGBA(255, 255, 255, 0.86)
+}
+
+func glassControlPressed(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.SurfacePressed
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.22)
+	}
+	return ui.RGBA(255, 255, 255, 0.94)
+}
+
+func glassBorder(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.Border
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.15)
+	}
+	return t.Text.Alpha(0.09)
+}
+
+func glassDivider(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.Border
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.10)
+	}
+	return t.Text.Alpha(0.08)
+}
+
+func glassSelectionBackground(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return selectionBackground(c)
+	}
+	if t.Dark {
+		return t.Accent.Alpha(0.24)
+	}
+	return t.Accent.Alpha(0.14)
+}
+
+func styleGlassSegmented(el ui.Element, c *ui.Context, height float32) ui.Element {
+	if usesGlass(c) {
+		el.Radius(height / 2).Background(panelStageBackground(c)).Border(1, glassBorder(c))
+	}
+	return el
+}
+
+func styleGlassField(el ui.Element, c *ui.Context, height float32) ui.Element {
+	if usesGlass(c) {
+		el.Radius(height / 2).Background(glassControlSurface(c)).Border(1, glassBorder(c))
+	}
+	return el
+}
+
 func quietButton(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
 	t := c.Theme()
-	btn := ui.Button(c.Key(key), label).Height(height).Radius(8).
-		Background(t.Surface).Border(1, t.Border).TextColor(t.Text).Disabled(disabled)
+	btn := ui.Button(c.Key(key), label).Height(height).Radius(pillRadius(height, c)).
+		Background(glassControlSurface(c)).Border(1, glassBorder(c)).TextColor(t.Text).Disabled(disabled)
 	if !disabled {
 		if btn.Pressed() {
-			btn.Background(t.SurfacePressed)
+			btn.Background(glassControlPressed(c))
 		} else if btn.Hovered() {
-			btn.Background(t.SurfaceHover)
+			btn.Background(glassControlHover(c))
 		}
 	}
 	return btn
@@ -211,10 +357,10 @@ func quietButton(c *ui.Context, key, label string, height float32, disabled bool
 
 func quietToolbarButton(c *ui.Context, key, label string) ui.Element {
 	t := c.Theme()
-	btn := ui.Button(c.Key(key), label).Height(32).Radius(8).
+	btn := ui.Button(c.Key(key), label).Height(32).Radius(pillRadius(32, c)).
 		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted)
 	if btn.Hovered() && !btn.IsDisabled() {
-		btn.Background(t.SurfaceHover).TextColor(t.Text)
+		btn.Background(glassControlHover(c)).TextColor(t.Text)
 	}
 	return btn
 }
@@ -231,9 +377,9 @@ func (s *application) themeControl(c *ui.Context) {
 		}
 	}, ui.PopoverMenuButtonOptions{
 		At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-	}).Label("主题").Tooltip("外观主题："+current.label()).Height(32).Radius(8).
+	}).Label("主题").Tooltip("外观主题："+current.label()).Height(32).Radius(pillRadius(32, c)).
 		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted).Disabled(disabled)
 	if btn.Hovered() && !disabled {
-		btn.Background(t.SurfaceHover).TextColor(t.Text)
+		btn.Background(glassControlHover(c)).TextColor(t.Text)
 	}
 }

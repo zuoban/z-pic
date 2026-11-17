@@ -342,3 +342,99 @@ func TestResponsiveMobileViewportFitsControlsWithoutHorizontalOverflow(t *testin
 		}
 	}
 }
+
+func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
+	lightBg := color.RGBA{R: 0xf7, G: 0xf7, B: 0xf8, A: 0xff}
+	darkBg := color.RGBA{R: 0x14, G: 0x14, B: 0x16, A: 0xff}
+
+	s := testSelectedApplication()
+	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	s.comparison.mode = previewCompare
+	s.comparison.split = 50
+
+	mainTester := ui.NewTester(s.view, 980, 720)
+	floatingTester := ui.NewTester(s.floatingView, floatingCompactWidth, floatingCompactHeight)
+	s.setSettingsOpen(true)
+	settingsTester := ui.NewTester(s.settingsView, 724, 700)
+	s.setSettingsOpen(false)
+
+	renderAll := func() {
+		t.Helper()
+		mainTester.Frame()
+		floatingTester.Frame()
+		s.settingsOpen = true
+		s.editor = &presetEditor{presets: s.presets}
+		settingsTester.Frame()
+		s.settingsOpen, s.editor = false, nil
+	}
+
+	// 1. With vibrancy active and ReduceTransparency false, window roots are transparent for Liquid Glass.
+	mainTester.SetVibrancy(true)
+	floatingTester.SetVibrancy(true)
+	settingsTester.SetVibrancy(true)
+	renderAll()
+
+	if got := mainTester.Image().RGBAAt(2, 2); got.A != 0 {
+		t.Fatalf("main root must be transparent when glass vibrancy is enabled, got %+v", got)
+	}
+	if got := floatingTester.Image().RGBAAt(2, 2); got.A != 0 {
+		t.Fatalf("floating root must be transparent when glass vibrancy is enabled, got %+v", got)
+	}
+	if got := settingsTester.Image().RGBAAt(4, 100); got.A != 0 {
+		t.Fatalf("settings root must be transparent when glass vibrancy is enabled, got %+v", got)
+	}
+	// Preview panel surface should be translucent over the glass root.
+	if got := mainTester.Image().RGBAAt(40, 80); got.A == 0 || got.A == 255 {
+		t.Fatalf("preview panel should render translucent glass surface (0 < alpha < 255), got %+v", got)
+	}
+
+	// 2. Dark mode keeps transparent roots and translucent panels without losing controls.
+	mainTester.SetDark(true)
+	floatingTester.SetDark(true)
+	settingsTester.SetDark(true)
+	renderAll()
+
+	if got := mainTester.Image().RGBAAt(2, 2); got.A != 0 {
+		t.Fatalf("dark main root must stay transparent when glass vibrancy is enabled, got %+v", got)
+	}
+	if got := mainTester.Image().RGBAAt(40, 80); got.A == 0 || got.A == 255 {
+		t.Fatalf("dark preview panel should render translucent glass surface, got %+v", got)
+	}
+
+	// 3. ReduceTransparency falls back to opaque backgrounds even when vibrancy is enabled.
+	reducePref := ui.Preferences{ReduceTransparency: true}
+	mainTester.SetPreferences(reducePref)
+	floatingTester.SetPreferences(reducePref)
+	settingsTester.SetPreferences(reducePref)
+	renderAll()
+
+	if got := mainTester.Image().RGBAAt(2, 2); got != darkBg {
+		t.Fatalf("dark ReduceTransparency fallback main background = %+v, want %+v", got, darkBg)
+	}
+	if got := floatingTester.Image().RGBAAt(2, 2); got != darkBg {
+		t.Fatalf("dark ReduceTransparency fallback floating background = %+v, want %+v", got, darkBg)
+	}
+	if got := settingsTester.Image().RGBAAt(4, 100); got != darkBg {
+		t.Fatalf("dark ReduceTransparency fallback settings background = %+v, want %+v", got, darkBg)
+	}
+
+	// 4. Disabling ReduceTransparency in light mode restores transparent glass root; disabling vibrancy restores opaque.
+	mainTester.SetDark(false)
+	floatingTester.SetDark(false)
+	settingsTester.SetDark(false)
+	mainTester.SetPreferences(ui.Preferences{})
+	floatingTester.SetPreferences(ui.Preferences{})
+	settingsTester.SetPreferences(ui.Preferences{})
+	renderAll()
+	if got := mainTester.Image().RGBAAt(2, 2); got.A != 0 {
+		t.Fatalf("restoring transparency must re-enable transparent glass root, got %+v", got)
+	}
+
+	mainTester.SetVibrancy(false)
+	floatingTester.SetVibrancy(false)
+	settingsTester.SetVibrancy(false)
+	renderAll()
+	if got := mainTester.Image().RGBAAt(2, 2); got != lightBg {
+		t.Fatalf("disabling vibrancy must restore opaque light background = %+v, want %+v", got, lightBg)
+	}
+}

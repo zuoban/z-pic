@@ -12,9 +12,14 @@ import (
 const mainTitleBarHeight = 52
 
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
-	button := ui.PrimaryButton(c.Key(key), label).Radius(8).Disabled(disabled)
+	button := ui.PrimaryButton(c.Key(key), label).Radius(pillRadius(36, c)).Disabled(disabled)
 	if disabled {
-		button.Background(c.Theme().SurfacePressed).TextColor(c.Theme().TextMuted).DimDisabled(false)
+		if usesGlass(c) {
+			button.Background(glassControlSurface(c)).Border(1, glassBorder(c)).
+				TextColor(c.Theme().TextMuted).DimDisabled(false)
+		} else {
+			button.Background(c.Theme().SurfacePressed).TextColor(c.Theme().TextMuted).DimDisabled(false)
+		}
 	}
 	return button
 }
@@ -24,7 +29,7 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Grow(1).MinWidth(0).Children(func() {
 		ui.Box(c).Size(24, 24).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
 			frame := ui.Rect{X: r.X + 2, Y: r.Y + 2, W: 20, H: 20}
-			p.Fill(frame, selectionBackground(c), 4)
+			p.Fill(frame, glassSelectionBackground(c), 4)
 			p.Stroke(frame, selectionBorder(c), 4, 1)
 			p.StrokePolyline([][2]float32{
 				{r.X + 6, r.Y + 10}, {r.X + 6, r.Y + 6}, {r.X + 10, r.Y + 6},
@@ -35,7 +40,7 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 		})
 		ui.Text(c, "Z Pic").FontSize(18).FontWeight(600).SingleLine()
 		if showSubtitle {
-			ui.Box(c).Size(1, 12).Background(t.Border)
+			ui.Box(c).Size(1, 12).Background(glassDivider(c))
 			ui.Text(c, "图片压缩，尺寸不变").FontSize(12).TextColor(metadataColor(c)).SingleLine()
 		}
 	})
@@ -44,7 +49,6 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 func (s *application) view(c *ui.Context) {
 	s.applyTheme(c)
 	s.prepareBatchThumbnails()
-	theme := c.Theme()
 	_, pending, done, _, _, _, canRun := s.batchStats()
 	showBatchOutput := s.batch != nil && canRun && pending == 0 && done > 0 &&
 		s.batch.outputMode == batchOutputFolder && s.batch.outputDir != ""
@@ -81,7 +85,7 @@ func (s *application) view(c *ui.Context) {
 			c.OnWindowShortcut(ui.Cmd, ui.Key1, s.zoomPreviewActual)
 		}
 	}
-	ui.Column(c).Fill().Background(theme.Background).Children(func() {
+	ui.Column(c).Fill().Background(windowRootBackground(c)).Children(func() {
 		s.topToolbar(c, width, pagePadding, mobile, pending, done, canRun)
 		ui.Column(c).Grow(1).MinHeight(0).FillWidth().
 			Padding(bodyTopPad, pagePadding, pagePadding, pagePadding).
@@ -144,7 +148,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
 		if s.floatingOpen {
-			floatingBtn.Background(selectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
 		}
 		s.themeControl(c)
 		settingsDisabled := s.busy || s.confirmOverwrite || s.confirmBatchOverwrite
@@ -187,7 +191,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		brandLockup(c, availWidth >= 850)
 		s.presetControl(c, availWidth, false)
 		s.compressionControls(c, pending, done, canRun)
-		ui.Box(c).Size(1, 16).Background(t.Border)
+		ui.Box(c).Size(1, 16).Background(glassDivider(c))
 		utilityControls()
 	})
 }
@@ -204,10 +208,14 @@ func shortcutLabel(key string) string {
 
 func shortcutHint(c *ui.Context, label, key string) {
 	t := c.Theme()
+	radius := float32(4)
+	if usesGlass(c) {
+		radius = 6
+	}
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(12).TextColor(metadataColor(c))
 		ui.Text(c, shortcutLabel(key)).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
-			Padding(0, 4).Radius(4).Background(t.Surface).Border(1, t.Border)
+			Padding(0, 5).Radius(radius).Background(glassControlSurface(c)).Border(1, glassBorder(c))
 	})
 }
 
@@ -227,7 +235,7 @@ func (s *application) previewPanel(c *ui.Context) {
 		minW = 0
 	}
 	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(16).Gap(12).
-		Radius(12).Background(t.Surface).Border(1, t.Border)
+		Radius(panelRadius(c)).Background(panelSurface(c)).Border(1, glassBorder(c))
 	if width < 720 {
 		panel.FillWidth()
 	}
@@ -235,9 +243,10 @@ func (s *application) previewPanel(c *ui.Context) {
 		ui.Row(c).Height(32).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "图片预览").FontSize(16).FontWeight(500).Width(0).Grow(1).SingleLine()
 			if s.result != nil && !s.overwritten {
-				ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+				seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
 					Label("预览模式").FillEqually().Width(168).Height(32).
 					Disabled(s.previewLocked())
+				styleGlassSegmented(seg, c, 32)
 			}
 			if s.file != nil {
 				quietButton(c, "replace", "更换图片", 32, s.busy).
@@ -248,14 +257,14 @@ func (s *application) previewPanel(c *ui.Context) {
 		if s.preview != nil {
 			s.previewToolbar(c)
 		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(8).
-			Background(stageBackground(c)).Border(1, t.Border).Clip().Children(func() {
+		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
+			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
 			if s.preview == nil {
 				ui.Column(c).Fill().Center().Gap(12).Padding(20).Children(func() {
 					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
 						card := ui.Rect{X: bounds.X + 6, Y: bounds.Y + 8, W: 44, H: 40}
-						p.Fill(card, t.Surface, 8)
-						p.Stroke(card, t.Border, 8, 1)
+						p.Fill(card, panelSurface(c), 8)
+						p.Stroke(card, glassBorder(c), 8, 1)
 						p.StrokePolyline([][2]float32{
 							{bounds.X + 12, bounds.Y + 20}, {bounds.X + 12, bounds.Y + 14}, {bounds.X + 18, bounds.Y + 14},
 						}, 1.5, t.Accent)
@@ -348,8 +357,8 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 	if width < 960 {
 		panelWidth = 280
 	}
-	panel := ui.Column(c).Padding(16).Gap(12).Radius(12).
-		Background(t.Surface).Border(1, t.Border)
+	panel := ui.Column(c).Padding(16).Gap(12).Radius(panelRadius(c)).
+		Background(panelSurface(c)).Border(1, glassBorder(c))
 	if mobile {
 		panel.FillWidth()
 	} else {
@@ -357,7 +366,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 	}
 	panel.Children(func() {
 		s.presetOverview(c)
-		ui.Box(c).FillWidth().Height(1).Background(t.Border)
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		if s.batch != nil {
 			s.batchControls(c, showBatchOutput, mobile)
 			return
@@ -415,7 +424,6 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 }
 
 func (s *application) presetOverview(c *ui.Context) {
-	t := c.Theme()
 	ui.Column(c).Gap(8).Children(func() {
 		ui.Row(c).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(16).FontWeight(500).Grow(1)
@@ -426,7 +434,7 @@ func (s *application) presetOverview(c *ui.Context) {
 				badge = "单张图片"
 			}
 			ui.Text(c, badge).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
-				Padding(2, 8).Radius(4).Background(stageBackground(c)).Border(1, t.Border)
+				Padding(2, 8).Radius(pillRadius(20, c)).Background(panelStageBackground(c)).Border(1, glassBorder(c))
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
@@ -443,7 +451,7 @@ func (s *application) presetOverview(c *ui.Context) {
 
 func (s *application) singleOutputSummary(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(subtleSurface(c)).Border(1, t.Border).Children(func() {
+	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 		description, color := presetSaveDescription(s.output), t.Text
 		if s.output.replacesOriginal() {
@@ -518,8 +526,8 @@ func (s *application) presetControl(c *ui.Context, availWidth float32, compact b
 			}
 		}, ui.PopoverMenuButtonOptions{
 			At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-		}).Label("选择预设").Tooltip(s.scheme).Width(pickerWidth).Height(32).Radius(8).
-			Background(t.Surface).Border(1, t.Border).Disabled(s.modalOpen())
+		}).Label("选择预设").Tooltip(s.scheme).Width(pickerWidth).Height(32).Radius(pillRadius(32, c)).
+			Background(glassControlSurface(c)).Border(1, glassBorder(c)).Disabled(s.modalOpen())
 	})
 }
 
@@ -572,7 +580,7 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 	t := c.Theme()
 	width, _ := c.Size()
 	compact := width >= 720 && width < 960
-	ui.Column(c).Padding(12).Gap(8).Radius(8).Background(subtleSurface(c)).Border(1, t.Border).Children(func() {
+	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Text(c, title).FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 		ui.Row(c).Gap(12).AlignItems(ui.End).Children(func() {
 			for index, row := range []struct{ label, value string }{
@@ -612,7 +620,7 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 				barColor = t.TextMuted.Alpha(0.45)
 			}
 			ui.Box(c).FillWidth().Height(4).Draw(func(p *ui.Painter, r ui.Rect) {
-				p.Fill(r, t.SurfacePressed, 2)
+				p.Fill(r, glassControlPressed(c), 2)
 				fillW := max(4, r.W*float32(min(1, ratio)))
 				p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
 			})

@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -161,8 +162,8 @@ func (s *application) previewToolbar(c *ui.Context) {
 				s.zoomPreviewBy(action.factor)
 			})
 		}
-		ui.Textf(c, "%.0f%%", scale*100).MinWidth(52).Padding(4, 8).Radius(4).
-			Background(subtleSurface(c)).Border(1, t.Border).FontSize(12).
+		ui.Textf(c, "%.0f%%", scale*100).MinWidth(52).Padding(4, 8).Radius(pillRadius(26, c)).
+			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).FontSize(12).
 			FontFeatures("tnum").TextAlign(ui.Center).TextColor(metadataColor(c)).SingleLine()
 		quietButton(c, "preview-fit", "适应", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key0).
@@ -329,15 +330,21 @@ func (s *application) previewCanvas(c *ui.Context) {
 		}
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
-				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(4, 8).Radius(4).Background(t.Surface.Alpha(0.92)).Border(1, t.Border).TextColor(t.Text).
+				badge := ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(5, 12).Radius(14).Material(glass.Glass{}).TextColor(t.Text).
 					SingleLine()
+				if c.Preferences().ReduceTransparency {
+					badge.Border(1, t.Border)
+				}
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(4, 8).Radius(4).Background(t.Surface.Alpha(0.92)).Border(1, t.Border).TextColor(t.Text).
+				badge := ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(5, 12).Radius(14).Material(glass.Glass{}).TextColor(t.Text).
 					SingleLine()
+				if c.Preferences().ReduceTransparency {
+					badge.Border(1, t.Border)
+				}
 			}
 		})
 	})
@@ -349,8 +356,10 @@ func (s *application) previewCanvas(c *ui.Context) {
 			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, ui.Hex("#ffffff"))
 			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
 			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
-			p.Fill(handle, t.Surface, 16)
-			p.Stroke(handle, t.Text.Alpha(0.24), 16, 1)
+			glass.Paint(p, handle, 16, glass.Glass{})
+			if c.Preferences().ReduceTransparency {
+				p.Stroke(handle, t.Text.Alpha(0.24), 16, 1)
+			}
 			p.StrokePolyline([][2]float32{
 				{handleX - 4, centerY - 4}, {handleX - 8, centerY}, {handleX - 4, centerY + 4},
 			}, 1.5, t.Text)

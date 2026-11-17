@@ -21,6 +21,7 @@ func main() {
 			MinHeight:       660,
 			TitleBarStyle:   mygo.TitleBarHiddenInset,
 			TitleBarHeight:  mainTitleBarHeight,
+			Vibrancy:        mygo.VibrancyGlass,
 			BackgroundColor: "light-dark(#f7f7f8, #141416)",
 			UseContentSize:  true,
 			Content:         ui.View(app.view),

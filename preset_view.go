@@ -20,7 +20,11 @@ var (
 
 func presetActiveIndicator(c *ui.Context) {
 	t := c.Theme()
-	ui.Box(c).Size(16, 16).Radius(4).Background(selectionBackground(c)).
+	radius := float32(4)
+	if usesGlass(c) {
+		radius = 8
+	}
+	ui.Box(c).Size(16, 16).Radius(radius).Background(glassSelectionBackground(c)).
 		Border(1, selectionBorder(c)).Center().Children(func() {
 		ui.Icon(c, presetCheckIcon).Size(12, 12).TextColor(t.Accent)
 	})
@@ -66,9 +70,9 @@ func (s *application) settingsView(c *ui.Context) {
 	}
 	c.OnWindowShortcut(0, ui.KeyEscape, func() { s.setSettingsOpen(false) })
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.savePresetEdits)
-	ui.Column(c).Fill().Background(t.Background).Role(ui.RoleDialog).Label("预设设置").Children(func() {
+	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("预设设置").Children(func() {
 		s.presetEditorTabs(c)
-		ui.Box(c).FillWidth().Height(1).Background(t.Border)
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(bodyPad).Gap(16).Children(func() {
 			preset := editor.selectedPreset()
 			ui.Row(c).Height(36).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -82,14 +86,14 @@ func (s *application) settingsView(c *ui.Context) {
 				if preset.favorite {
 					icon, label = presetHeartFilledIcon, "取消收藏预设"
 				}
-				button := ui.ButtonBase(c.Key("favorite-preset")).Size(32, 32).Center().Radius(8).
-					Background(t.Surface).Border(1, t.Border).
+				button := ui.ButtonBase(c.Key("favorite-preset")).Size(32, 32).Center().Radius(pillRadius(32, c)).
+					Background(glassControlSurface(c)).Border(1, glassBorder(c)).
 					Label(label).Tooltip(label).Disabled(s.busy).OnClick(func() { preset.favorite = !preset.favorite })
 				if button.Hovered() && !s.busy {
-					button.Background(t.SurfaceHover)
+					button.Background(glassControlHover(c))
 				}
 				if preset.favorite {
-					button.TextColor(t.Accent).Background(selectionBackground(c)).Border(1, selectionBorder(c))
+					button.TextColor(t.Accent).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 				} else {
 					button.TextColor(t.TextMuted)
 				}
@@ -107,9 +111,9 @@ func (s *application) settingsView(c *ui.Context) {
 				}
 			})
 		})
-		ui.Box(c).FillWidth().Height(1).Background(t.Border)
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		if editor.confirmDelete {
-			ui.Row(c).Padding(12, bodyPad).Gap(8).Background(subtleSurface(c)).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Padding(12, bodyPad).Gap(8).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
 				ui.Textf(c, "删除「%s」？保存后生效。", editor.selectedPreset().name).
 					FontSize(12).Width(0).Grow(1).SingleLine().TruncateMiddle()
 				quietButton(c, "cancel-delete", "保留预设", 32, false).
@@ -117,9 +121,9 @@ func (s *application) settingsView(c *ui.Context) {
 				quietButton(c, "confirm-delete", "确认删除", 32, false).TextColor(t.Danger).
 					OnClick(s.deletePreset)
 			})
-			ui.Box(c).FillWidth().Height(1).Background(t.Border)
+			ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		}
-		ui.Column(c).Padding(12, bodyPad).Gap(8).Background(t.Surface).Children(func() {
+		ui.Column(c).Padding(12, bodyPad).Gap(8).Background(panelSurface(c)).Children(func() {
 			message, color, role := "保存后生效，关闭应用仍会保留", t.TextMuted, ui.RoleStatus
 			if editor.message != "" {
 				message, color, role = editor.message, t.Danger, ui.RoleAlert
@@ -143,7 +147,7 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) presetEditorTabs(c *ui.Context) {
 	t := c.Theme()
 	editor := s.editor
-	ui.Row(c).Height(52).Padding(8, 16).Gap(8).Background(t.SurfaceHover).AlignItems(ui.Center).
+	ui.Row(c).Height(52).Padding(8, 16).Gap(8).Background(panelStageBackground(c)).AlignItems(ui.Center).
 		Border(0, ui.Transparent).Children(func() {
 		ui.Text(c, "预设").FontSize(13).FontWeight(500).TextColor(metadataColor(c)).Padding(0, 4)
 		ui.ScrollHorizontal(c.Key("preset-list")).Height(36).Width(0).Grow(1).Children(func() {
@@ -151,16 +155,16 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 				for index, preset := range editor.presets {
 					button := ui.ButtonBase(c.Key(fmt.Sprintf("edit-preset-%d", index))).
 						Label("编辑预设："+preset.name).Tooltip(preset.name).Height(36).
-						MinWidth(88).MaxWidth(196).Padding(0, 12).Gap(8).Radius(8).
+						MinWidth(88).MaxWidth(196).Padding(0, 12).Gap(8).Radius(pillRadius(36, c)).
 						Border(1, ui.Transparent).AlignItems(ui.Center).
 						TextColor(t.TextMuted).Disabled(s.busy).OnClick(func() {
 						editor.selected = index
 						editor.message, editor.confirmDelete = "", false
 					})
 					if editor.selected == index {
-						button.Background(t.Surface).Border(1, t.Border).TextColor(t.Text)
+						button.Background(glassControlSurface(c)).Border(1, glassBorder(c)).TextColor(t.Text)
 					} else if button.Hovered() {
-						button.Background(t.SurfacePressed.Alpha(0.65)).TextColor(t.Text)
+						button.Background(glassControlHover(c)).TextColor(t.Text)
 					}
 					button.Children(func() {
 						weight := 400
@@ -175,11 +179,11 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 				}
 			})
 		})
-		addBtn := ui.ButtonBase(c.Key("add-preset")).Size(32, 32).Center().Radius(8).
-			Background(t.Surface).Border(1, t.Border).
+		addBtn := ui.ButtonBase(c.Key("add-preset")).Size(32, 32).Center().Radius(pillRadius(32, c)).
+			Background(glassControlSurface(c)).Border(1, glassBorder(c)).
 			Label("新增预设").Tooltip("新增预设").Disabled(s.busy).OnClick(s.addPreset)
 		if addBtn.Hovered() && !s.busy {
-			addBtn.Background(t.SurfacePressed)
+			addBtn.Background(glassControlHover(c))
 		}
 		addBtn.Children(func() { ui.Icon(c, presetPlusIcon).Size(16, 16).TextColor(t.Text) })
 	})
@@ -187,8 +191,8 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 
 func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(12).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
+	ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
+		Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetQualityIcon).Size(16, 16).TextColor(t.TextMuted)
 			ui.Text(c, "图片质量").FontSize(15).FontWeight(500)
@@ -204,7 +208,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 		at := float32(value / float64(len(imageQualityLevels)-1))
 		slider.Draw(func(p *ui.Painter, r ui.Rect) {
 			track := ui.Rect{X: r.X + 12, Y: r.Y + 12, W: max(0, r.W-24), H: 4}
-			p.Fill(track, t.SurfacePressed, 2)
+			p.Fill(track, glassControlPressed(c), 2)
 			fill := track
 			fill.W *= at
 			p.Fill(fill, t.Accent, 2)
@@ -235,14 +239,14 @@ func presetSaveSegments(c *ui.Context, options *presetSaveOptions, disabled bool
 	}
 	t := c.Theme()
 	parts := ui.SegmentedBase(c.Key("preset-save-mode"), &mode, 3)
-	parts.Track.Label("保存到").FillWidth().Height(36).Padding(4).Radius(8).
-		Background(stageBackground(c)).Border(1, t.Border).AlignItems(ui.Stretch).Disabled(disabled).Children(func() {
+	parts.Track.Label("保存到").FillWidth().Height(36).Padding(4).Radius(pillRadius(36, c)).
+		Background(panelStageBackground(c)).Border(1, glassBorder(c)).AlignItems(ui.Stretch).Disabled(disabled).Children(func() {
 		for index, label := range [...]string{"原文件夹", "每次询问", "固定输出目录"} {
-			segment := parts.Segment(index).Label(label).Radius(4).Center().
+			segment := parts.Segment(index).Label(label).Radius(pillRadius(28, c)).Center().
 				Border(1, ui.Transparent).TextColor(t.TextMuted)
 			weight := 400
 			if mode == index {
-				segment.Background(t.Surface).Border(1, selectionBorder(c)).TextColor(t.Text)
+				segment.Background(glassControlSurface(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
 				weight = 500
 			}
 			segment.Children(func() { ui.Text(c, label).FontSize(13).FontWeight(weight).SingleLine() })
@@ -259,8 +263,8 @@ func presetSaveSegments(c *ui.Context, options *presetSaveOptions, disabled bool
 func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, compact bool) {
 	t := c.Theme()
 	options := &preset.output
-	ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(12).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
+	ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
+		Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetSaveIcon).Size(16, 16).TextColor(t.TextMuted)
 			ui.Text(c, "保存到").FontSize(15).FontWeight(500)
@@ -272,7 +276,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 			s.editor.message = ""
 		}
 		if options.Mode == presetSaveFixed {
-			ui.Row(c).Gap(8).Padding(8, 12).Radius(8).Background(subtleSurface(c)).Border(1, t.Border).
+			ui.Row(c).Gap(8).Padding(8, 12).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
 				AlignItems(ui.Center).Children(func() {
 				path := options.Directory
 				if path == "" {
@@ -303,8 +307,10 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 				}
 				ui.Text(c, folder+"/example.png").FontSize(12).FontFeatures("tnum").
 					TextColor(metadataColor(c)).Width(0).Grow(1).MinWidth(120).SingleLine().TruncateMiddle()
-				if ui.TextInput(c.Key("preset-subfolder-name"), &options.Subfolder).Label("子文件夹名称").
-					Placeholder(defaultSubfolderName).Width(148).Height(32).Disabled(s.busy || !options.UseSubfolder).Changed() {
+				subField := ui.TextInput(c.Key("preset-subfolder-name"), &options.Subfolder).Label("子文件夹名称").
+					Placeholder(defaultSubfolderName).Width(148).Height(32).Disabled(s.busy || !options.UseSubfolder)
+				styleGlassField(subField, c, 32)
+				if subField.Changed() {
 					s.editor.message = ""
 				}
 			})
@@ -327,8 +333,10 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 			}
 			ui.Text(c, "example"+suffix+".png").FontSize(12).FontFeatures("tnum").
 				TextColor(metadataColor(c)).Width(0).Grow(1).MinWidth(120).SingleLine().TruncateMiddle()
-			if ui.TextInput(c.Key("preset-suffix-value"), &options.Suffix).Label("文件名后缀").
-				Placeholder(defaultFilenameSuffix).Width(148).Height(32).Disabled(s.busy || !options.UseSuffix).Changed() {
+			sufField := ui.TextInput(c.Key("preset-suffix-value"), &options.Suffix).Label("文件名后缀").
+				Placeholder(defaultFilenameSuffix).Width(148).Height(32).Disabled(s.busy || !options.UseSuffix)
+			styleGlassField(sufField, c, 32)
+			if sufField.Changed() {
 				s.editor.message = ""
 			}
 		})
