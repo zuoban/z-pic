@@ -57,8 +57,7 @@ func TestDuplicatePresetCopiesCurrentDraft(t *testing.T) {
 			editor.selected = scenario.sourceIndex
 			if scenario.editSource {
 				editor.selectedPreset().name = "未保存参数"
-				application.editQuality(43)
-				application.editPNGOptions(compress.PNGOptions{MinQuality: 12, MaxQuality: 67, Colors: 83, Speed: 9})
+				application.editQualityLevel(2)
 			}
 			editor.selectedPreset().output = presetSaveOptions{Mode: presetSaveAsk, UseSuffix: true, Suffix: "_分享"}
 			editor.selectedPreset().favorite = true
@@ -76,11 +75,10 @@ func TestDuplicatePresetCopiesCurrentDraft(t *testing.T) {
 				!reflect.DeepEqual(editor.presets[:len(originals)], originals) {
 				t.Fatalf("copy must append and select an independent custom draft: editor=%+v", editor)
 			}
-			application.editQuality(26)
-			editedPNG := compress.PNGOptions{MinQuality: 4, MaxQuality: 52, Colors: 32, Speed: 11}
-			application.editPNGOptions(editedPNG)
+			application.editQualityLevel(0)
+			editedPNG := compress.PNGOptions{MinQuality: 20, MaxQuality: 40, Colors: 64, Speed: 5}
 			editor.selectedPreset().name = "编辑后的副本"
-			if editor.selectedPreset().quality != 26 || editor.selectedPreset().png != editedPNG ||
+			if editor.selectedPreset().quality != 40 || editor.selectedPreset().png != editedPNG ||
 				!reflect.DeepEqual(editor.presets[:len(originals)], originals) ||
 				!reflect.DeepEqual(application.presets, published) {
 				t.Fatal("editing a copy must leave the source draft and published schemes unchanged")
@@ -156,8 +154,7 @@ func TestDuplicatePresetCancelSaveAndRestart(t *testing.T) {
 			active := application.editor.active
 			application.editor.selected = 0
 			application.duplicatePreset()
-			application.editQuality(47)
-			application.editPNGOptions(compress.PNGOptions{MinQuality: 15, MaxQuality: 63, Colors: 74, Speed: 8})
+			application.editQualityLevel(2)
 			copyPreset := *application.editor.selectedPreset()
 			afterCopy, err := os.ReadFile(application.settingsFile)
 			if err != nil {
@@ -247,33 +244,30 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	replaceTestPresetName(t, tester, "手机分享")
-	application.editQuality(73)
-	options := compress.PNGOptions{MinQuality: 30, MaxQuality: 70, Colors: 96, Speed: 5}
-	application.editPNGOptions(options)
-	if len(application.presets) != 3 {
+	application.editQualityLevel(2)
+	options := compress.PNGOptions{MinQuality: 50, MaxQuality: 75, Colors: 192, Speed: 3}
+	if len(application.presets) != 1 {
 		t.Fatal("new drafts must not appear among active schemes before saving")
 	}
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
-	if application.settingsOpen || len(application.presets) != 4 {
+	if application.settingsOpen || len(application.presets) != 2 {
 		t.Fatal("saving must close settings and publish the maintained scheme list")
 	}
 	main := ui.NewTester(application.view, 880, 660)
-	presetGroup, ok := main.AccessByRole(ui.RoleRadioGroup, "预设")
-	if !ok {
-		t.Fatal("main window must expose preset selection")
-	}
-	main.Scroll(presetGroup.Bounds.X+presetGroup.Bounds.W/2, presetGroup.Bounds.Y+presetGroup.Bounds.H/2, 1000, 0)
-	if err := main.Click("手机分享"); err != nil {
+	if err := main.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
-	if application.quality != 73 || application.png != options {
+	if err := main.ChooseMenuItem("手机分享"); err != nil {
+		t.Fatal(err)
+	}
+	if application.quality != 70 || application.png != options {
 		t.Fatal("main scheme selection must apply the saved JPEG and PNG parameters")
 	}
 	restarted := newApplication()
 	restarted.restoreSettings()
-	if restarted.scheme != "手机分享" || restarted.quality != 73 || restarted.png != options ||
+	if restarted.scheme != "手机分享" || restarted.quality != 70 || restarted.png != options ||
 		!reflect.DeepEqual(restarted.presets, application.presets) {
 		t.Fatal("saved scheme definitions and the last selection must survive application restart")
 	}
@@ -301,7 +295,7 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	}
 	again := newApplication()
 	again.restoreSettings()
-	if again.scheme != "发送图片" || again.quality != 73 || again.png != options || len(again.presets) != 4 {
+	if again.scheme != "发送图片" || again.quality != 70 || again.png != options || len(again.presets) != 2 {
 		t.Fatal("renaming the active custom scheme and deleting another custom scheme must survive restart")
 	}
 	for _, preset := range again.presets {
@@ -332,7 +326,7 @@ func TestCancelPresetEditsPreservesSavedConfiguration(t *testing.T) {
 			options, presets, message := application.compressionOptions(), slices.Clone(application.presets), application.message
 			tester := openTestSettings(t, application)
 			replaceTestPresetName(t, tester, "未保存的方案")
-			application.editQuality(35)
+			application.editQualityLevel(0)
 			application.addPreset()
 			if exit == "Escape" {
 				tester.Key(0, ui.KeyEscape)
@@ -364,7 +358,7 @@ func TestSettingsSaveFailureKeepsDraftAndCompressionResult(t *testing.T) {
 	original := slices.Clone(application.presets)
 	tester := openTestSettings(t, application)
 	replaceTestPresetName(t, tester, "待保存方案")
-	application.editQuality(45)
+	application.editQualityLevel(1)
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +376,7 @@ func TestSettingsSaveFailureKeepsDraftAndCompressionResult(t *testing.T) {
 }
 
 func TestInvalidPresetNamePreventsPublishingAndSaving(t *testing.T) {
-	for _, name := range []string{"", "体积优先"} {
+	for _, name := range []string{"", "均衡"} {
 		t.Run("name="+name, func(t *testing.T) {
 			application := newApplication()
 			application.presets = append(application.presets, compressionPreset{
@@ -439,12 +433,12 @@ func TestEditingInactivePresetPreservesActiveCompressionResult(t *testing.T) {
 	if err := tester.Click("编辑预设：待调整方案"); err != nil {
 		t.Fatal(err)
 	}
-	application.editQuality(55)
+	application.editQualityLevel(2)
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	if application.result != result || application.scheme != "均衡" || application.quality != 80 ||
-		application.presets[3].quality != 55 {
+		application.presets[3].quality != 70 {
 		t.Fatal("saving an inactive scheme must not invalidate the active result or change active parameters")
 	}
 }
@@ -482,11 +476,22 @@ func TestDeletingActivePresetSelectsValidFallback(t *testing.T) {
 
 func TestStartingPresetsCanBeDeletedUntilOneRemains(t *testing.T) {
 	application := newApplication()
+	if len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
+		t.Fatalf("the initial preset must be balanced: %+v", application.presets)
+	}
 	tester := openTestSettings(t, application)
+	initialDelete, ok := tester.AccessByRole(ui.RoleButton, "删除预设")
+	if !ok || !initialDelete.Disabled {
+		t.Fatal("the single default preset must not be deletable")
+	}
+	application.addPreset()
+	application.addPreset()
+	tester.Frame()
 	for len(application.editor.presets) > 1 {
 		button, ok := tester.AccessByRole(ui.RoleButton, "删除预设")
 		if !ok || button.Disabled {
-			t.Fatal("each starting preset must be deletable while another preset remains")
+			t.Fatal("each preset must be deletable while another preset remains")
 		}
 		if err := tester.Click("删除预设"); err != nil {
 			t.Fatal(err)
@@ -534,9 +539,8 @@ func TestStartingPresetEditsSaveWithoutChangingActiveSelection(t *testing.T) {
 		t.Fatal("starting preset names must be editable")
 	}
 	replaceTestPresetName(t, tester, "社交分享")
-	application.editQuality(57)
-	png := compress.PNGOptions{MinQuality: 25, MaxQuality: 62, Colors: 100, Speed: 6}
-	application.editPNGOptions(png)
+	application.editQualityLevel(2)
+	png := compress.PNGOptions{MinQuality: 50, MaxQuality: 75, Colors: 192, Speed: 3}
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +548,7 @@ func TestStartingPresetEditsSaveWithoutChangingActiveSelection(t *testing.T) {
 		t.Fatal("saving another starting preset must preserve the active selection and result")
 	}
 	loaded, selected, err := loadSettings(application.settingsFile)
-	if err != nil || selected != "均衡" || loaded[0].name != "社交分享" || loaded[0].quality != 57 || loaded[0].png != png {
+	if err != nil || selected != "均衡" || loaded[0].name != "社交分享" || loaded[0].quality != 70 || loaded[0].png != png {
 		t.Fatalf("all edited starting preset parameters must survive reload: presets=%+v selected=%q err=%v", loaded, selected, err)
 	}
 }
@@ -553,10 +557,10 @@ func TestOpeningSettingsAgainKeepsUnsavedDraft(t *testing.T) {
 	application := newApplication()
 	openTestSettings(t, application)
 	application.addPreset()
-	application.editQuality(35)
+	application.editQualityLevel(0)
 	editor := application.editor
 	application.setSettingsOpen(true)
-	if application.editor != editor || application.editor.presets[application.editor.selected].quality != 35 {
+	if application.editor != editor || application.editor.presets[application.editor.selected].quality != 40 {
 		t.Fatal("reopening an existing settings window must preserve its current draft")
 	}
 	application.setScheme("体积优先")
@@ -575,17 +579,18 @@ func TestRestoreInvalidSettingsUsesDefaultsWithoutOverwritingFile(t *testing.T) 
 	application := newApplication()
 	application.restoreSettings()
 	if !application.failed || !strings.Contains(application.message, "读取压缩预设失败") ||
-		application.scheme != "均衡" || !reflect.DeepEqual(application.presets, compressionPresets) {
+		application.scheme != "均衡" || len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
 		t.Fatal("a corrupt startup configuration must use defaults and expose its error")
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(after, invalid) {
 		t.Fatal("recovering defaults must not overwrite the invalid configuration")
 	}
-	application.setScheme("体积优先")
+	application.setScheme("均衡")
 	after, err = os.ReadFile(path)
 	if err != nil || !bytes.Equal(after, invalid) {
-		t.Fatal("switching fallback schemes must not overwrite a corrupt configuration")
+		t.Fatal("selecting the fallback scheme must not overwrite a corrupt configuration")
 	}
 	tester := openTestSettings(t, application)
 	if application.editor.message == "" {
@@ -598,7 +603,7 @@ func TestRestoreInvalidSettingsUsesDefaultsWithoutOverwritingFile(t *testing.T) 
 		t.Fatal("explicitly saving recovered settings must clear the startup error")
 	}
 	_, selected, err := loadSettings(path)
-	if err != nil || selected != "体积优先" {
+	if err != nil || selected != "均衡" {
 		t.Fatalf("an explicit save must repair the configuration: selected=%q err=%v", selected, err)
 	}
 }
@@ -616,11 +621,16 @@ func TestFailedSelectionSavePreservesActiveSchemeAndResult(t *testing.T) {
 
 func TestNewPresetUsesBalancedDefaultsAndUniqueName(t *testing.T) {
 	application := newApplication()
+	if len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
+		t.Fatalf("new presets must start from the single balanced default: %+v", application.presets)
+	}
 	openTestSettings(t, application)
 	active := application.editor.active
 	application.addPreset()
 	preset := *application.editor.selectedPreset()
-	if preset.name != "新预设" || preset.quality != 80 || preset.png != compress.DefaultPNGOptions() ||
+	if len(application.editor.presets) != 2 || len(application.presets) != 1 ||
+		preset.name != "新预设" || preset.quality != 80 || preset.png != compress.DefaultPNGOptions() ||
 		preset.output != (presetSaveOptions{}) || preset.favorite || application.editor.active != active {
 		t.Fatalf("new presets must use balanced parameters without replacing the active preset: %+v", preset)
 	}
@@ -681,7 +691,7 @@ func TestImageQualityLevelsControlAllFormats(t *testing.T) {
 			t.Fatalf("level %d must update JPEG, WebP and PNG together: %+v", index, preset)
 		}
 		if application.editor.active != 1 || application.scheme != "均衡" || application.quality != 80 ||
-			application.result != result || !reflect.DeepEqual(application.presets, compressionPresets) {
+			application.result != result || !reflect.DeepEqual(application.presets, testLegacyPresets()) {
 			t.Fatal("editing a level must remain an isolated draft until saved")
 		}
 	}
@@ -780,5 +790,52 @@ func TestPresetOutputAndFavoriteSaveCancelAndRestart(t *testing.T) {
 				t.Fatal("only saved output settings and favorites must survive restart without discarding compressed data")
 			}
 		})
+	}
+}
+
+func TestPresetSubfolderAvailableForOriginalAndFixed(t *testing.T) {
+	application := newApplication()
+	tester := openTestSettings(t, application)
+	draft := application.editor.selectedPreset()
+	draft.output.Directory = t.TempDir()
+	draft.output.UseSubfolder, draft.output.Subfolder = true, "分享"
+	tester.Frame()
+	for _, step := range []struct {
+		label   string
+		visible bool
+	}{
+		{"原文件夹", true},
+		{"每次询问", false},
+		{"固定输出目录", true},
+		{"原文件夹", true},
+		{"每次询问", false},
+		{"固定输出目录", true},
+		{"原文件夹", true},
+	} {
+		if err := tester.Click(step.label); err != nil {
+			t.Fatal(err)
+		}
+		checkbox, hasCheckbox := tester.AccessByRole(ui.RoleCheckBox, "保存到子文件夹")
+		field, hasField := tester.AccessByRole(ui.RoleTextField, "子文件夹名称")
+		if hasCheckbox != step.visible || hasField != step.visible {
+			t.Fatalf("subfolder controls must only appear for original or fixed directories: mode=%s checkbox=%v field=%v", step.label, hasCheckbox, hasField)
+		}
+		if step.visible && (!checkbox.Checked || checkbox.Disabled || field.Disabled || field.Value != "分享") {
+			t.Fatalf("returning to a supported directory must restore editable subfolder preferences: checkbox=%+v field=%+v", checkbox, field)
+		}
+		if !draft.output.UseSubfolder || draft.output.Subfolder != "分享" {
+			t.Fatal("switching destinations must retain the subfolder preference")
+		}
+		if application.output != (presetSaveOptions{}) {
+			t.Fatal("destination edits must remain in the draft until saved")
+		}
+	}
+	if err := tester.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := loadSettings(application.settingsFile)
+	if err != nil || len(loaded) != 1 || loaded[0].output != application.output ||
+		application.output.Mode != presetSaveOriginal || !application.output.UseSubfolder || application.output.Subfolder != "分享" {
+		t.Fatalf("saving must preserve the original-folder subfolder preference: loaded=%+v output=%+v err=%v", loaded, application.output, err)
 	}
 }

@@ -216,18 +216,22 @@ func TestWebPQualityLabelUsesPersistedQuality(t *testing.T) {
 		t.Fatal(err)
 	}
 	replaceTestPresetName(t, tester, "WebP 分享")
-	app.editQuality(37)
+	app.editQualityLevel(0)
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	main := ui.NewTester(app.view, 880, 660)
-	if err := main.Click("WebP 分享"); err != nil {
+	if err := main.Click("选择预设"); err != nil {
+		t.Fatal(err)
+	}
+	if err := main.ChooseMenuItem("WebP 分享"); err != nil {
 		t.Fatal(err)
 	}
 	restarted := newApplication()
 	restarted.restoreSettings()
-	if restarted.scheme != "WebP 分享" || restarted.quality != 37 ||
-		restarted.compressionOptions().Quality != 37 || restarted.png != app.png {
+	if restarted.scheme != "WebP 分享" || restarted.quality != 40 ||
+		restarted.compressionOptions().Quality != 40 || restarted.png != app.png ||
+		restarted.png != (compress.PNGOptions{MinQuality: 20, MaxQuality: 40, Colors: 64, Speed: 5}) {
 		t.Fatalf("shared quality did not survive restart: scheme=%q quality=%v", restarted.scheme, restarted.quality)
 	}
 }
@@ -255,6 +259,7 @@ func TestWebPMixedBatchFolderExportAndRecompression(t *testing.T) {
 		t.Fatalf("mixed queue scan = %+v, %v", scan, err)
 	}
 	app := newApplication()
+	app.presets = testLegacyPresets()
 	app.setScheme("体积优先")
 	app.batch = newBatchState(scan.items)
 	app.batch.outputMode, app.batch.outputDir = batchOutputFolder, outputDir

@@ -94,12 +94,6 @@ func (s *application) settingsView(c *ui.Context) {
 						OnClick(func() { editor.active = editor.selected })
 				}
 			})
-			ui.Collapsible(c.Key("format-settings"), "高级压缩参数", &s.advanced, func() {
-				ui.Column(c).Gap(12).Padding(16, 0).Children(func() {
-					s.settingSlider(c, "quality", "JPEG / WebP 质量", preset.quality, 1, 100, s.editQuality)
-					s.pngSettings(c)
-				})
-			})
 		})
 		if editor.confirmDelete {
 			ui.Row(c).Padding(12, 24).Gap(8).Background(t.Surface).AlignItems(ui.Center).Children(func() {
@@ -175,7 +169,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 			ui.Icon(c, presetQualityIcon).Size(20, 20)
 			ui.Text(c, "图片质量").FontSize(16).FontWeight(600)
 			ui.Icon(c, presetInfoIcon).Size(16, 16).TextColor(t.TextMuted).
-				Tooltip(fmt.Sprintf("JPEG / WebP：%.0f；PNG：%d–%d，%d 色。高级参数可单独调整。", preset.quality, preset.png.MinQuality, preset.png.MaxQuality, preset.png.Colors))
+				Tooltip("压缩参数随图片质量自动调整。质量越高，越接近原图；质量越低，文件通常越小。")
 			ui.Box(c).Grow(1)
 			ui.Text(c, presetQualityLabel(preset)).FontSize(14).FontWeight(500).TextColor(t.TextMuted).SingleLine()
 		})
@@ -260,39 +254,41 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 					Disabled(s.busy).OnClick(s.choosePresetOutputDirectory)
 			})
 		}
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			if ui.Checkbox(c.Key("preset-subfolder"), &options.UseSubfolder, "保存到子文件夹").
-				Width(180).Disabled(s.busy).Changed() {
-				if options.UseSubfolder && options.Subfolder == "" {
-					options.Subfolder = "zipic"
+		if options.supportsSubfolder() {
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				if ui.Checkbox(c.Key("preset-subfolder"), &options.UseSubfolder, "保存到子文件夹").
+					Width(180).Disabled(s.busy).Changed() {
+					if options.UseSubfolder && options.Subfolder == "" {
+						options.Subfolder = defaultSubfolderName
+					}
+					s.editor.message = ""
 				}
-				s.editor.message = ""
-			}
-			folder := options.Subfolder
-			if folder == "" {
-				folder = "zipic"
-			}
-			ui.Text(c, folder+"/example.png").FontSize(13).Width(0).Grow(1).SingleLine().TruncateMiddle()
-			if ui.TextInput(c.Key("preset-subfolder-name"), &options.Subfolder).Label("子文件夹名称").
-				Placeholder("zipic").Width(144).Height(36).Disabled(s.busy || !options.UseSubfolder).Changed() {
-				s.editor.message = ""
-			}
-		})
+				folder := options.Subfolder
+				if folder == "" {
+					folder = defaultSubfolderName
+				}
+				ui.Text(c, folder+"/example.png").FontSize(13).Width(0).Grow(1).SingleLine().TruncateMiddle()
+				if ui.TextInput(c.Key("preset-subfolder-name"), &options.Subfolder).Label("子文件夹名称").
+					Placeholder(defaultSubfolderName).Width(144).Height(36).Disabled(s.busy || !options.UseSubfolder).Changed() {
+					s.editor.message = ""
+				}
+			})
+		}
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			if ui.Checkbox(c.Key("preset-suffix"), &options.UseSuffix, "添加后缀").
 				Width(180).Disabled(s.busy).Changed() {
 				if options.UseSuffix && options.Suffix == "" {
-					options.Suffix = "-zipic"
+					options.Suffix = defaultFilenameSuffix
 				}
 				s.editor.message = ""
 			}
 			suffix := options.Suffix
 			if suffix == "" {
-				suffix = "-zipic"
+				suffix = defaultFilenameSuffix
 			}
 			ui.Text(c, "example"+suffix+".png").FontSize(13).Width(0).Grow(1).SingleLine().TruncateMiddle()
 			if ui.TextInput(c.Key("preset-suffix-value"), &options.Suffix).Label("文件名后缀").
-				Placeholder("-zipic").Width(144).Height(36).Disabled(s.busy || !options.UseSuffix).Changed() {
+				Placeholder(defaultFilenameSuffix).Width(144).Height(36).Disabled(s.busy || !options.UseSuffix).Changed() {
 				s.editor.message = ""
 			}
 		})

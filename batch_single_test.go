@@ -43,6 +43,7 @@ func TestBatchCompressSinglePendingItem(t *testing.T) {
 
 			updates := make(chan func(), 8)
 			app := newApplication()
+			app.presets = testLegacyPresets()
 			app.dispatchUpdate = func(update func()) { updates <- update }
 			app.setScheme("体积优先")
 			app.batch = newBatchState(scan.items)

@@ -39,6 +39,7 @@ func TestBatchRestartProcessesEverySourceWithQueuedUpdates(t *testing.T) {
 			}
 			updates := make(chan func(), len(paths)*2+1)
 			app := newApplication()
+			app.presets = testLegacyPresets()
 			app.dispatchUpdate = func(update func()) { updates <- update }
 			app.setScheme("画质优先")
 			app.batch = newBatchState(scan.items)
@@ -70,6 +71,10 @@ func TestBatchRestartProcessesEverySourceWithQueuedUpdates(t *testing.T) {
 				action := "重新压缩"
 				if run == 0 {
 					action = "开始压缩"
+				}
+				button, ok := tester.AccessByRole(ui.RoleButton, action)
+				if !ok || button.Disabled || button.Offscreen || button.Bounds.Y > 80 || button.Bounds.H != 32 {
+					t.Fatalf("run %d must use the enabled top compression action: %+v", run, button)
 				}
 				if err := tester.Click(action); err != nil {
 					t.Fatal(err)

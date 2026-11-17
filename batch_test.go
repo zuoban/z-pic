@@ -257,6 +257,7 @@ func TestBatchFolderCompressionEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newApplication()
+	s.presets = testLegacyPresets()
 	s.setScheme("体积优先")
 	s.batch = newBatchState(scan.items)
 	s.batch.outputMode = batchOutputFolder
@@ -316,6 +317,7 @@ func TestBatchOverwriteRequiresConfirmationAndSkipsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newApplication()
+	s.presets = testLegacyPresets()
 	s.setScheme("画质优先") // quality 92
 	s.batch = newBatchState(scan.items)
 	s.batch.outputMode = batchOutputOverwrite
@@ -424,6 +426,7 @@ func TestBatchMidRunCancellationResumesRemaining(t *testing.T) {
 
 func TestBatchSchemeAndOutputSwitchInvalidateResults(t *testing.T) {
 	s := newApplication()
+	s.presets = testLegacyPresets()
 	s.batch = newBatchState([]batchItem{
 		{path: "/a.jpg", absPath: "/a.jpg", relPath: "a.jpg", format: "jpeg", width: 100, height: 100, originalSize: 5000, outputSize: 2000, status: batchDone, savedPath: "/out/a.jpg"},
 		{path: "/bad.jpg", absPath: "/bad.jpg", relPath: "bad.jpg", status: batchFailed, invalidInput: true, errMsg: "损坏"},
@@ -1805,5 +1808,117 @@ func TestBatchRevealOutputFile(t *testing.T) {
 	if !s.failed || !strings.Contains(s.message, "找不到输出文件") || len(revealed) != 3 {
 		t.Fatalf("missing output file in preview must report error instead of revealing: failed=%v msg=%q revealed=%v",
 			s.failed, s.message, revealed)
+	}
+}
+
+func TestBatchCompressionActionsStayInTopToolbar(t *testing.T) {
+	for _, state := range []struct {
+		name     string
+		statuses []batchStatus
+		busy     bool
+		preview  bool
+		invalid  bool
+		actions  []string
+	}{
+		{name: "initial", statuses: []batchStatus{batchPending, batchPending}, actions: []string{"开始压缩"}},
+		{name: "partial", statuses: []batchStatus{batchDone, batchPending}, actions: []string{"重新压缩", "继续压缩"}},
+		{name: "complete", statuses: []batchStatus{batchDone, batchDone}, actions: []string{"重新压缩"}},
+		{name: "busy", statuses: []batchStatus{batchDone, batchPending}, busy: true, actions: []string{"重新压缩", "继续压缩"}},
+		{name: "preview", statuses: []batchStatus{batchPending, batchPending}, preview: true, actions: []string{"开始压缩"}},
+		{name: "unprocessable", statuses: []batchStatus{batchPending}, invalid: true, actions: []string{"开始压缩"}},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			s := testSelectedApplication()
+			items := make([]batchItem, len(state.statuses))
+			for i, status := range state.statuses {
+				path := s.file.path
+				if i > 0 {
+					path = fmt.Sprintf("/photos/image-%d.jpg", i)
+				}
+				items[i] = batchItem{path: path, absPath: path, relPath: fmt.Sprintf("image-%d.jpg", i), format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048, status: status, invalidInput: state.invalid}
+			}
+			s.batch = newBatchState(items)
+			s.batch.outputMode = batchOutputOverwrite
+			if state.preview {
+				s.completeBatchPreview(context.Background(), 0, s.batch.items[0], s.file, nil, nil, nil)
+			}
+			s.busy = state.busy
+			tester := ui.NewTester(s.view, 760, 660)
+			toolbar, ok := tester.AccessByRole(ui.RoleToolbar, "操作栏")
+			if !ok || toolbar.Offscreen || toolbar.Bounds.Y > 80 {
+				t.Fatalf("compression actions need a visible top toolbar: %+v", toolbar)
+			}
+			for _, label := range []string{"开始压缩", "继续压缩", "重新压缩"} {
+				count := 0
+				for _, button := range tester.AccessAll() {
+					if button.Role != ui.RoleButton || button.Name != label {
+						continue
+					}
+					count++
+					if button.Offscreen || button.Bounds.Y < toolbar.Bounds.Y || button.Bounds.Y > 80 ||
+						button.Bounds.H != 32 || button.Bounds.X < 0 || button.Bounds.X+button.Bounds.W > 760 ||
+						button.Bounds.Y+button.Bounds.H > toolbar.Bounds.Y+toolbar.Bounds.H {
+						t.Fatalf("%q must appear only inside the top toolbar at minimum width: %+v toolbar=%+v", label, button, toolbar)
+					}
+					if button.Disabled != (state.busy || state.preview || state.invalid) {
+						t.Fatalf("%q has incorrect disabled state: %+v", label, button)
+					}
+				}
+				want := 0
+				for _, action := range state.actions {
+					if action == label {
+						want = 1
+					}
+				}
+				if count != want {
+					t.Fatalf("%q must occur exactly %d times, got %d", label, want, count)
+				}
+			}
+			if state.preview {
+				button, ok := tester.AccessByRole(ui.RoleButton, "压缩此张")
+				if !ok || button.Disabled || button.Offscreen {
+					t.Fatalf("preview must retain its enabled single-item action: %+v", button)
+				}
+			}
+		})
+	}
+}
+
+func TestBatchOutputDirectoryActionStaysWithResults(t *testing.T) {
+	for _, state := range []struct {
+		name       string
+		mode       int
+		directory  string
+		statuses   []batchStatus
+		busy       bool
+		wantButton bool
+	}{
+		{name: "completed-folder", mode: batchOutputFolder, directory: "/out", statuses: []batchStatus{batchDone}, wantButton: true},
+		{name: "busy-completed-folder", mode: batchOutputFolder, directory: "/out", statuses: []batchStatus{batchDone}, busy: true, wantButton: true},
+		{name: "partial-folder", mode: batchOutputFolder, directory: "/out", statuses: []batchStatus{batchDone, batchPending}},
+		{name: "pending-folder", mode: batchOutputFolder, directory: "/out", statuses: []batchStatus{batchPending}},
+		{name: "missing-directory", mode: batchOutputFolder, statuses: []batchStatus{batchDone}},
+		{name: "overwrite", mode: batchOutputOverwrite, directory: "/out", statuses: []batchStatus{batchDone}},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			s := newApplication()
+			items := make([]batchItem, len(state.statuses))
+			for i, status := range state.statuses {
+				path := fmt.Sprintf("/photos/%d.jpg", i)
+				items[i] = batchItem{path: path, absPath: path, relPath: fmt.Sprintf("%d.jpg", i), format: "jpeg", width: 24, height: 16, originalSize: 4096, outputSize: 2048, status: status}
+			}
+			s.batch = newBatchState(items)
+			s.batch.outputMode, s.batch.outputDir = state.mode, state.directory
+			s.busy = state.busy
+			tester := ui.NewTester(s.view, 760, 660)
+			button, ok := tester.AccessByRole(ui.RoleButton, "打开输出文件夹")
+			if ok != state.wantButton {
+				t.Fatalf("output-directory action visibility=%v, want %v", ok, state.wantButton)
+			}
+			if ok && (button.Offscreen || button.Disabled != state.busy || button.Bounds.Y <= 80 ||
+				button.Bounds.X < 380 || button.Bounds.X+button.Bounds.W > 760 || button.Bounds.Y+button.Bounds.H > 660) {
+				t.Fatalf("output-directory action must stay in the right results area with its busy guard: %+v", button)
+			}
+		})
 	}
 }

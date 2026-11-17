@@ -22,9 +22,7 @@ type compressionPreset struct {
 }
 
 var compressionPresets = []compressionPreset{
-	{name: "体积优先", quality: 60, png: compress.PNGOptions{MinQuality: 40, MaxQuality: 65, Colors: 128, Speed: 3}},
 	{name: "均衡", quality: 80, png: compress.DefaultPNGOptions()},
-	{name: "画质优先", quality: 92, png: compress.PNGOptions{MinQuality: 85, MaxQuality: 100, Colors: 256, Speed: 1}},
 }
 
 type imageQualityLevel struct {
@@ -178,25 +176,6 @@ func (s *application) applyScheme(name string) {
 	}
 }
 
-func (s *application) editQuality(quality float64) {
-	if s.busy || s.editor.selectedPreset() == nil {
-		return
-	}
-	s.editor.presets[s.editor.selected].quality = math.Round(min(100, max(1, quality)))
-	s.editor.message = ""
-}
-
-func (s *application) editPNGOptions(options compress.PNGOptions) {
-	if s.busy || s.editor.selectedPreset() == nil || options.Validate() != nil {
-		return
-	}
-	if options == (compress.PNGOptions{}) {
-		options = compress.DefaultPNGOptions()
-	}
-	s.editor.presets[s.editor.selected].png = options
-	s.editor.message = ""
-}
-
 func (s *application) editQualityLevel(level int) {
 	if s.busy || s.editor.selectedPreset() == nil || level < 0 || level >= len(imageQualityLevels) {
 		return
@@ -212,7 +191,7 @@ func (s *application) addPreset() {
 		return
 	}
 	editor := s.editor
-	preset := compressionPresets[1]
+	preset := compressionPresets[0]
 	preset.name = "新预设"
 	for number := 2; slices.ContainsFunc(editor.presets, func(existing compressionPreset) bool {
 		return strings.TrimSpace(existing.name) == preset.name

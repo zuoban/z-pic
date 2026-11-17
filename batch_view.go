@@ -487,10 +487,12 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 	})
 }
 
-func (s *application) batchControls(c *ui.Context) {
+func (s *application) batchControls(c *ui.Context, showOutput bool) {
 	t := c.Theme()
-	s.batchOutputCard(c)
-	s.batchResultSummary(c)
+	ui.Scroll(c.Key("batch-compression-summary")).Grow(1).MinHeight(0).FillWidth().Gap(12).Children(func() {
+		s.batchResultSummary(c)
+		s.batchOutputCard(c)
+	})
 	if s.busy {
 		if s.batch.total > 0 {
 			progress := float64(s.batch.done) / float64(s.batch.total)
@@ -512,36 +514,9 @@ func (s *application) batchControls(c *ui.Context) {
 		ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
 			MaxLines(2).Tooltip(s.message)
 	}
-	_, pending, done, _, _, _, canRun := s.batchStats()
-	switch {
-	case (pending > 0 && done == 0) || !canRun:
-		primaryAction(c, "batch-start", "开始压缩", s.busy || !canRun).Height(40).
-			KeyShortcuts(ui.Cmd, ui.KeyEnter).
-			Tooltip("开始批量压缩 · " + shortcutLabel("↵")).
-			OnClick(s.startBatchCompression)
-	case pending > 0 && done > 0:
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Button(c.Key("batch-restart"), "重新压缩").Grow(1).Height(36).
-				Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
-			primaryAction(c, "batch-continue", "继续压缩", s.busy).Grow(1).Height(36).
-				KeyShortcuts(ui.Cmd, ui.KeyEnter).
-				Tooltip("继续压缩剩余图片 · " + shortcutLabel("↵")).
-				OnClick(s.startBatchCompression)
-		})
-	default:
-		if s.batch.outputMode == batchOutputFolder && s.batch.outputDir != "" && done > 0 {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c.Key("batch-restart"), "重新压缩").Grow(1).Height(36).
-					KeyShortcuts(ui.Cmd, ui.KeyEnter).
-					Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
-				primaryAction(c, "batch-open-output", "打开输出文件夹", s.busy).Grow(1).Height(36).
-					OnClick(s.openOutputDir)
-			})
-		} else {
-			ui.Button(c.Key("batch-restart"), "重新压缩").Height(36).
-				KeyShortcuts(ui.Cmd, ui.KeyEnter).
-				Disabled(s.busy || !canRun).OnClick(s.restartBatchCompression)
-		}
+	if showOutput {
+		primaryAction(c, "batch-open-output", "打开输出文件夹", s.busy).Height(36).
+			OnClick(s.openOutputDir)
 	}
 	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 }

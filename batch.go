@@ -1145,6 +1145,7 @@ func (s *application) runBatchTasks(
 		}
 		if outputMode == batchOutputFolder {
 			output := task.output
+			output.UseSubfolder = output.supportsSubfolder() && output.UseSubfolder
 			// A nonempty destination is the immutable directory chosen for this run.
 			if outputDir != "" {
 				output.Mode = presetSaveFixed

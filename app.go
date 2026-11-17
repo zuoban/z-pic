@@ -45,12 +45,10 @@ type application struct {
 	scheme         string
 	png            compress.PNGOptions
 	output         presetSaveOptions
-	advanced       bool
 	settingsOpen   bool
 	settingsFile   string
 	settingsError  string
 	presets        []compressionPreset
-	presetTabName  string
 	editor         *presetEditor
 	result         *compress.Result
 	preview        *ui.Bitmap

@@ -19,6 +19,11 @@ const (
 	presetSaveFixed    presetSaveMode = "fixed"
 )
 
+const (
+	defaultSubfolderName  = "zpic"
+	defaultFilenameSuffix = "-zpic"
+)
+
 type presetSaveOptions struct {
 	Mode         presetSaveMode `json:"mode,omitempty"`
 	Directory    string         `json:"directory,omitempty"`
@@ -32,6 +37,10 @@ func validOutputComponent(value string) bool {
 	return value != "." && !strings.Contains(value, "..") && !strings.ContainsAny(value, `/\\`) && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
+func (o presetSaveOptions) supportsSubfolder() bool {
+	return o.Mode == presetSaveOriginal || o.Mode == presetSaveFixed
+}
+
 func (o presetSaveOptions) validate() error {
 	if o.Mode != presetSaveOriginal && o.Mode != presetSaveAsk && o.Mode != presetSaveFixed {
 		return errors.New("未知的保存方式")
@@ -39,7 +48,7 @@ func (o presetSaveOptions) validate() error {
 	if o.Mode == presetSaveFixed && o.Directory != "" && !filepath.IsAbs(o.Directory) {
 		return errors.New("固定输出目录必须是绝对路径")
 	}
-	if o.UseSubfolder && !validOutputComponent(o.Subfolder) {
+	if o.supportsSubfolder() && o.UseSubfolder && !validOutputComponent(o.Subfolder) {
 		return errors.New("子文件夹必须是单个合法名称")
 	}
 	if o.UseSuffix && !validOutputComponent(o.Suffix) {
@@ -92,10 +101,10 @@ func (o presetSaveOptions) copyPath(source, root, rel string, used map[string]bo
 	if !info.IsDir() {
 		return "", errors.New("输出位置不是文件夹")
 	}
-	if o.UseSubfolder {
+	if o.supportsSubfolder() && o.UseSubfolder {
 		name := o.Subfolder
 		if name == "" {
-			name = "zipic"
+			name = defaultSubfolderName
 		}
 		root = filepath.Join(root, name)
 	}
@@ -103,7 +112,7 @@ func (o presetSaveOptions) copyPath(source, root, rel string, used map[string]bo
 	if o.UseSuffix {
 		suffix := o.Suffix
 		if suffix == "" {
-			suffix = "-zipic"
+			suffix = defaultFilenameSuffix
 		}
 		ext := filepath.Ext(rel)
 		rel = strings.TrimSuffix(rel, ext) + suffix + ext

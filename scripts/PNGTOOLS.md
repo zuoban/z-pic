@@ -54,12 +54,13 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
   `caBX`/`iDOT` inputs return unchanged because changing file bytes invalidates
   their signatures/offsets (confirmed in upstream `src/png/mod.rs`).
 - pngquant default: `--quality=65-85 --speed=3 --skip-if-larger --output - 256 -`.
-  The selected scheme/custom settings supply `--quality=<min>-<max>`,
+  The selected image-quality level supplies `--quality=<min>-<max>`,
   `--speed=<speed>`, and the positional color cap. Valid ranges: minimum
   0–100, target 1–100 with minimum <= target, colors 2–256, speed 1–11.
   The all-zero options value uses the defaults; partially specified invalid
-  configurations fail before execution. The UI's preset values are documented
-  in README.md. There is no separate lossless mode.
+  configurations fail before execution. The UI adjusts all PNG parameters with
+  image quality; presets and legacy custom values are documented in README.md.
+  There is no separate lossless mode.
   Exit 98/99 discards stdout and returns the exact original input without error.
   Caller then runs Optimize and validates dimensions/output PNG.
 
