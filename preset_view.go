@@ -9,13 +9,11 @@ import (
 )
 
 var (
-	presetPlusIcon        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg>`))
-	presetCheckIcon       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 4.9 8.6 9.5 3.6"/></svg>`))
-	presetQualityIcon     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5h2.5m3.5 0h6M2 11h6m3.5 0H14"/><circle cx="6.25" cy="5" r="1.75"/><circle cx="9.75" cy="11" r="1.75"/></svg>`))
-	presetSaveIcon        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.25A1.25 1.25 0 0 1 3.75 3h2.6l1.4 1.5h4.5A1.25 1.25 0 0 1 13.5 5.75v6A1.25 1.25 0 0 1 12.25 13h-8.5A1.25 1.25 0 0 1 2.5 11.75Z"/></svg>`))
-	presetInfoIcon        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v3.5M8 5.1v.15"/></svg>`))
-	presetHeartIcon       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M13.6 3.4a3.5 3.5 0 0 0-4.95 0L8 4.05l-.65-.65a3.5 3.5 0 0 0-4.95 4.95L8 13.95l5.6-5.6a3.5 3.5 0 0 0 0-4.95Z"/></svg>`))
-	presetHeartFilledIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 3.4a3.5 3.5 0 0 0-4.95 0L8 4.05l-.65-.65a3.5 3.5 0 0 0-4.95 4.95L8 13.95l5.6-5.6a3.5 3.5 0 0 0 0-4.95Z"/></svg>`))
+	presetPlusIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg>`))
+	presetCheckIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 4.9 8.6 9.5 3.6"/></svg>`))
+	presetQualityIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5h2.5m3.5 0h6M2 11h6m3.5 0H14"/><circle cx="6.25" cy="5" r="1.75"/><circle cx="9.75" cy="11" r="1.75"/></svg>`))
+	presetSaveIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.25A1.25 1.25 0 0 1 3.75 3h2.6l1.4 1.5h4.5A1.25 1.25 0 0 1 13.5 5.75v6A1.25 1.25 0 0 1 12.25 13h-8.5A1.25 1.25 0 0 1 2.5 11.75Z"/></svg>`))
+	presetInfoIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v3.5M8 5.1v.15"/></svg>`))
 )
 
 func presetActiveIndicator(c *ui.Context) {
@@ -55,22 +53,15 @@ func presetSaveDescription(options presetSaveOptions) string {
 	}
 }
 
-func (s *application) settingsView(c *ui.Context) {
-	s.applyTheme(c)
+func (s *application) presetSettingsContent(c *ui.Context) {
 	editor := s.editor
-	if editor == nil || editor.selectedPreset() == nil {
-		return
-	}
-	t := c.Theme()
 	width, _ := c.Size()
 	compact := width < 560
 	bodyPad := float32(24)
 	if compact {
 		bodyPad = 16
 	}
-	c.OnWindowShortcut(0, ui.KeyEscape, func() { s.setSettingsOpen(false) })
-	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.savePresetEdits)
-	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("预设设置").Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		s.presetEditorTabs(c)
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(bodyPad).Gap(16).Children(func() {
@@ -82,64 +73,15 @@ func (s *application) settingsView(c *ui.Context) {
 					Background(ui.Transparent).Border(0, ui.Transparent).Disabled(s.busy).Changed() {
 					editor.message = ""
 				}
-				icon, label := presetHeartIcon, "收藏预设"
-				if preset.favorite {
-					icon, label = presetHeartFilledIcon, "取消收藏预设"
-				}
-				button := ui.ButtonBase(c.Key("favorite-preset")).Size(32, 32).Center().Radius(pillRadius(32, c)).
-					Background(glassControlSurface(c)).Border(1, glassBorder(c)).
-					Label(label).Tooltip(label).Disabled(s.busy).OnClick(func() { preset.favorite = !preset.favorite })
-				if button.Hovered() && !s.busy {
-					button.Background(glassControlHover(c))
-				}
-				if preset.favorite {
-					button.TextColor(accentForeground(t)).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+				if editor.active == editor.selected {
+					presetActiveIndicator(c)
 				} else {
-					button.TextColor(t.TextMuted)
+					quietButton(c, "activate-preset", "设为当前预设", 32, s.busy || editor.confirmDelete).
+						OnClick(func() { s.selectSettingsPreset(editor.selected) })
 				}
-				button.Children(func() { ui.Icon(c, icon).Size(16, 16) })
 			})
 			s.presetQualityCard(c, *preset)
 			s.presetSaveCard(c, preset, compact)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				if editor.active == editor.selected {
-					presetActiveIndicator(c)
-					ui.Text(c, "当前使用的预设").FontSize(12).TextColor(t.TextMuted)
-				} else {
-					quietButton(c, "activate-preset", "设为当前预设", 32, s.busy).
-						OnClick(func() { editor.active = editor.selected })
-				}
-			})
-		})
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-		if editor.confirmDelete {
-			ui.Row(c).Padding(12, bodyPad).Gap(8).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
-				ui.Textf(c, "删除「%s」？保存后生效。", editor.selectedPreset().name).
-					FontSize(12).Width(0).Grow(1).SingleLine().TruncateMiddle()
-				quietButton(c, "cancel-delete", "保留预设", 32, false).
-					OnClick(func() { editor.confirmDelete = false })
-				quietButton(c, "confirm-delete", "确认删除", 32, false).TextColor(t.Danger).
-					OnClick(s.deletePreset)
-			})
-			ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-		}
-		ui.Column(c).Padding(12, bodyPad).Gap(8).Background(panelSurface(c)).Children(func() {
-			message, color, role := "保存后生效，关闭应用仍会保留", t.TextMuted, ui.RoleStatus
-			if editor.message != "" {
-				message, color, role = editor.message, t.Danger, ui.RoleAlert
-			}
-			ui.Text(c, message).FontSize(12).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
-			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-				quietButton(c, "duplicate-preset", "复制预设", 36, s.busy).
-					OnClick(s.duplicatePreset)
-				quietButton(c, "delete-preset", "删除预设", 36, s.busy || len(editor.presets) <= 1).
-					TextColor(t.Danger).OnClick(s.requestDeletePreset)
-				ui.Box(c).Grow(1)
-				quietButton(c, "cancel-settings", "取消", 36, s.busy).Width(72).
-					OnClick(func() { s.setSettingsOpen(false) })
-				primaryAction(c, "save-settings", "保存", s.busy || editor.confirmDelete).Width(88).Height(36).
-					KeyShortcuts(ui.Cmd, ui.KeyS).OnClick(s.savePresetEdits)
-			})
 		})
 	})
 }

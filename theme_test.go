@@ -118,7 +118,7 @@ func TestThemePreservesAccessibilityPreferences(t *testing.T) {
 	}
 }
 
-func TestThemePickerSelectionKeyboardAndDismissal(t *testing.T) {
+func TestThemeSelectionIsAvailableOnlyInSettings(t *testing.T) {
 	s := testSelectedApplication()
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	nativeSource := mygo.ThemeSystem
@@ -127,55 +127,44 @@ func TestThemePickerSelectionKeyboardAndDismissal(t *testing.T) {
 	s.result = result
 
 	tt := ui.NewTester(s.view, 980, 720)
-	picker, ok := tt.AccessByRole(ui.RoleMenuButton, "主题")
-	if !ok || picker.Disabled {
-		t.Fatalf("main toolbar must expose an enabled theme menu button: %+v", picker)
+	if _, ok := tt.AccessByRole(ui.RoleMenuButton, "主题"); ok {
+		t.Fatal("main toolbar must not expose a theme menu")
 	}
 	if s.effectiveThemeMode() != themeSystem || nativeSource != mygo.ThemeSystem {
 		t.Fatalf("default theme must follow system: app=%q source=%q", s.theme, nativeSource)
 	}
 
-	if err := tt.Click("主题"); err != nil {
+	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
 	}
+	settings := ui.NewTester(s.settingsView, 640, 600)
 	for _, option := range themeOptions {
-		item, ok := tt.AccessByRole(ui.RoleMenuItemRadio, option.label)
+		item, ok := settings.AccessByRole(ui.RoleRadio, option.label)
 		if !ok || item.Checked != (option.mode == themeSystem) {
-			t.Fatalf("theme menu must mark only the active option (%s): %+v", option.label, item)
+			t.Fatalf("settings must mark only the active theme (%s): %+v", option.label, item)
 		}
 	}
 
-	tt.Key(0, ui.KeyEscape)
-	if s.effectiveThemeMode() != themeSystem || !tt.Focused("主题") {
-		t.Fatal("Escape must close the theme menu without changing selection and restore focus")
-	}
-	if _, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "跟随系统"); ok {
-		t.Fatal("Escape must dismiss the theme menu")
-	}
-
-	if err := tt.Click("主题"); err != nil {
+	if err := settings.Click("深色"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("深色"); err != nil {
-		t.Fatal(err)
-	}
-	if s.effectiveThemeMode() != themeDark || nativeSource != mygo.ThemeDark || s.result != result {
-		t.Fatalf("choosing dark theme must apply immediately and preserve compression result: theme=%q source=%q result=%v",
+	if s.editor.theme != themeDark || nativeSource != mygo.ThemeDark || s.result != result {
+		t.Fatalf("choosing dark theme must preview immediately and preserve compression result: theme=%q source=%q result=%v",
 			s.theme, nativeSource, s.result)
 	}
 
-	if err := tt.Click("主题"); err != nil {
-		t.Fatal(err)
-	}
-	if item, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "深色"); !ok || !item.Checked {
-		t.Fatalf("reopening must show 深色 checked: %+v", item)
-	}
-	tt.Key(0, ui.KeyHome)
-	tt.Key(0, ui.KeyDown)
-	tt.Key(0, ui.KeyEnter)
-	if s.effectiveThemeMode() != themeLight || nativeSource != mygo.ThemeLight || s.result != result {
+	settings.Key(0, ui.KeyHome)
+	settings.Key(0, ui.KeyRight)
+	settings.Key(0, ui.KeySpace)
+	if s.editor.theme != themeLight || nativeSource != mygo.ThemeLight || s.result != result {
 		t.Fatalf("keyboard selection must apply 浅色 and preserve compression result: theme=%q source=%q",
 			s.theme, nativeSource)
+	}
+	if err := settings.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	if s.effectiveThemeMode() != themeLight || s.settingsOpen {
+		t.Fatal("saving settings must commit the chosen appearance")
 	}
 }
 
@@ -198,7 +187,7 @@ func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
 		mainTester.Frame()
 		floatingTester.Frame()
 		s.settingsOpen = true
-		s.editor = &presetEditor{presets: s.presets}
+		s.editor = &settingsEditor{presets: s.presets, theme: s.effectiveThemeMode()}
 		settingsTester.Frame()
 		s.settingsOpen, s.editor = false, nil
 
@@ -208,8 +197,7 @@ func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
 		if got := floatingTester.Image().RGBAAt(2, 2); got != want {
 			t.Fatalf("%s: floating window background = %+v, want %+v", context, got, want)
 		}
-		// Settings dialog top bar uses SurfaceHover; check content area below tabs (x=4, y=100).
-		if got := settingsTester.Image().RGBAAt(4, 100); got != want {
+		if got := settingsTester.Image().RGBAAt(4, 180); got != want {
 			t.Fatalf("%s: settings window background = %+v, want %+v", context, got, want)
 		}
 	}
@@ -222,33 +210,18 @@ func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
 	assertSurfaceColors(darkBg, "system-dark")
 
 	// Explicit light overrides OS dark across all three views.
-	if err := mainTester.Click("主题"); err != nil {
-		t.Fatal(err)
-	}
-	if err := mainTester.ChooseMenuItem("浅色"); err != nil {
-		t.Fatal(err)
-	}
+	s.setTheme(themeLight)
 	assertSurfaceColors(lightBg, "forced-light-on-dark-os")
 
 	// Explicit dark overrides OS light across all three views.
 	mainTester.SetDark(false)
 	floatingTester.SetDark(false)
 	settingsTester.SetDark(false)
-	if err := mainTester.Click("主题"); err != nil {
-		t.Fatal(err)
-	}
-	if err := mainTester.ChooseMenuItem("深色"); err != nil {
-		t.Fatal(err)
-	}
+	s.setTheme(themeDark)
 	assertSurfaceColors(darkBg, "forced-dark-on-light-os")
 
 	// Returning to system follows OS light again.
-	if err := mainTester.Click("主题"); err != nil {
-		t.Fatal(err)
-	}
-	if err := mainTester.ChooseMenuItem("跟随系统"); err != nil {
-		t.Fatal(err)
-	}
+	s.setTheme(themeSystem)
 	assertSurfaceColors(lightBg, "returned-to-system-light")
 }
 
@@ -380,13 +353,7 @@ func TestThemeErrorHandlingCorruptConfigBusyAndModalGuards(t *testing.T) {
 	busyApp := testSelectedApplication()
 	busyApp.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	busyApp.busy, busyApp.phase = true, "正在压缩图片"
-	busyTester := ui.NewTester(busyApp.view, 880, 660)
-	if err := busyTester.Click("主题"); err != nil {
-		t.Fatal(err)
-	}
-	if err := busyTester.ChooseMenuItem("深色"); err != nil {
-		t.Fatal(err)
-	}
+	busyApp.setTheme(themeDark)
 	if !busyApp.busy || busyApp.effectiveThemeMode() != themeDark {
 		t.Fatal("theme switching during background work must apply cleanly without interrupting work")
 	}
@@ -409,10 +376,8 @@ func TestThemeErrorHandlingCorruptConfigBusyAndModalGuards(t *testing.T) {
 				t.Fatalf("modal state %q must guard setTheme", modal)
 			}
 			tt := ui.NewTester(guarded.view, 880, 660)
-			if modal == "settings" {
-				if picker, ok := tt.AccessByRole(ui.RoleMenuButton, "主题"); !ok || !picker.Disabled {
-					t.Fatalf("theme menu button must be disabled while settings modal is open: %+v", picker)
-				}
+			if _, ok := tt.AccessByRole(ui.RoleMenuButton, "主题"); ok {
+				t.Fatal("main toolbar must not expose a theme menu")
 			}
 		})
 	}
@@ -429,14 +394,14 @@ func TestResponsiveMobileViewportFitsControlsWithoutHorizontalOverflow(t *testin
 			t.Fatalf("mobile toolbar button %q must fit horizontally within %dpx: %+v", label, mobileW, btn)
 		}
 	}
-	for _, label := range []string{"选择预设", "主题"} {
+	for _, label := range []string{"选择预设"} {
 		menuBtn, ok := singleTester.AccessByRole(ui.RoleMenuButton, label)
-		if !ok || menuBtn.Bounds.W <= 0 || menuBtn.Bounds.X < 0 || menuBtn.Bounds.X+menuBtn.Bounds.W > mobileW {
-			t.Fatalf("mobile menu button %q must fit horizontally within %dpx: %+v", label, mobileW, menuBtn)
+		if ok {
+			t.Fatalf("mobile main view must not expose %q: %+v", label, menuBtn)
 		}
 	}
 
-	s.setSettingsOpen(true)
+	s.openPresetSettings()
 	settingsTester := ui.NewTester(s.settingsView, mobileW, 680)
 	for _, label := range []string{"新增预设", "复制预设", "删除预设", "取消", "保存"} {
 		btn, ok := settingsTester.AccessByRole(ui.RoleButton, label)
@@ -466,7 +431,7 @@ func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
 		mainTester.Frame()
 		floatingTester.Frame()
 		s.settingsOpen = true
-		s.editor = &presetEditor{presets: s.presets}
+		s.editor = &settingsEditor{presets: s.presets, theme: s.effectiveThemeMode()}
 		settingsTester.Frame()
 		s.settingsOpen, s.editor = false, nil
 	}
@@ -483,7 +448,7 @@ func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
 	if got := floatingTester.Image().RGBAAt(2, 2); got.A != 0 {
 		t.Fatalf("floating root must be transparent when glass vibrancy is enabled, got %+v", got)
 	}
-	if got := settingsTester.Image().RGBAAt(4, 100); got.A != 0 {
+	if got := settingsTester.Image().RGBAAt(4, 180); got.A != 0 {
 		t.Fatalf("settings root must be transparent when glass vibrancy is enabled, got %+v", got)
 	}
 	// Preview panel surface should be translucent over the glass root.
@@ -517,7 +482,7 @@ func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
 	if got := floatingTester.Image().RGBAAt(2, 2); got != darkBg {
 		t.Fatalf("dark ReduceTransparency fallback floating background = %+v, want %+v", got, darkBg)
 	}
-	if got := settingsTester.Image().RGBAAt(4, 100); got != darkBg {
+	if got := settingsTester.Image().RGBAAt(4, 180); got != darkBg {
 		t.Fatalf("dark ReduceTransparency fallback settings background = %+v, want %+v", got, darkBg)
 	}
 

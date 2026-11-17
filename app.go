@@ -50,7 +50,7 @@ type application struct {
 	settingsFile   string
 	settingsError  string
 	presets        []compressionPreset
-	editor         *presetEditor
+	editor         *settingsEditor
 	result         *compress.Result
 	preview        *ui.Bitmap
 	comparison     comparisonView

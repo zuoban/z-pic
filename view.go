@@ -11,6 +11,21 @@ import (
 
 const mainTitleBarHeight = 52
 
+var (
+	toolbarCompressIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l4 4M2 6h4V2M14 14l-4-4m0 4v-4h4"/></svg>`))
+	toolbarRestartIcon  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 6a5.25 5.25 0 1 0 .15 3.5M13 2.5V6H9.5"/></svg>`))
+	toolbarContinueIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l7 5-7 5Z"/></svg>`))
+	toolbarFloatingIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><rect x="8" y="7" width="4" height="4" rx=".5"/></svg>`))
+	toolbarSettingsIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.75h3l.4 1.75 1.2.7 1.7-.5 1.5 2.6L13 7.5v1l1.3 1.2-1.5 2.6-1.7-.5-1.2.7-.4 1.75h-3l-.4-1.75-1.2-.7-1.7.5-1.5-2.6L3 8.5v-1L1.7 6.3l1.5-2.6 1.7.5 1.2-.7Z"/><circle cx="8" cy="8" r="2"/></svg>`))
+)
+
+func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
+	return button.Label(label).Gap(6).Children(func() {
+		ui.Icon(c, icon).Size(16, 16).Shrink(0)
+		ui.Text(c, label).SingleLine()
+	})
+}
+
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 	button := ui.PrimaryButton(c.Key(key), label).Radius(pillRadius(36, c)).Disabled(disabled)
 	if disabled {
@@ -144,15 +159,14 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		if s.floatingOpen {
 			floatingLabel = "收起悬浮窗"
 		}
-		floatingBtn := quietToolbarButton(c, "toggle-floating", floatingLabel).
+		floatingBtn := toolbarButtonContent(c, quietToolbarButton(c, "toggle-floating", ""), floatingLabel, toolbarFloatingIcon).
 			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
 		if s.floatingOpen {
 			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
 		}
-		s.themeControl(c)
 		settingsDisabled := s.busy || s.confirmOverwrite || s.confirmBatchOverwrite
-		quietToolbarButton(c, "open-settings", "设置").
+		toolbarButtonContent(c, quietToolbarButton(c, "open-settings", ""), "设置", toolbarSettingsIcon).
 			KeyShortcuts(ui.Cmd, ui.KeyComma).
 			Tooltip("打开设置（" + shortcutLabel(",") + "）").
 			Disabled(settingsDisabled).
@@ -173,7 +187,6 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 			})
 			ui.Row(c).FillWidth().Padding(0, pagePadding, 0, pagePadding).
 				Gap(8).Wrap().AlignItems(ui.Center).DragWindow().Children(func() {
-				s.presetControl(c, max(0, width-2*pagePadding), true)
 				ui.Box(c).Grow(1)
 				utilityControls()
 			})
@@ -189,7 +202,6 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		Gap(toolbarGap).AlignItems(ui.Center).DragWindow().
 		Role(ui.RoleToolbar).Label("操作栏").Children(func() {
 		brandLockup(c, availWidth >= 850)
-		s.presetControl(c, availWidth, false)
 		s.compressionControls(c, pending, done, canRun)
 		ui.Box(c).Size(1, 16).Background(glassDivider(c))
 		utilityControls()
@@ -320,10 +332,12 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 	disabled := s.modalOpen()
 	if s.batch == nil {
 		label := "开始压缩"
+		icon := toolbarCompressIcon
 		if s.result != nil {
 			label = "重新压缩"
+			icon = toolbarRestartIcon
 		}
-		primaryAction(c, "compress", label, disabled || s.file == nil).Height(32).
+		toolbarButtonContent(c, primaryAction(c, "compress", "", disabled || s.file == nil), label, icon).Height(32).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("压缩当前图片 · " + shortcutLabel("↵")).
 			OnClick(s.startCompression)
 		return
@@ -331,19 +345,19 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 	disabled = disabled || !canRun || s.batch.previewOpen
 	switch {
 	case (pending > 0 && done == 0) || !canRun:
-		primaryAction(c, "batch-start", "开始压缩", disabled).Height(32).
+		toolbarButtonContent(c, primaryAction(c, "batch-start", "", disabled), "开始压缩", toolbarCompressIcon).Height(32).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("开始批量压缩 · " + shortcutLabel("↵")).
 			OnClick(s.startBatchCompression)
 	case pending > 0 && done > 0:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			quietButton(c, "batch-restart", "重新压缩", 32, disabled).
+			toolbarButtonContent(c, quietButton(c, "batch-restart", "", 32, disabled), "重新压缩", toolbarRestartIcon).
 				OnClick(s.restartBatchCompression)
-			primaryAction(c, "batch-continue", "继续压缩", disabled).Height(32).
+			toolbarButtonContent(c, primaryAction(c, "batch-continue", "", disabled), "继续压缩", toolbarContinueIcon).Height(32).
 				KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("继续压缩剩余图片 · " + shortcutLabel("↵")).
 				OnClick(s.startBatchCompression)
 		})
 	default:
-		primaryAction(c, "batch-restart", "重新压缩", disabled).Height(32).
+		toolbarButtonContent(c, primaryAction(c, "batch-restart", "", disabled), "重新压缩", toolbarRestartIcon).Height(32).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("重新压缩全部图片 · " + shortcutLabel("↵")).
 			OnClick(s.restartBatchCompression)
 	}
@@ -478,56 +492,6 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 				ui.Text(c, suffix).FontSize(12).Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(suffix)
 			})
 		}
-	})
-}
-
-func (s *application) presetControl(c *ui.Context, availWidth float32, compact bool) {
-	t := c.Theme()
-	pickerWidth := float32(168)
-	switch {
-	case compact:
-		pickerWidth = 156
-	case availWidth < 660:
-		pickerWidth = 96
-	case availWidth < 850:
-		pickerWidth = 128
-	case availWidth < 912:
-		pickerWidth = 148
-	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if availWidth >= 812 || compact {
-			ui.Text(c, "预设").FontSize(12).TextColor(metadataColor(c))
-		}
-		ui.PopoverMenuButton(c.Key("preset-picker"), s.scheme, func(m *ui.Menu) {
-			m.MaxWidth(320)
-			for _, preset := range s.presets {
-				item := m.Item(preset.name).Radio(s.scheme == preset.name).
-					Tooltip(preset.name).Disabled(s.modalOpen())
-				if preset.favorite {
-					presetName := preset.name
-					item.Content(func(x ui.MenuItemContent) {
-						iconColor := accentForeground(t)
-						if x.Highlighted {
-							iconColor = x.Text
-						}
-						ui.Row(x.Context).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(x.Context, presetName).SingleLine().TruncateMiddle().Width(0).Grow(1)
-							ui.Icon(x.Context, presetHeartFilledIcon).Size(12, 12).TextColor(iconColor)
-						})
-					})
-				}
-				if item.Chosen() {
-					s.setScheme(preset.name)
-				}
-			}
-			m.Separator()
-			if m.Item("编辑预设…").Disabled(s.modalOpen()).Chosen() {
-				s.setSettingsOpen(true)
-			}
-		}, ui.PopoverMenuButtonOptions{
-			At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-		}).Label("选择预设").Tooltip(s.scheme).Width(pickerWidth).Height(32).Radius(pillRadius(32, c)).
-			Background(glassControlSurface(c)).Border(1, glassBorder(c)).Disabled(s.modalOpen())
 	})
 }
 

@@ -84,10 +84,14 @@ func (s *application) effectiveThemeMode() themeMode {
 
 func (s *application) syncTheme(mode themeMode) {
 	s.theme = mode.normalized()
+	s.syncThemeAppearance(s.theme)
+}
+
+func (s *application) syncThemeAppearance(mode themeMode) {
 	if s.applyNativeTheme != nil {
-		s.applyNativeTheme(s.theme.source())
+		s.applyNativeTheme(mode.source())
 	} else if s.window != nil {
-		mygo.Theme.SetSource(s.theme.source())
+		mygo.Theme.SetSource(mode.source())
 	}
 	if !s.closed {
 		if s.window != nil {
@@ -98,6 +102,14 @@ func (s *application) syncTheme(mode themeMode) {
 		}
 		s.invalidateFloatingWindow()
 	}
+}
+
+func (s *application) previewSettingsTheme(mode themeMode) {
+	if s.busy || !s.settingsOpen || s.editor == nil || mode.validate() != nil {
+		return
+	}
+	s.editor.theme = mode.normalized()
+	s.syncThemeAppearance(s.editor.theme)
 }
 
 func (s *application) setTheme(mode themeMode) {
@@ -125,7 +137,11 @@ func applyTheme(c *ui.Context) {
 }
 
 func (s *application) applyTheme(c *ui.Context) {
-	applyThemeMode(c, s.effectiveThemeMode())
+	mode := s.effectiveThemeMode()
+	if s.settingsOpen && s.editor != nil {
+		mode = s.editor.theme
+	}
+	applyThemeMode(c, mode)
 }
 
 func applyThemeMode(c *ui.Context, mode themeMode) {
@@ -402,27 +418,4 @@ func quietToolbarButton(c *ui.Context, key, label string) ui.Element {
 		}
 	}
 	return btn
-}
-
-func (s *application) themeControl(c *ui.Context) {
-	t := c.Theme()
-	current := s.effectiveThemeMode()
-	disabled := s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
-	btn := ui.PopoverMenuButton(c.Key("theme-picker"), "主题", func(m *ui.Menu) {
-		for _, option := range themeOptions {
-			if m.Item(option.label).Radio(current == option.mode).Disabled(disabled).Chosen() {
-				s.setTheme(option.mode)
-			}
-		}
-	}, ui.PopoverMenuButtonOptions{
-		At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
-	}).Label("主题").Tooltip("外观主题："+current.label()).Height(32).Radius(pillRadius(32, c)).
-		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted).Disabled(disabled)
-	if !disabled {
-		if btn.Pressed() {
-			btn.Background(glassControlPressed(c)).TextColor(t.Text)
-		} else if btn.Hovered() {
-			btn.Background(glassControlHover(c)).TextColor(t.Text)
-		}
-	}
 }

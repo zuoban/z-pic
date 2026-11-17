@@ -220,13 +220,7 @@ func TestWebPQualityLabelUsesPersistedQuality(t *testing.T) {
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
-	main := ui.NewTester(app.view, 880, 660)
-	if err := main.Click("选择预设"); err != nil {
-		t.Fatal(err)
-	}
-	if err := main.ChooseMenuItem("WebP 分享"); err != nil {
-		t.Fatal(err)
-	}
+	chooseTestPreset(t, app, "WebP 分享")
 	restarted := newApplication()
 	restarted.restoreSettings()
 	if restarted.scheme != "WebP 分享" || restarted.quality != 40 ||

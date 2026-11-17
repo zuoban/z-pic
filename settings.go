@@ -14,11 +14,10 @@ import (
 )
 
 type compressionPreset struct {
-	name     string
-	quality  float64
-	png      compress.PNGOptions
-	output   presetSaveOptions
-	favorite bool
+	name    string
+	quality float64
+	png     compress.PNGOptions
+	output  presetSaveOptions
 }
 
 var compressionPresets = []compressionPreset{
@@ -56,7 +55,16 @@ func qualityLevel(preset compressionPreset) int {
 	return closest
 }
 
-type presetEditor struct {
+type settingsSection int
+
+const (
+	settingsGeneral settingsSection = iota
+	settingsPresets
+)
+
+type settingsEditor struct {
+	section       settingsSection
+	theme         themeMode
 	presets       []compressionPreset
 	selected      int
 	active        int
@@ -68,7 +76,7 @@ func defaultPresets() []compressionPreset {
 	return slices.Clone(compressionPresets)
 }
 
-func (e *presetEditor) selectedPreset() *compressionPreset {
+func (e *settingsEditor) selectedPreset() *compressionPreset {
 	if e == nil || e.selected < 0 || e.selected >= len(e.presets) {
 		return nil
 	}
@@ -106,8 +114,7 @@ func (s *application) setSettingsOpen(open bool) {
 			s.settingsWindow.Close()
 			return
 		}
-		s.settingsOpen = false
-		s.editor = nil
+		s.clearSettingsDraft()
 		return
 	}
 	if s.settingsOpen {
@@ -125,7 +132,8 @@ func (s *application) setSettingsOpen(open bool) {
 			break
 		}
 	}
-	s.editor = &presetEditor{
+	s.editor = &settingsEditor{
+		theme:   s.effectiveThemeMode(),
 		presets: slices.Clone(s.presets), selected: active, active: active,
 		message: s.settingsError,
 	}
@@ -137,15 +145,44 @@ func (s *application) setSettingsOpen(open bool) {
 		Width: 724, Height: 700, MinWidth: 640, MinHeight: 600,
 		Vibrancy:        mygo.VibrancyGlass,
 		BackgroundColor: "light-dark(#f7f7f8, #141416)",
-		UseContentSize: true, Content: ui.View(s.settingsView),
+		UseContentSize:  true, Content: ui.View(s.settingsView),
 	})
 	s.settingsWindow.OnClosed(func() {
 		s.settingsWindow = nil
-		s.settingsOpen, s.editor = false, nil
+		s.clearSettingsDraft()
 		if !s.closed {
 			s.window.Update(func() {})
 		}
 	})
+}
+
+func (s *application) clearSettingsDraft() {
+	restoreTheme := s.editor != nil && s.editor.theme.normalized() != s.effectiveThemeMode()
+	s.settingsOpen, s.editor = false, nil
+	if restoreTheme {
+		s.syncThemeAppearance(s.effectiveThemeMode())
+	}
+}
+
+func (s *application) openPresetSettings() {
+	if s.busy || s.confirmOverwrite || s.confirmBatchOverwrite {
+		return
+	}
+	s.setSettingsOpen(true)
+	if s.editor != nil && !s.editor.confirmDelete {
+		s.editor.section = settingsPresets
+		if s.settingsWindow != nil {
+			s.settingsWindow.Invalidate()
+		}
+	}
+}
+
+func (s *application) selectSettingsPreset(index int) {
+	if s.busy || s.editor == nil || s.editor.confirmDelete || index < 0 || index >= len(s.editor.presets) {
+		return
+	}
+	s.editor.active, s.editor.selected = index, index
+	s.editor.message = ""
 }
 
 func (s *application) setScheme(name string) {
@@ -258,7 +295,7 @@ func (s *application) deletePreset() {
 	editor.message, editor.confirmDelete = "", false
 }
 
-func (s *application) savePresetEdits() {
+func (s *application) saveSettingsEdits() {
 	if s.busy || s.editor == nil || s.editor.confirmDelete {
 		return
 	}
@@ -267,6 +304,11 @@ func (s *application) savePresetEdits() {
 		presets[index].name = strings.TrimSpace(presets[index].name)
 	}
 	selected := presets[s.editor.active].name
+	if err := validatePresets(presets, selected); err != nil {
+		s.editor.section = settingsPresets
+		s.editor.message = "无法保存设置：" + err.Error()
+		return
+	}
 	if s.settingsFile == "" {
 		path, err := settingsFilePath()
 		if err != nil {
@@ -275,16 +317,17 @@ func (s *application) savePresetEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := s.saveCurrentSettings(presets, selected, s.batchOutputDir, s.effectiveThemeMode()); err != nil {
+	if err := s.saveCurrentSettings(presets, selected, s.batchOutputDir, s.editor.theme); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
 	s.presets = presets
 	if s.settingsError != "" {
-		s.setMessage("压缩预设已保存。", false)
+		s.setMessage("设置已保存。", false)
 	}
 	s.settingsError = ""
 	s.applyScheme(selected)
+	s.syncTheme(s.editor.theme)
 	s.setSettingsOpen(false)
 }
 

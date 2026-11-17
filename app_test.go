@@ -42,8 +42,8 @@ func TestEmptyViewCannotCompress(t *testing.T) {
 		t.Fatalf("initialization must offer one balanced preset: %+v", s.presets)
 	}
 	tt := ui.NewTester(s.view, 980, 720)
-	if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); !ok || !tt.HasText("均衡") || tt.HasText("体积优先") || tt.HasText("画质优先") {
-		t.Fatal("the empty view must offer only the balanced default preset")
+	if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); ok || !tt.HasText("均衡") || tt.HasText("体积优先") || tt.HasText("画质优先") {
+		t.Fatal("the empty view must display the balanced preset without a picker")
 	}
 	button, ok := tt.AccessByRole(ui.RoleButton, "开始压缩")
 	if !ok || !button.Disabled {
@@ -52,10 +52,11 @@ func TestEmptyViewCannotCompress(t *testing.T) {
 	if !tt.HasText("选择图片") || !tt.HasText("选择文件夹") || !tt.HasText("选择或拖入图片") {
 		t.Fatalf("the empty view must explain how to start: %q", tt.Texts())
 	}
-	if err := tt.Click("选择预设"); err != nil {
+	settings := openTestSettings(t, s)
+	if err := settings.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
-	if item, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "均衡"); !ok || !item.Checked || tt.HasText("体积优先") || tt.HasText("画质优先") {
+	if item, ok := settings.AccessByRole(ui.RoleMenuItemRadio, "均衡"); !ok || !item.Checked || settings.HasText("体积优先") || settings.HasText("画质优先") {
 		t.Fatal("the default popup must contain only the checked balanced preset")
 	}
 }
@@ -65,7 +66,7 @@ func TestPresetPickerSelectionAndDismissal(t *testing.T) {
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	s.result = result
-	tt := ui.NewTester(s.view, 880, 660)
+	tt := openTestSettings(t, s)
 	if err := tt.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +101,8 @@ func TestPresetPickerSelectionAndDismissal(t *testing.T) {
 	if err := tt.ChooseMenuItem("画质优先"); err != nil {
 		t.Fatal(err)
 	}
-	if s.scheme != "画质优先" || s.quality != 92 || s.result != nil || !tt.HasText("画质优先") {
-		t.Fatal("choosing a different preset must immediately apply it and invalidate the result")
+	if s.editor.presets[s.editor.active].name != "画质优先" || s.scheme != "均衡" || s.result != result {
+		t.Fatal("choosing a preset must update only the settings draft before saving")
 	}
 	if _, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "画质优先"); ok {
 		t.Fatal("applying a different preset must close the menu")
@@ -112,9 +113,16 @@ func TestPresetPickerSelectionAndDismissal(t *testing.T) {
 	if item, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "画质优先"); !ok || !item.Checked {
 		t.Fatalf("reopening must show the newly selected preset checked: %+v", item)
 	}
+	tt.Key(0, ui.KeyEscape)
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	if s.scheme != "画质优先" || s.quality != 92 || s.result != nil {
+		t.Fatal("saving the selected preset must apply it and invalidate the old result")
+	}
 }
 
-func TestPresetPickerFitsTopBarAcrossViews(t *testing.T) {
+func TestMainToolbarFitsAcrossViews(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		for _, floating := range []bool{false, true} {
 			for _, state := range []string{"empty", "single", "result", "queue", "partial-queue", "preview"} {
@@ -149,13 +157,18 @@ func TestPresetPickerFitsTopBarAcrossViews(t *testing.T) {
 					if !ok {
 						t.Fatal("the top bar must identify its actions as a toolbar")
 					}
+					for _, label := range []string{"选择预设", "主题"} {
+						if _, ok := tt.AccessByRole(ui.RoleMenuButton, label); ok {
+							t.Fatalf("%s must only be available in settings", label)
+						}
+					}
 					floatingLabel := "悬浮窗"
 					if floating {
 						floatingLabel = "收起悬浮窗"
 					}
-					labels := []string{"选择预设", "主题", "设置", floatingLabel, "开始压缩"}
+					labels := []string{"设置", floatingLabel, "开始压缩"}
 					if state == "result" || state == "partial-queue" {
-						labels[4] = "重新压缩"
+						labels[2] = "重新压缩"
 					}
 					if state == "partial-queue" {
 						labels = append(labels, "继续压缩")
@@ -163,9 +176,6 @@ func TestPresetPickerFitsTopBarAcrossViews(t *testing.T) {
 					var controls []ui.AccessInfo
 					for _, label := range labels {
 						role := ui.RoleButton
-						if label == "选择预设" || label == "主题" {
-							role = ui.RoleMenuButton
-						}
 						control, ok := tt.AccessByRole(role, label)
 						b, bar := control.Bounds, toolbar.Bounds
 						if !ok || control.Offscreen || b.W <= 0 || b.H < 28 || b.X < 0 || b.Y < 0 || b.X+b.W > 760 || b.Y+b.H > 80 || b.X < bar.X || b.Y < bar.Y || b.X+b.W > bar.X+bar.W || b.Y+b.H > bar.Y+bar.H {
@@ -275,8 +285,9 @@ func TestPresetPickerCannotOpenDuringModalState(t *testing.T) {
 				if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); ok {
 					t.Fatal("confirmation must hide the underlying preset picker from interaction")
 				}
-			} else if picker, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); !ok || !picker.Disabled {
-				t.Fatalf("preset picker must be disabled during %s: %+v", state, picker)
+			}
+			if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); ok {
+				t.Fatal("main view must not expose preset selection")
 			}
 			_ = tt.Click("选择预设")
 			if _, ok := tt.AccessByRole(ui.RoleMenuItemRadio, "均衡"); ok {
@@ -289,13 +300,8 @@ func TestPresetPickerCannotOpenDuringModalState(t *testing.T) {
 func TestChangingQualityInvalidatesSavedResult(t *testing.T) {
 	s := testSelectedApplication()
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
+	chooseTestPreset(t, s, "体积优先")
 	tt := ui.NewTester(s.view, 980, 720)
-	if err := tt.Click("选择预设"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("体积优先"); err != nil {
-		t.Fatal(err)
-	}
 	if s.quality != 60 || s.result != nil || s.preview != s.file.preview {
 		t.Fatal("changing quality must discard the old export and restore the original preview")
 	}
@@ -315,8 +321,8 @@ func TestBusyViewCannotChangeQuality(t *testing.T) {
 		}
 	}
 	picker, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设")
-	if !ok || !picker.Disabled {
-		t.Fatalf("preset selection must be disabled while processing: %+v", picker)
+	if ok {
+		t.Fatalf("main view must not expose preset selection: %+v", picker)
 	}
 	settings, ok := tt.AccessByRole(ui.RoleButton, "设置")
 	if !ok || !settings.Disabled {
@@ -558,7 +564,7 @@ func TestImageQualityDraftInvalidatesOnlyAfterSaving(t *testing.T) {
 		t.Fatal("saving changed active parameters must discard the old export and restore the source")
 	}
 	main := ui.NewTester(s.view, 880, 660)
-	if _, ok := main.AccessByRole(ui.RoleMenuButton, "选择预设"); !ok || !main.HasText("自定义") {
+	if _, ok := main.AccessByRole(ui.RoleMenuButton, "选择预设"); ok || !main.HasText("自定义") {
 		t.Fatal("editing a named scheme must keep that scheme selected")
 	}
 }
@@ -623,7 +629,7 @@ func TestComparisonUnavailableAfterOverwrite(t *testing.T) {
 
 func TestPresetSelectionSupportsArrowKeys(t *testing.T) {
 	s := testSelectedApplication()
-	tt := ui.NewTester(s.view, 880, 660)
+	tt := openTestSettings(t, s)
 	if err := tt.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -634,6 +640,12 @@ func TestPresetSelectionSupportsArrowKeys(t *testing.T) {
 		t.Fatal("moving through the menu must not apply a preset before confirmation")
 	}
 	tt.Key(0, ui.KeyEnter)
+	if s.editor.presets[s.editor.active].name != "画质优先" || s.scheme != "均衡" {
+		t.Fatal("Enter must select the highlighted preset as a draft")
+	}
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
 	if s.scheme != "画质优先" || s.quality != 92 {
 		t.Fatal("arrow keys and Enter must select and apply the highlighted preset")
 	}
@@ -805,8 +817,8 @@ func TestMainPresetsOnlyEditThroughDialog(t *testing.T) {
 			s.result = result
 			preset := s.presets[1]
 			tt := ui.NewTester(s.view, 880, 660)
-			if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); !ok {
-				t.Fatal("the main page must offer preset selection")
+			if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); ok {
+				t.Fatal("preset selection must only be available in settings")
 			}
 			if _, ok := tt.AccessByRole(ui.RoleSlider, "图片质量"); ok {
 				t.Fatal("quality must only be editable in the preset dialog")
@@ -817,13 +829,13 @@ func TestMainPresetsOnlyEditThroughDialog(t *testing.T) {
 			if _, ok := tt.AccessByRole(ui.RoleButton, "新增预设"); ok {
 				t.Fatal("presets must only be created in the preset dialog")
 			}
-			if err := tt.Click("选择预设"); err != nil {
-				t.Fatal(err)
-			}
-			if err := tt.ChooseMenuItem("编辑预设…"); err != nil {
+			if err := tt.Click("设置"); err != nil {
 				t.Fatal(err)
 			}
 			settings := ui.NewTester(s.settingsView, 724, 700)
+			if err := settings.Click("管理预设"); err != nil {
+				t.Fatal(err)
+			}
 			slider, ok := settings.AccessByRole(ui.RoleSlider, "图片质量")
 			if !s.settingsOpen || !ok || slider.Disabled || slider.Offscreen {
 				t.Fatalf("the edit entry must open an editable preset dialog: %+v", slider)
@@ -853,13 +865,8 @@ func TestMainPresetsOnlyEditThroughDialog(t *testing.T) {
 func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	s := newApplication()
 	s.presets = testLegacyPresets()
+	chooseTestPreset(t, s, "画质优先")
 	tt := ui.NewTester(s.view, 880, 660)
-	if err := tt.Click("选择预设"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("画质优先"); err != nil {
-		t.Fatal(err)
-	}
 	if s.scheme != "画质优先" || s.quality != 92 {
 		t.Fatal("scheme selection must work before choosing an image")
 	}
@@ -868,6 +875,9 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	}
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	settings := ui.NewTester(s.settingsView, 760, 560)
+	if err := settings.Click("压缩预设"); err != nil {
+		t.Fatal(err)
+	}
 	if err := settings.Click("新增预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -887,12 +897,8 @@ func TestSettingsCanBeEditedBeforeChoosingImage(t *testing.T) {
 	if s.settingsOpen || s.scheme != "画质优先" || s.quality != 92 || !tt.HasText("选择图片") {
 		t.Fatal("saving a new scheme must keep the active scheme until selected and return to the unchanged main view")
 	}
-	if err := tt.Click("选择预设"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("新预设"); err != nil {
-		t.Fatal(err)
-	}
+	chooseTestPreset(t, s, "新预设")
+	tt.Frame()
 	if s.quality != 100 || s.scheme != "新预设" {
 		t.Fatal("saving settings must preserve the named scheme and return to the unchanged main view")
 	}
@@ -920,7 +926,7 @@ func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
 			}
 			s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 			settings := ui.NewTester(s.settingsView, 760, 560)
-			if _, ok := settings.AccessByRole(ui.RoleDialog, "预设设置"); !ok {
+			if _, ok := settings.AccessByRole(ui.RoleDialog, "应用设置"); !ok {
 				t.Fatal("settings content must identify itself as a dialog")
 			}
 			if exit == "Escape" {
@@ -1000,7 +1006,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		t.Run(map[bool]string{false: "light", true: "dark"}[dark], func(t *testing.T) {
 			s := newApplication()
-			s.setSettingsOpen(true)
+			s.openPresetSettings()
 			tt := ui.NewTester(func(c *ui.Context) {
 				theme := ui.LightTheme()
 				if dark {
@@ -1079,7 +1085,7 @@ func TestCompressionSettingsSnapshot(t *testing.T) {
 	if s.quality != 60 || s.png != compress.DefaultPNGOptions() || s.result == nil {
 		t.Fatal("draft changes must not change captured options or valid results")
 	}
-	s.savePresetEdits()
+	s.saveSettingsEdits()
 	if s.result != nil || s.quality != 40 || s.png != imageQualityLevels[0].png || s.scheme != "自定义" {
 		t.Fatal("saving image quality must update all named scheme parameters and invalidate the old result")
 	}
@@ -1367,11 +1373,8 @@ func TestHiddenTitleBarKeepsToolbarClearOfWindowControls(t *testing.T) {
 					items = append(items, item)
 				}
 			}
-			for _, label := range []string{"选择预设", "重新压缩", "继续压缩", "收起悬浮窗", "主题", "设置"} {
+			for _, label := range []string{"重新压缩", "继续压缩", "收起悬浮窗", "设置"} {
 				role := ui.RoleButton
-				if label == "选择预设" || label == "主题" {
-					role = ui.RoleMenuButton
-				}
 				control, found := tt.AccessByRole(role, label)
 				if !found {
 					t.Fatalf("missing %s in toolbar", label)

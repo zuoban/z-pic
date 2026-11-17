@@ -1170,7 +1170,7 @@ func TestBatchOutputDirPersistenceAndSafety(t *testing.T) {
 	// Switching schemes and saving preset edits must preserve persisted batch_output_dir.
 	s.setScheme("体积优先")
 	s.setSettingsOpen(true)
-	s.savePresetEdits()
+	s.saveSettingsEdits()
 
 	restarted := newApplication()
 	restarted.restoreSettings()

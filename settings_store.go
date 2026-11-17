@@ -168,10 +168,9 @@ func loadFullSettings(path string) (appSettings, error) {
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
 		presets[index] = compressionPreset{
-			name:     preset.Name,
-			quality:  preset.Quality,
-			png:      preset.PNG,
-			favorite: preset.Favorite,
+			name:    preset.Name,
+			quality: preset.Quality,
+			png:     preset.PNG,
 		}
 		if preset.Output != nil {
 			presets[index].output = *preset.Output
@@ -221,7 +220,7 @@ func saveFullSettings(path string, cfg appSettings) error {
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{
-			Name: preset.name, Quality: preset.quality, PNG: preset.png, Favorite: preset.favorite,
+			Name: preset.name, Quality: preset.quality, PNG: preset.png,
 		}
 		if preset.output != (presetSaveOptions{}) {
 			output := preset.output

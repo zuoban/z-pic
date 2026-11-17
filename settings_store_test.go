@@ -182,20 +182,48 @@ func TestLoadSettingsAcceptsEditedStartingPresetAndDeletedDefaults(test *testing
 	}
 }
 
-func TestPresetOutputAndFavoritesRoundTrip(test *testing.T) {
+func TestLoadSettingsIgnoresLegacyFavorites(test *testing.T) {
+	path := filepath.Join(test.TempDir(), "settings.json")
+	contents := `{"version":1,"selected":"均衡","presets":[{"name":"均衡","quality":77,"png":{"MinQuality":30,"MaxQuality":77,"Colors":100,"Speed":6},"favorite":true}]}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		test.Fatal(err)
+	}
+	presets, selected, err := loadSettings(path)
+	if err != nil || selected != "均衡" || len(presets) != 1 || presets[0].quality != 77 {
+		test.Fatalf("legacy favorites must not prevent restoring presets: presets=%+v selected=%q err=%v", presets, selected, err)
+	}
+	if err := saveSettings(path, presets, selected); err != nil {
+		test.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		test.Fatal(err)
+	}
+	var stored storedSettings
+	if err := json.Unmarshal(data, &stored); err != nil {
+		test.Fatal(err)
+	}
+	if len(stored.Presets) != 1 || stored.Presets[0].Favorite {
+		test.Fatal("saving must discard legacy favorites without losing presets")
+	}
+	if bytes.Contains(data, []byte(`"favorite"`)) {
+		test.Fatal("saving must omit the retired favorite field")
+	}
+}
+
+func TestPresetOutputRoundTrip(test *testing.T) {
 	path := filepath.Join(test.TempDir(), "settings.json")
 	directory := filepath.Join(test.TempDir(), "exports")
 	presets := testLegacyPresets()
 	presets[0].output = presetSaveOptions{UseSubfolder: true, Subfolder: "压缩图片", UseSuffix: true, Suffix: "_small"}
 	presets[1].output = presetSaveOptions{Mode: presetSaveAsk}
 	presets[2].output = presetSaveOptions{Mode: presetSaveFixed, Directory: directory, UseSuffix: true, Suffix: "_高质量"}
-	presets[0].favorite, presets[2].favorite = true, true
 	if err := saveSettings(path, presets, "均衡"); err != nil {
 		test.Fatal(err)
 	}
 	loaded, selected, err := loadSettings(path)
 	if err != nil || selected != "均衡" || !reflect.DeepEqual(loaded, presets) {
-		test.Fatalf("all output choices and favorite flags must survive reload: presets=%+v selected=%q err=%v", loaded, selected, err)
+		test.Fatalf("all output choices must survive reload: presets=%+v selected=%q err=%v", loaded, selected, err)
 	}
 	if err := saveSettings(path, testLegacyPresets(), "均衡"); err != nil {
 		test.Fatal(err)
@@ -219,7 +247,7 @@ func TestPresetOutputAndFavoritesRoundTrip(test *testing.T) {
 			test.Fatal("zero output settings must be omitted")
 		}
 		if _, exists := preset["favorite"]; exists {
-			test.Fatal("false favorite flags must be omitted")
+			test.Fatal("removed favorite flags must be omitted")
 		}
 	}
 }

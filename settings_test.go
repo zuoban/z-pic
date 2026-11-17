@@ -20,8 +20,22 @@ func openTestSettings(t *testing.T, application *application) *ui.Tester {
 	if application.settingsFile == "" {
 		application.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	}
-	application.setSettingsOpen(true)
+	application.openPresetSettings()
 	return ui.NewTester(application.settingsView, 640, 600)
+}
+
+func chooseTestPreset(t *testing.T, application *application, name string) {
+	t.Helper()
+	tester := openTestSettings(t, application)
+	if err := tester.Click("选择预设"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.ChooseMenuItem(name); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func replaceTestPresetName(t *testing.T, tester *ui.Tester, name string) {
@@ -60,7 +74,6 @@ func TestDuplicatePresetCopiesCurrentDraft(t *testing.T) {
 				application.editQualityLevel(2)
 			}
 			editor.selectedPreset().output = presetSaveOptions{Mode: presetSaveAsk, UseSuffix: true, Suffix: "_分享"}
-			editor.selectedPreset().favorite = true
 			source := *editor.selectedPreset()
 			originals := slices.Clone(editor.presets)
 			published := slices.Clone(application.presets)
@@ -217,7 +230,7 @@ func TestDuplicatePresetGuards(t *testing.T) {
 			case "empty presets":
 				application.editor.presets = nil
 			}
-			var expected *presetEditor
+			var expected *settingsEditor
 			if application.editor != nil {
 				snapshot := *application.editor
 				snapshot.presets = slices.Clone(snapshot.presets)
@@ -255,13 +268,7 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	if application.settingsOpen || len(application.presets) != 2 {
 		t.Fatal("saving must close settings and publish the maintained scheme list")
 	}
-	main := ui.NewTester(application.view, 880, 660)
-	if err := main.Click("选择预设"); err != nil {
-		t.Fatal(err)
-	}
-	if err := main.ChooseMenuItem("手机分享"); err != nil {
-		t.Fatal(err)
-	}
+	chooseTestPreset(t, application, "手机分享")
 	if application.quality != 70 || application.png != options {
 		t.Fatal("main scheme selection must apply the saved JPEG and PNG parameters")
 	}
@@ -631,7 +638,7 @@ func TestNewPresetUsesBalancedDefaultsAndUniqueName(t *testing.T) {
 	preset := *application.editor.selectedPreset()
 	if len(application.editor.presets) != 2 || len(application.presets) != 1 ||
 		preset.name != "新预设" || preset.quality != 80 || preset.png != compress.DefaultPNGOptions() ||
-		preset.output != (presetSaveOptions{}) || preset.favorite || application.editor.active != active {
+		preset.output != (presetSaveOptions{}) || application.editor.active != active {
 		t.Fatalf("new presets must use balanced parameters without replacing the active preset: %+v", preset)
 	}
 	application.editor.selectedPreset().name = " 新预设 "
@@ -735,7 +742,7 @@ func TestEditQualityLevelGuards(t *testing.T) {
 			case "past level":
 				level = 6
 			}
-			var expected *presetEditor
+			var expected *settingsEditor
 			if application.editor != nil {
 				snapshot := *application.editor
 				snapshot.presets = slices.Clone(snapshot.presets)
@@ -749,7 +756,7 @@ func TestEditQualityLevelGuards(t *testing.T) {
 	}
 }
 
-func TestPresetOutputAndFavoriteSaveCancelAndRestart(t *testing.T) {
+func TestPresetOutputSaveCancelAndRestart(t *testing.T) {
 	for _, save := range []bool{false, true} {
 		name := "cancel"
 		if save {
@@ -768,12 +775,11 @@ func TestPresetOutputAndFavoriteSaveCancelAndRestart(t *testing.T) {
 			openTestSettings(t, application)
 			output := presetSaveOptions{Mode: presetSaveAsk, UseSuffix: true, Suffix: "_分享"}
 			application.editor.selectedPreset().output = output
-			application.editor.selectedPreset().favorite = true
-			if application.output != (presetSaveOptions{}) || application.presets[1].favorite {
-				t.Fatal("output and favorite edits must remain in the draft")
+			if application.output != (presetSaveOptions{}) {
+				t.Fatal("output edits must remain in the draft")
 			}
 			if save {
-				application.savePresetEdits()
+				application.saveSettingsEdits()
 			} else {
 				application.setSettingsOpen(false)
 			}
@@ -785,9 +791,8 @@ func TestPresetOutputAndFavoriteSaveCancelAndRestart(t *testing.T) {
 			}
 			if application.settingsOpen || application.editor != nil || application.result != result ||
 				application.output != expected || restarted.output != expected ||
-				application.presets[1].favorite != save || restarted.presets[1].favorite != save ||
 				!reflect.DeepEqual(application.presets, restarted.presets) {
-				t.Fatal("only saved output settings and favorites must survive restart without discarding compressed data")
+				t.Fatal("only saved output settings must survive restart without discarding compressed data")
 			}
 		})
 	}
