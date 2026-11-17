@@ -51,7 +51,14 @@
 - 防重复踩坑：外层循环可取消，不代表内部的磁盘搜索可取消；测试应在搜索已经开始后触发取消，确认没有预留或返回新输出。
 - 验证：`go test . -run 'TestBatchOutput|TestPlanBatchOutputs|TestBatchPipeline'`；review 核对非批量入口使用默认 context，批量入口传递实际 context。
 
+## 8. 缓存命中不能跳过父目录保护
+
+- 问题：原生编码器命中进程内缓存时，只校验末级目录和文件；上级 `z-pic` 或 `tools` 被改成符号链接或开放权限后，仍直接复用可执行路径。
+- 修改：PNG/WebP 每次复用前都检查应用缓存目录、工具目录和条目目录；修复普通目录权限，符号链接目录走独立临时目录释放。
+- 防重复踩坑：完整性快路径也必须保留路径信任检查；首次校验过的目录属性不能永久缓存。此检查不承诺消除同一用户并发替换路径的竞态。
+- 验证：`go test ./internal/pngtools ./internal/webptools -run TestToolCache`；review 和回归分别覆盖父目录权限改变、符号链接别名、缓存损坏、并发获取及临时目录清理。
+
 ## 本轮交付验证
 
-- 本提交包含第 7 轮修改及前 7 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestBatchOutput|TestPlanBatchOutputs|TestBatchPipeline'` 并 review 暂存差异。
+- 本提交包含第 8 轮修改及前 8 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestToolCache'` 并 review 暂存差异。

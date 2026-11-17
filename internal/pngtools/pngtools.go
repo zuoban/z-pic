@@ -165,9 +165,6 @@ func cachedToolPath(name string, asset []byte) (string, error) {
 	}
 	entryDir := filepath.Join(cacheRoot, "z-pic", "tools", fmt.Sprintf("%s-%x", name, entry.sum[:16]))
 	binaryPath := filepath.Join(entryDir, executableFilename(name))
-	if entry.path == binaryPath && entry.info != nil && toolcache.MatchesVerified(entryDir, binaryPath, int64(len(asset)), entry.info) {
-		return binaryPath, nil
-	}
 	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic")); err != nil {
 		return "", err
 	}
@@ -176,6 +173,9 @@ func cachedToolPath(name string, asset []byte) (string, error) {
 	}
 	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
 		return "", err
+	}
+	if entry.path == binaryPath && entry.info != nil && toolcache.MatchesVerified(entryDir, binaryPath, int64(len(asset)), entry.info) {
+		return binaryPath, nil
 	}
 	if info, err := toolcache.Verify(binaryPath, int64(len(asset)), entry.sum); err == nil {
 		entry.path, entry.info = binaryPath, info

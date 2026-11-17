@@ -9,6 +9,8 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -389,6 +391,43 @@ func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
 	}
 	if firstPath != secondPath || !os.SameFile(firstInfo, secondInfo) {
 		test.Fatalf("expected cached executable reuse: first=%s second=%s", firstPath, secondPath)
+	}
+	for _, parent := range []string{filepath.Join(cacheRoot, "z-pic"), filepath.Join(cacheRoot, "z-pic", "tools")} {
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(parent, 0777); err != nil {
+				test.Fatal(err)
+			}
+			path, cleanup, err := acquireTool("oxipng")
+			if err != nil {
+				test.Fatal(err)
+			}
+			cleanup()
+			info, err := os.Stat(parent)
+			if err != nil || info.Mode().Perm() != 0700 || path != firstPath {
+				test.Fatalf("cached parent permissions not repaired: path=%s info=%v err=%v", path, info, err)
+			}
+		}
+		moved := parent + "-moved"
+		if err := os.Rename(parent, moved); err != nil {
+			test.Fatal(err)
+		}
+		if err := os.Symlink(moved, parent); err != nil {
+			test.Fatal(err)
+		}
+		path, cleanup, err := acquireTool("oxipng")
+		if err != nil {
+			test.Fatal(err)
+		}
+		cleanup()
+		if path == firstPath {
+			test.Fatal("reused cached executable through a symlinked parent")
+		}
+		if err := os.Remove(parent); err != nil {
+			test.Fatal(err)
+		}
+		if err := os.Rename(moved, parent); err != nil {
+			test.Fatal(err)
+		}
 	}
 
 	if err := os.WriteFile(firstPath, []byte("corrupted"), 0700); err != nil {
