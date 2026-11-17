@@ -9,7 +9,14 @@
 - 防重复踩坑：资源上限要约束解析过程，不能只约束最终去重结果；超限后不得继续读取 fallback 或后续 provider。
 - 验证：`go test ./internal/dropimport -run 'TestParse|TestLines'`；review 检查三个调用点均传递资源限制错误。
 
+## 2. 剪贴板导出也必须校验静态图片容器
+
+- 问题：`PNGBytes` 只依赖解码器，APNG 和尾部带动画块的 WebP 可能作为静态图被复制；WebP 长度损坏也未经过统一容器校验。
+- 修改：解码前复用 PNG 动画检查和 WebP 容器校验，拒绝动画及损坏输入。
+- 防重复踩坑：压缩、缩略图、剪贴板等入口都需执行产品规定的格式限制，不能假设系统解码器会拒绝所有不支持的容器。
+- 验证：`go test ./internal/compress -run TestClipboardPNG`；review 核对合法 PNG 仍保留原始编码，JPEG 方向和透明度测试继续通过。
+
 ## 本轮交付验证
 
-- 本提交包含第 1 轮修改及前 1 轮经验记录。
-- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestParse|TestLines'` 并 review 暂存差异。
+- 本提交包含第 2 轮修改及前 2 轮经验记录。
+- 提交前从暂存树导出独立目录，执行 `go test -race ./... -run 'TestClipboardPNG'` 并 review 暂存差异。

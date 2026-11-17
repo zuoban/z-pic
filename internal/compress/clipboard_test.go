@@ -76,3 +76,21 @@ func TestClipboardPNGRejectsInvalidOrCanceledInput(t *testing.T) {
 		t.Fatalf("canceled conversion = %v", err)
 	}
 }
+
+func TestClipboardPNGRejectsAnimatedContainers(t *testing.T) {
+	pngData := pngFixture(t, image.NewNRGBA(image.Rect(0, 0, 3, 2)), png.DefaultCompression)
+	webpData := webpFixture(t, "opaque")
+	for name, data := range map[string][]byte{
+		"APNG":           insertPNGChunk(pngData, "acTL", make([]byte, 8)),
+		"WebP flag":      extendedWebP(webpData, 2, 256, 192),
+		"late WebP ANIM": appendWebPChunk(webpData, "ANIM", make([]byte, 6)),
+		"late WebP ANMF": appendWebPChunk(webpData, "ANMF", make([]byte, 16)),
+		"bad WebP RIFF":  append(bytes.Clone(webpData), 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if data, err := PNGBytes(context.Background(), data); err == nil || data != nil {
+				t.Fatal("animated or malformed container reached clipboard output")
+			}
+		})
+	}
+}
