@@ -8,24 +8,6 @@ import (
 	"runtime"
 )
 
-func MatchesVerified(entryDir, binaryPath string, expectedSize int64, verified os.FileInfo) bool {
-	dirInfo, err := os.Lstat(entryDir)
-	if err != nil || !dirInfo.IsDir() || dirInfo.Mode()&os.ModeSymlink != 0 {
-		return false
-	}
-	if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0700 {
-		return false
-	}
-	fileInfo, err := os.Lstat(binaryPath)
-	if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() != expectedSize {
-		return false
-	}
-	if runtime.GOOS != "windows" && fileInfo.Mode().Perm() != 0700 {
-		return false
-	}
-	return os.SameFile(verified, fileInfo) && fileInfo.ModTime().Equal(verified.ModTime())
-}
-
 func EnsurePrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -71,6 +53,12 @@ func Verify(binaryPath string, expectedSize int64, expectedSum [sha256.Size]byte
 	copy(actualSum[:], hash.Sum(nil))
 	if actualSum != expectedSum {
 		return nil, errors.New("缓存工具校验和不匹配")
+	}
+	current, err := os.Lstat(binaryPath)
+	if err != nil || !os.SameFile(openedInfo, current) ||
+		current.Mode() != openedInfo.Mode() || current.Size() != openedInfo.Size() ||
+		!current.ModTime().Equal(openedInfo.ModTime()) {
+		return nil, errors.New("校验期间缓存工具已变更")
 	}
 	return openedInfo, nil
 }

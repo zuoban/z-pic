@@ -430,6 +430,26 @@ func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
 		}
 	}
 
+	// File identity, size and mtime are not an integrity proof: an in-place
+	// replacement can preserve all three.
+	tampered := bytes.Clone(bundledTool("oxipng"))
+	tampered[len(tampered)-1] ^= 0xff
+	if err := os.WriteFile(firstPath, tampered, 0700); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Chtimes(firstPath, firstInfo.ModTime(), firstInfo.ModTime()); err != nil {
+		test.Fatal(err)
+	}
+	verifiedPath, verifiedCleanup, err := acquireTool("oxipng")
+	if err != nil {
+		test.Fatal(err)
+	}
+	verifiedCleanup()
+	verifiedData, err := os.ReadFile(verifiedPath)
+	if err != nil || !bytes.Equal(verifiedData, bundledTool("oxipng")) {
+		test.Fatal("same-size tampering with restored mtime bypassed verification")
+	}
+
 	if err := os.WriteFile(firstPath, []byte("corrupted"), 0700); err != nil {
 		test.Fatal(err)
 	}

@@ -112,3 +112,12 @@
 - `bash scripts/prepare-webptools.sh --verify`：捆绑源码校验和与工具版本检查通过。
 - `go tool mygo build -skip-dmg -skip-notarize -sign -`：成功生成本地签名的 `dist/darwin-arm64/Z Pic.app`；`codesign --verify --deep --strict` 校验通过。
 - 修改过的 Go 文件通过 `gofmt` 检查，`git diff --check` 通过。本轮未增加 Go 依赖。
+
+## 第三批清理：10 轮排查与修复（2026-11-18）
+
+### 第 1 轮：工具缓存不能用文件属性代替内容校验
+
+- 确认问题：同一 inode 的可执行文件被等长修改并恢复 mtime 后，PNG/WebP 缓存快路径仍直接复用；新增回归在修复前均失败。
+- 修改：每次获取缓存工具都校验捆绑内容的 SHA-256；只缓存不可变资源摘要，删除文件属性信任快路径；哈希后再次检查路径身份和属性。
+- 防复发：文件大小、修改时间和 inode 只能用于缓存失效提示，不能作为执行代码的完整性证明。校验到执行之间仍存在同一用户并发改写路径的剩余竞态。
+- 验证与 review：`go test ./internal/pngtools ./internal/webptools -run TestToolCache -count=1`；检查普通复用、等长篡改、大小变化、目录别名、权限修复、并发获取与临时目录清理。

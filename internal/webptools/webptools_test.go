@@ -261,6 +261,24 @@ func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
 		}
 	}
 
+	tampered := bytes.Clone(bundledTool())
+	tampered[len(tampered)-1] ^= 0xff
+	if err := os.WriteFile(firstPath, tampered, 0700); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Chtimes(firstPath, firstInfo.ModTime(), firstInfo.ModTime()); err != nil {
+		test.Fatal(err)
+	}
+	verifiedPath, verifiedCleanup, err := acquireTool()
+	if err != nil {
+		test.Fatal(err)
+	}
+	verifiedCleanup()
+	verifiedData, err := os.ReadFile(verifiedPath)
+	if err != nil || !bytes.Equal(verifiedData, bundledTool()) {
+		test.Fatal("same-size tampering with restored mtime bypassed verification")
+	}
+
 	if err := os.WriteFile(firstPath, []byte("corrupted"), 0700); err != nil {
 		test.Fatal(err)
 	}

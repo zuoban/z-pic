@@ -27,10 +27,8 @@ const (
 var errOutputLimit = errors.New("WebP 工具输出超过 64 MiB 限制")
 
 type cachedToolState struct {
-	path string
-	info os.FileInfo
-	sum  [sha256.Size]byte
-	has  bool
+	sum [sha256.Size]byte
+	has bool
 }
 
 var (
@@ -121,18 +119,11 @@ func cachedToolPath(asset []byte) (string, error) {
 	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
 		return "", err
 	}
-	if toolCache.path == binaryPath && toolCache.info != nil && toolcache.MatchesVerified(entryDir, binaryPath, int64(len(asset)), toolCache.info) {
-		return binaryPath, nil
+	if _, err := toolcache.Verify(binaryPath, int64(len(asset)), toolCache.sum); err != nil {
+		if _, err := toolcache.Stage(entryDir, binaryPath, asset); err != nil {
+			return "", err
+		}
 	}
-	if info, err := toolcache.Verify(binaryPath, int64(len(asset)), toolCache.sum); err == nil {
-		toolCache.path, toolCache.info = binaryPath, info
-		return binaryPath, nil
-	}
-	info, err := toolcache.Stage(entryDir, binaryPath, asset)
-	if err != nil {
-		return "", err
-	}
-	toolCache.path, toolCache.info = binaryPath, info
 	return binaryPath, nil
 }
 

@@ -30,10 +30,8 @@ const (
 var errOutputLimit = errors.New("PNG 工具输出超过 64 MiB 限制")
 
 type cachedToolEntry struct {
-	path string
-	info os.FileInfo
-	sum  [sha256.Size]byte
-	has  bool
+	sum [sha256.Size]byte
+	has bool
 }
 
 var (
@@ -174,20 +172,14 @@ func cachedToolPath(name string, asset []byte) (string, error) {
 	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
 		return "", err
 	}
-	if entry.path == binaryPath && entry.info != nil && toolcache.MatchesVerified(entryDir, binaryPath, int64(len(asset)), entry.info) {
-		return binaryPath, nil
-	}
-	if info, err := toolcache.Verify(binaryPath, int64(len(asset)), entry.sum); err == nil {
-		entry.path, entry.info = binaryPath, info
-		toolCache[name] = entry
-		return binaryPath, nil
-	}
-	info, err := toolcache.Stage(entryDir, binaryPath, asset)
-	if err != nil {
-		return "", err
-	}
-	entry.path, entry.info = binaryPath, info
+	// Cache the immutable bundled digest, never a trust decision about a
+	// mutable executable. Size, inode and mtime can all survive tampering.
 	toolCache[name] = entry
+	if _, err := toolcache.Verify(binaryPath, int64(len(asset)), entry.sum); err != nil {
+		if _, err := toolcache.Stage(entryDir, binaryPath, asset); err != nil {
+			return "", err
+		}
+	}
 	return binaryPath, nil
 }
 
