@@ -172,8 +172,8 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 			return images, nil
 		}
 	}
-	text := string(read(transfer.Text, maxText))
 	if !hadImage {
+		text := string(read(transfer.Text, maxText))
 		if items, err := localItems(text); err != nil || len(items) > 0 {
 			return items, err
 		}

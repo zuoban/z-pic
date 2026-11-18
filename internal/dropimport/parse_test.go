@@ -109,7 +109,7 @@ func TestParseHTMLKeepsProviderOrderAndFallbacks(test *testing.T) {
 		{"empty HTML", "", []Item{{Path: "/tmp/text.png"}}, 1},
 		{"non-image HTML", "<p>description</p>", []Item{{Path: "/tmp/text.png"}}, 1},
 		{"relative image", `<img src="../photo.png#fragment">`, []Item{{URL: "https://example.test/photo.png"}}, 0},
-		{"unreadable image", `<img src="blob:https://example.test/image">`, []Item{{Data: fallback}}, 1},
+		{"unreadable image", `<img src="blob:https://example.test/image">`, []Item{{Data: fallback}}, 0},
 	} {
 		test.Run(scenario.name, func(test *testing.T) {
 			htmlReads, textReads := 0, 0
@@ -132,6 +132,23 @@ func TestParseHTMLKeepsProviderOrderAndFallbacks(test *testing.T) {
 					items, err, htmlReads, textReads, scenario.want, scenario.textReads)
 			}
 		})
+	}
+}
+
+func TestParseHTMLImageFallbackSkipsUnusableText(t *testing.T) {
+	textReads := 0
+	fallback := []byte("image fallback")
+	data := transfer.New(transfer.NewItem(
+		representation(transfer.HTML, `<img src="blob:https://example.test/image">`),
+		transfer.Lazy(transfer.Text, func() ([]byte, error) {
+			textReads++
+			return bytes.Repeat([]byte("x"), maxText+1), nil
+		}),
+		transfer.Bytes(transfer.PNG, fallback),
+	))
+	items, err := Parse(data)
+	if err != nil || textReads != 0 || len(items) != 1 || !bytes.Equal(items[0].Data, fallback) {
+		t.Fatalf("unusable text rejected image fallback: items=%v err=%v reads=%d", items, err, textReads)
 	}
 }
 
