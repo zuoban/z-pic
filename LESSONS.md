@@ -177,3 +177,10 @@
 - 修改：整次传输共享 2000 个有效原始引用预算，先扣减再去重；超限拒绝整次导入并停止读取后续条目。
 - 防复发：资源上限的作用域应与整个用户操作一致，不能在子列表或 provider 边界重置；业务去重不能抵消已经发生的解析工作量。
 - 验证与 review：`go test ./internal/dropimport -run 'TestParse|TestLines' -count=1`；三个表示类型分别覆盖恰好 2000、2001 个跨条目重复引用，以及超限后 provider 不执行。
+
+### 第 10 轮：共用有界工具诊断缓冲
+
+- 确认问题：PNG/WebP 分别复制了一套 stderr 缓冲及 32 KiB 上限，之后修复排空或限制策略时容易只改一个入口。
+- 修改：提取 `internal/toolio.Diagnostic` 与共用上限，两个编码器和原有管道回归都使用同一实现。
+- 防复发：需要丢弃多余输出时仍返回完整写入数量，继续排空子进程管道；不要嵌入会提升 `ReadFrom` 的 `bytes.Buffer`，否则 `io.Copy` 会绕过限制。
+- 验证与 review：`go test ./internal/pngtools ./internal/webptools -count=1`；保留真实子进程的大量 stderr、错误退出、取消、超时及 stdout 超限回归，不改动两个编码器各自的输出回退策略。

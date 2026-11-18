@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"zpic/internal/toolcache"
+	"zpic/internal/toolio"
 )
 
 const (
 	maxWebPBytes = 64 << 20
-	maxStderr    = 32 << 10
+	maxStderr    = toolio.MaxDiagnosticBytes
 	toolTimeout  = 2 * time.Minute
 )
 
@@ -161,7 +162,7 @@ func runCommandWithFallback(ctx context.Context, path string, args []string, dat
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stdout := &limitedOutput{limit: limit, cancel: cancel, fallback: fallback}
-	stderr := &limitedDiagnostic{limit: maxStderr}
+	stderr := toolio.NewDiagnostic(maxStderr)
 	cmd := exec.CommandContext(childCtx, path, args...)
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
@@ -177,7 +178,7 @@ func runCommandWithFallback(ctx context.Context, path string, args []string, dat
 	}
 	if err != nil {
 		return nil, fmt.Errorf("cwebp 执行失败（请检查捆绑工具和系统执行权限）：%w；%s",
-			err, strings.TrimSpace(stderr.buf.String()))
+			err, strings.TrimSpace(stderr.String()))
 	}
 	if stdout.size == 0 {
 		return nil, fmt.Errorf("cwebp 未生成 WebP 数据")
@@ -214,14 +215,4 @@ func (w *limitedOutput) Write(data []byte) (int, error) {
 		return size, errOutputLimit
 	}
 	return size, nil
-}
-
-type limitedDiagnostic struct {
-	buf   bytes.Buffer
-	limit int
-}
-
-func (w *limitedDiagnostic) Write(data []byte) (int, error) {
-	_, _ = w.buf.Write(data[:min(len(data), w.limit-w.buf.Len())])
-	return len(data), nil
 }

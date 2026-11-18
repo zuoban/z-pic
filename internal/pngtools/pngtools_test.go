@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"zpic/internal/toolio"
 )
 
 // A subprocess of the test executable exercises real os/exec pipes and exit
@@ -201,10 +203,10 @@ func TestBoundedWriters(t *testing.T) {
 	if !errors.Is(err, errOutputLimit) || w.buf.Len() != 129 || w.size != 129 || !canceled {
 		t.Fatalf("len=%d size=%d canceled=%v err=%v", w.buf.Len(), w.size, canceled, err)
 	}
-	d := &limitedDiagnostic{limit: 8}
+	d := toolio.NewDiagnostic(8)
 	n, err := io.Copy(d, struct{ io.Reader }{bytes.NewReader(make([]byte, 1024))})
-	if n != 1024 || err != nil || d.buf.Len() != 8 {
-		t.Fatalf("n=%d len=%d err=%v", n, d.buf.Len(), err)
+	if n != 1024 || err != nil || len(d.String()) != 8 {
+		t.Fatalf("n=%d len=%d err=%v", n, len(d.String()), err)
 	}
 }
 

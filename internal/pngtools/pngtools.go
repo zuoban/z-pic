@@ -19,11 +19,12 @@ import (
 	"time"
 
 	"zpic/internal/toolcache"
+	"zpic/internal/toolio"
 )
 
 const (
 	maxPNGBytes = 64 << 20
-	maxStderr   = 32 << 10
+	maxStderr   = toolio.MaxDiagnosticBytes
 	toolTimeout = 2 * time.Minute
 )
 
@@ -215,7 +216,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stdout := &limitedOutput{input: data, limit: limit + 1, cancel: cancel}
-	stderr := &limitedDiagnostic{limit: maxStderr}
+	stderr := toolio.NewDiagnostic(maxStderr)
 	cmd := exec.CommandContext(childCtx, path, args...)
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
@@ -237,7 +238,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 			return data, nil
 		}
 		return nil, fmt.Errorf("%s 执行失败（请检查捆绑工具和系统执行权限）：%w；%s",
-			name, err, strings.TrimSpace(stderr.buf.String()))
+			name, err, strings.TrimSpace(stderr.String()))
 	}
 	if stdout.size == 0 {
 		return nil, fmt.Errorf("%s 未生成 PNG 数据", name)
@@ -279,16 +280,4 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 		return n, errOutputLimit
 	}
 	return n, nil
-}
-
-// Stderr is drained even after truncation so verbose diagnostics cannot block
-// a child process or grow memory without bound.
-type limitedDiagnostic struct {
-	buf   bytes.Buffer
-	limit int
-}
-
-func (w *limitedDiagnostic) Write(p []byte) (int, error) {
-	_, _ = w.buf.Write(p[:min(len(p), w.limit-w.buf.Len())])
-	return len(p), nil
 }

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"zpic/internal/toolio"
 )
 
 func TestToolProcess(t *testing.T) {
@@ -136,10 +138,10 @@ func TestBoundedWriters(t *testing.T) {
 			t.Fatalf("count=%d length=%d canceled=%v err=%v", count, writer.buf.Len(), canceled, err)
 		}
 	}
-	diagnostic := &limitedDiagnostic{limit: 8}
+	diagnostic := toolio.NewDiagnostic(8)
 	count, err := io.Copy(diagnostic, struct{ io.Reader }{bytes.NewReader(make([]byte, 1024))})
-	if count != 1024 || err != nil || diagnostic.buf.Len() != 8 {
-		t.Fatalf("count=%d length=%d err=%v", count, diagnostic.buf.Len(), err)
+	if count != 1024 || err != nil || len(diagnostic.String()) != 8 {
+		t.Fatalf("count=%d length=%d err=%v", count, len(diagnostic.String()), err)
 	}
 }
 
