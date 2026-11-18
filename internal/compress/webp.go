@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"image"
 	"io"
+
+	"golang.org/x/image/vp8"
+	"golang.org/x/image/vp8l"
 )
 
 func ValidateWebP(ctx context.Context, data []byte) error {
@@ -32,6 +35,7 @@ func validateWebPContainer(ctx context.Context, reader io.ReadSeeker, size int64
 		return fmt.Errorf("WebP 容器头部或文件长度无效")
 	}
 	foundImage, foundExtended := false, false
+	var canvasWidth, canvasHeight int
 	for offset := int64(12); offset < size; {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -59,16 +63,30 @@ func validateWebPContainer(ctx context.Context, reader io.ReadSeeker, size int64
 				return fmt.Errorf("WebP 扩展头部无效")
 			}
 			foundExtended = true
-			var flags [1]byte
-			if _, err := io.ReadFull(reader, flags[:]); err != nil {
+			var extended [10]byte
+			if _, err := io.ReadFull(reader, extended[:]); err != nil {
 				return err
 			}
-			if flags[0]&2 != 0 {
+			if extended[0]&2 != 0 {
 				return fmt.Errorf("不支持动画 WebP，仅支持静态 JPEG/PNG/WebP")
 			}
+			canvasWidth = 1 + int(extended[4]) + int(extended[5])<<8 + int(extended[6])<<16
+			canvasHeight = 1 + int(extended[7]) + int(extended[8])<<8 + int(extended[9])<<16
 		case "VP8 ", "VP8L":
 			if foundImage || length == 0 {
 				return fmt.Errorf("WebP 图片数据无效")
+			}
+			// DecodeConfig stops at VP8X. Cross-check the actual frame header
+			// before any decoder or native preview allocates pixel buffers.
+			width, height, err := webPFrameSize(reader, string(chunk[:4]), length)
+			if err != nil {
+				return fmt.Errorf("WebP 图片头部损坏：%w", err)
+			}
+			if width <= 0 || height <= 0 || uint64(width) > uint64(maxPixels)/uint64(height) {
+				return fmt.Errorf("WebP 图片超过 3200 万像素限制或尺寸无效")
+			}
+			if foundExtended && (width != canvasWidth || height != canvasHeight) {
+				return fmt.Errorf("WebP 画布与图片尺寸不一致")
 			}
 			foundImage = true
 		}
@@ -78,6 +96,18 @@ func validateWebPContainer(ctx context.Context, reader io.ReadSeeker, size int64
 		return fmt.Errorf("WebP 缺少静态图片数据")
 	}
 	return ctx.Err()
+}
+
+func webPFrameSize(reader io.Reader, kind string, length int64) (int, int, error) {
+	frame := io.LimitReader(reader, length)
+	if kind == "VP8L" {
+		config, err := vp8l.DecodeConfig(frame)
+		return config.Width, config.Height, err
+	}
+	decoder := vp8.NewDecoder()
+	decoder.Init(frame, int(length))
+	header, err := decoder.DecodeFrameHeader()
+	return header.Width, header.Height, err
 }
 
 func validateWebPOutput(ctx context.Context, data []byte, input image.Config) error {

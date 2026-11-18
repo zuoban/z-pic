@@ -127,6 +127,35 @@ func TestWebPInspectionAndThumbnail(t *testing.T) {
 	}
 }
 
+func TestWebPRejectsInconsistentCanvas(t *testing.T) {
+	for _, name := range []string{"opaque", "alpha", "tiny"} {
+		t.Run(name, func(t *testing.T) {
+			data := webpFixture(t, name)
+			config, _, err := image.DecodeConfig(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = extendedWebP(data, 0, config.Width+1, config.Height)
+			if err := ValidateWebP(context.Background(), data); err == nil {
+				t.Fatal("canvas and image dimensions disagree")
+			}
+			path := writeFixture(t, "mismatch.webp", data)
+			if _, err := Inspect(context.Background(), path); err == nil {
+				t.Fatal("header inspection accepted inconsistent dimensions")
+			}
+		})
+	}
+	// A tiny canvas must not hide an oversized lossless image header. No
+	// pixel payload is needed to reject it during container validation.
+	data := webpFixture(t, "tiny")
+	data = append(bytes.Clone(data[:12]), webpChunk("VP8L", []byte{0x2f, 0xff, 0xff, 0xff, 0x0f})...)
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
+	data = extendedWebP(data, 0, 1, 1)
+	if err := ValidateWebP(context.Background(), data); err == nil {
+		t.Fatal("small canvas hid an oversized image header")
+	}
+}
+
 func TestWebPRejectsAnimationDamageAndOversizedCanvas(t *testing.T) {
 	data := webpFixture(t, "opaque")
 	for _, test := range []struct {

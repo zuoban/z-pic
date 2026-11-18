@@ -128,3 +128,10 @@
 - 修改：读取设置后、JSON 解码前验证原始字节，损坏文件返回错误并保留原文件。
 - 防复发：存在宽松纠错行为的解码器时，必须在纠错前执行无损输入约束；序列化后的字段校验不能替代原始编码检查。
 - 验证与 review：`go test . -run 'TestLoadSettings|TestSaveSettings|TestAppSettings' -count=1`；确认合法中文、旧版收藏兼容、配置往返和失败保留行为继续通过。
+
+### 第 3 轮：交叉校验 WebP 画布和实际帧尺寸
+
+- 确认问题：扩展 WebP 的 `DecodeConfig` 在 VP8X 返回，原容器扫描只确认图片块存在；三类真实图片改写画布后仍通过扫描，小画布也可掩盖超限 VP8L 头部。
+- 修改：有界读取 VP8/VP8L 帧头，核对实际尺寸、3200 万像素上限以及与 VP8X 的一致性，不解码像素。
+- 防复发：有多处尺寸声明的格式必须交叉校验，不能把外层尺寸声明直接当作内存预算依据；每个帧头 reader 都限制在自身块长度内。
+- 验证与 review：`go test ./internal/compress -run 'TestWebP|TestValidateStaticWebP|TestClipboardPNG' -count=1`；检查有损、无损、透明图片和真实编码器输出，保留动画及损坏容器拒绝策略。
