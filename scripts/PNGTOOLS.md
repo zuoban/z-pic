@@ -66,7 +66,7 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
 
 Each invocation stages and reuses the selected binary inside a content-addressed
 0700 cache directory under the user cache root (verifying permissions, size, and
-SHA-256 integrity, falling back to an ephemeral 0700 directory removed after Wait
+SHA-256 integrity on every acquisition, falling back to an ephemeral 0700 directory removed after Wait
 when the user cache directory is unavailable). No shell or inherited PATH is
 used. Runtime is capped at two minutes per tool, stdout at 64 MiB + 1 sentinel
 byte (overflow cancels the process), and stored stderr at 32 KiB (excess drained).

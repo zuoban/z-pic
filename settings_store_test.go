@@ -277,6 +277,11 @@ func TestLoadSettingsRejectsInvalidFilesWithoutChangingThem(test *testing.T) {
 		"invalid-theme":              strings.Replace(validStoredSettings, `"version":1,`, `"version":1,"theme":"neon",`, 1),
 		"invalid-utf8-name":          strings.ReplaceAll(validStoredSettings, "均衡", "bad\xff"),
 		"invalid-utf8-output":        strings.Replace(validStoredSettings, `"quality":80`, "\"quality\":80,\"output\":{\"mode\":\"fixed\",\"directory\":\"/tmp/bad\xff\"}", 1),
+		"unpaired-high-surrogate":    strings.ReplaceAll(validStoredSettings, "均衡", `bad\ud800`),
+		"unpaired-low-surrogate":     strings.ReplaceAll(validStoredSettings, "均衡", `bad\udc00`),
+		"two-high-surrogates":        strings.ReplaceAll(validStoredSettings, "均衡", `bad\ud800\ud801`),
+		"surrogate-before-ascii":     strings.ReplaceAll(validStoredSettings, "均衡", `bad\ud800\u0041`),
+		"surrogate-output":           strings.Replace(validStoredSettings, `"quality":80`, `"quality":80,"output":{"mode":"fixed","directory":"/tmp/bad\ud800"}`, 1),
 	}
 	for name, contents := range files {
 		test.Run(name, func(test *testing.T) {
@@ -292,6 +297,28 @@ func TestLoadSettingsRejectsInvalidFilesWithoutChangingThem(test *testing.T) {
 			after, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(after, original) {
 				test.Fatal("loading invalid settings must retain the original file")
+			}
+		})
+	}
+}
+
+func TestLoadSettingsPreservesValidUnicodeEscapes(test *testing.T) {
+	for _, scenario := range []struct {
+		name, encoded, want string
+	}{
+		{"surrogate-pair", `face \ud83d\ude00`, "face 😀"},
+		{"escaped-backslash", `literal\\ud800`, `literal\ud800`},
+		{"replacement-character", `replacement \ufffd`, "replacement �"},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			path := filepath.Join(test.TempDir(), "settings.json")
+			contents := strings.ReplaceAll(validStoredSettings, "均衡", scenario.encoded)
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				test.Fatal(err)
+			}
+			presets, selected, err := loadSettings(path)
+			if err != nil || selected != scenario.want || len(presets) != 3 || presets[1].name != scenario.want {
+				test.Fatalf("valid Unicode was rejected or changed: %q, %v", selected, err)
 			}
 		})
 	}

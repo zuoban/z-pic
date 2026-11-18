@@ -65,7 +65,7 @@ decides whether the original should be retained.
 
 Each call stages and reuses the embedded executable inside a content-addressed
 private 0700 directory under the user cache root (verifying permissions, size,
-and SHA-256 integrity, falling back to an ephemeral 0700 directory removed after
+and SHA-256 integrity on every acquisition, falling back to an ephemeral 0700 directory removed after
 process completion when the user cache directory is unavailable).
 The absolute executable path is used with no shell, PATH lookup, inherited
 environment, or dynamic-library override. The child receives only `LC_ALL=C`.

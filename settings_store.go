@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -168,10 +169,8 @@ func loadFullSettings(path string) (appSettings, error) {
 	if len(data) > maxSettingsBytes {
 		return appSettings{}, errors.New("设置文件超过 1 MiB 限制")
 	}
-	// encoding/json replaces invalid UTF-8 inside strings. Reject it before
-	// decoding so a stored output path cannot silently change on load.
-	if !utf8.Valid(data) {
-		return appSettings{}, errors.New("设置文件包含无效的 UTF-8 字符")
+	if !validSettingsUnicode(data) {
+		return appSettings{}, errors.New("设置文件包含无效的 Unicode 字符")
 	}
 	var stored storedSettings
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -209,6 +208,49 @@ func loadFullSettings(path string) (appSettings, error) {
 		batchOutputDir: sanitizeStoredBatchOutputDir(stored.BatchOutputDir),
 		theme:          mode.normalized(),
 	}, nil
+}
+
+// encoding/json replaces invalid UTF-8 and unpaired UTF-16 escapes. Check both
+// before decoding so names and output paths cannot silently change. The JSON
+// decoder remains responsible for syntax and schema validation.
+func validSettingsUnicode(data []byte) bool {
+	if !utf8.Valid(data) {
+		return false
+	}
+	for index := 0; index < len(data); index++ {
+		if data[index] != '\\' {
+			continue
+		}
+		index++
+		if index >= len(data) {
+			return false
+		}
+		// Consuming a complete escape also skips escaped backslashes: the
+		// literal text "\\ud800" must not be mistaken for a surrogate.
+		if data[index] != 'u' {
+			continue
+		}
+		if index+5 > len(data) {
+			return false
+		}
+		unit, err := strconv.ParseUint(string(data[index+1:index+5]), 16, 16)
+		if err != nil {
+			return false
+		}
+		index += 4
+		if unit < 0xd800 || unit > 0xdfff {
+			continue
+		}
+		if unit > 0xdbff || index+7 > len(data) || string(data[index+1:index+3]) != `\u` {
+			return false
+		}
+		low, err := strconv.ParseUint(string(data[index+3:index+7]), 16, 16)
+		if err != nil || low < 0xdc00 || low > 0xdfff {
+			return false
+		}
+		index += 6
+	}
+	return true
 }
 
 func saveSettings(path string, presets []compressionPreset, selected string) error {
