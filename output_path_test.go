@@ -2,10 +2,40 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestBatchOutputCollisionBudgetAndRecovery(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "source.jpg")
+	const candidates = 10000
+	last := ""
+	for index := 0; index < candidates; index++ {
+		name := "photo.jpg"
+		if index == 1 {
+			name = "photo-compressed.jpg"
+		} else if index > 1 {
+			name = fmt.Sprintf("photo-compressed-%d.jpg", index)
+		}
+		last = filepath.Join(root, name)
+		if err := os.WriteFile(last, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planner := &batchOutputPlanner{}
+	if path, err := planner.resolve(root, source, "photo.jpg"); err == nil || path != "" || len(planner.used) != 0 {
+		t.Fatalf("exhausted search reserved an output: %q, %v, used=%v", path, err, planner.used)
+	}
+	if err := os.Remove(last); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := planner.resolve(root, source, "photo.jpg"); err != nil || path != last {
+		t.Fatalf("last permitted candidate not reused: %q, %v; want %q", path, err, last)
+	}
+}
 
 func TestBatchOutputPreservesLegitimateDottedNames(t *testing.T) {
 	root := t.TempDir()

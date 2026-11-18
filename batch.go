@@ -1371,6 +1371,8 @@ type batchOutputPlanner struct {
 
 type batchOutputSequence = nameseq.Sequence
 
+const maxBatchOutputCandidates = 10000
+
 func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string) (string, error) {
 	ctx := planner.ctx
 	if ctx == nil {
@@ -1416,11 +1418,14 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 		planner.sequences = make(map[string]batchOutputSequence)
 	}
 	sequence := planner.sequences[candidate]
-	for index := 0; ; index++ {
+	for index := 0; index < maxBatchOutputCandidates; index++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		index = sequence.Next(index)
+		if index >= maxBatchOutputCandidates {
+			break
+		}
 		path := candidate
 		if index == 1 {
 			path = stem + "-compressed" + ext
@@ -1448,6 +1453,7 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 			return path, nil
 		}
 	}
+	return "", errors.New("同名输出文件过多，请选择其他目录或文件名")
 }
 
 func (s *application) openOutputDir() {
