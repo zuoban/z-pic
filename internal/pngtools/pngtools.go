@@ -52,7 +52,10 @@ func Optimize(ctx context.Context, data []byte) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
-	immutable, representationMetadata := chunkConstraints(data)
+	immutable, representationMetadata, err := chunkConstraints(ctx, data)
+	if err != nil {
+		return nil, err
+	}
 	if immutable {
 		return data, nil
 	}
@@ -84,7 +87,11 @@ func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptio
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
-	if immutable, _ := chunkConstraints(data); immutable {
+	immutable, _, err := chunkConstraints(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	if immutable {
 		return data, nil
 	}
 	return invoke(ctx, "pngquant", []string{
@@ -106,11 +113,14 @@ func checkInput(ctx context.Context, data []byte) error {
 
 // The caller validates PNG structure. Still bound every slice here so a bad
 // direct call cannot panic while looking for byte-dependent metadata.
-func chunkConstraints(data []byte) (immutable, representationMetadata bool) {
+func chunkConstraints(ctx context.Context, data []byte) (immutable, representationMetadata bool, err error) {
 	for offset := 8; offset <= len(data)-12; {
+		if err := ctx.Err(); err != nil {
+			return false, false, err
+		}
 		size := uint64(binary.BigEndian.Uint32(data[offset:]))
 		if size > uint64(len(data)-offset-12) {
-			return false, false
+			return false, false, nil
 		}
 		switch string(data[offset+4 : offset+8]) {
 		case "caBX", "iDOT":
@@ -120,7 +130,7 @@ func chunkConstraints(data []byte) (immutable, representationMetadata bool) {
 		}
 		offset += int(size) + 12
 	}
-	return immutable, representationMetadata
+	return immutable, representationMetadata, ctx.Err()
 }
 
 func invoke(ctx context.Context, name string, args []string, data []byte) ([]byte, error) {

@@ -2,10 +2,57 @@ package pngtools
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
+	"image"
 	"strings"
 	"testing"
 )
+
+type cancelDuringMetadata struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (ctx *cancelDuringMetadata) Err() error {
+	ctx.checks++
+	if ctx.checks == 4 {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestMetadataScanObservesCancellation(t *testing.T) {
+	original := encodePNG(t, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	data := append([]byte(nil), original[:33]...)
+	appendChunk := func(name string) {
+		chunk := make([]byte, 12)
+		copy(chunk[4:8], name)
+		binary.BigEndian.PutUint32(chunk[8:], crc32.ChecksumIEEE(chunk[4:8]))
+		data = append(data, chunk...)
+	}
+	for range 64 {
+		appendChunk("teST")
+	}
+	appendChunk("caBX")
+	data = append(data, original[33:]...)
+	for name, run := range map[string]func(context.Context, []byte) ([]byte, error){
+		"optimize": Optimize,
+		"quantize": Quantize,
+	} {
+		t.Run(name, func(t *testing.T) {
+			base, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &cancelDuringMetadata{Context: base, cancel: cancel}
+			out, err := run(ctx, data)
+			if out != nil || !errors.Is(err, context.Canceled) {
+				t.Fatalf("metadata scan ignored cancellation: output=%d err=%v checks=%d", len(out), err, ctx.checks)
+			}
+		})
+	}
+}
 
 func TestQuantizeOptionsValidation(t *testing.T) {
 	defaults := DefaultQuantizeOptions()
