@@ -16,11 +16,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/transfer"
 )
+
+func TestResolveRejectsInvalidRequestBeforeWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if path, saved, err := Resolve(ctx, Item{Path: "/tmp/local.png"}, ""); path != "" || saved || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled local input accepted: %q, %v, %v", path, saved, err)
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	if path, saved, err := Resolve(context.Background(), Item{URL: server.URL}, ""); path != "" || saved || err == nil || !strings.Contains(err.Error(), "目录不能为空") {
+		t.Fatalf("invalid destination not rejected first: %q, %v, %v", path, saved, err)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("invalid destination caused a network request")
+	}
+}
 
 func imageBytes(t *testing.T, format string) []byte {
 	t.Helper()

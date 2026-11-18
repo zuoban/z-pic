@@ -20,7 +20,8 @@ import (
 	"zpic/internal/nameseq"
 )
 
-// Resolve leaves local paths untouched. Remote and byte inputs are saved
+// Resolve honors cancellation before leaving local paths untouched.
+// Remote and byte inputs are saved
 // unchanged only after header inspection and full static JPEG/PNG/WebP decoding.
 // The caller owns successful downloaded files and their eventual removal.
 func Resolve(ctx context.Context, item Item, dir string) (path string, downloaded bool, err error) {
@@ -60,11 +61,14 @@ type filenameSequence = nameseq.Sequence
 
 func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, downloaded bool, err error) {
 	dir := resolver.dir
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
 	if item.Path != "" {
 		return item.Path, false, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return "", false, err
+	if dir == "" {
+		return "", false, fmt.Errorf("图片保存目录不能为空")
 	}
 	var reader io.Reader
 	name := "image"
@@ -114,9 +118,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			return "", false, fmt.Errorf("图片超过 64 MiB 限制")
 		}
 		reader = bytes.NewReader(item.Data)
-	}
-	if dir == "" {
-		return "", false, fmt.Errorf("图片保存目录不能为空")
 	}
 	// Reject login/error pages before downloading the whole response or
 	// creating a temporary file. The complete validation below remains required.

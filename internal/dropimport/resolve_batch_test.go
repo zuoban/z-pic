@@ -151,7 +151,7 @@ func TestResolverFailureAndCancellationDoNotReserveNames(test *testing.T) {
 			test.Fatalf("canceled image accepted: %q, %v, %v", path, saved, err)
 		}
 		local := filepath.Join(dir, "local.png")
-		if path, saved, err := resolver.Resolve(ctx, Item{Path: local}); err != nil || saved || path != local {
+		if path, saved, err := resolver.Resolve(context.Background(), Item{Path: local}); err != nil || saved || path != local {
 			test.Fatalf("local path changed: %q, %v, %v", path, saved, err)
 		}
 		path, saved, err := resolver.Resolve(context.Background(), Item{Data: payload})
