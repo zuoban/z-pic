@@ -354,14 +354,20 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 
 	uniqueDirs := make(map[string]bool, len(existingDirs))
 	maps.Copy(uniqueDirs, existingDirs)
-	isDir := make([]bool, len(inputs))
+	directoryRoots := make([]string, len(inputs))
 	for i, input := range inputs {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
 		if info, err := os.Stat(input); err == nil && info.IsDir() {
-			isDir[i] = true
-			uniqueDirs[canonicalBatchKeyWithParents(filepath.Clean(input), resolvedParents)] = true
+			// Follow the directory the user explicitly selected. WalkDir
+			// itself does not follow a symlink at its root.
+			resolved, err := filepath.EvalSymlinks(input)
+			if err != nil {
+				return out, err
+			}
+			directoryRoots[i] = resolved
+			uniqueDirs[canonicalBatchKeyWithParents(resolved, resolvedParents)] = true
 		}
 	}
 	prefixRoot := len(uniqueDirs) > 1
@@ -422,7 +428,7 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		if !isDir[i] {
+		if directoryRoots[i] == "" {
 			if err := addFile(input, filepath.Base(input), "", "", false, true); err != nil {
 				if errors.Is(err, errBatchLimit) {
 					return out, nil
@@ -432,20 +438,21 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 			continue
 		}
 		rootClean := filepath.Clean(input)
-		canonDir := canonicalBatchKeyWithParents(rootClean, resolvedParents)
+		walkRoot := directoryRoots[i]
+		canonDir := canonicalBatchKeyWithParents(walkRoot, resolvedParents)
 		rootBase := dirBaseName(rootClean)
-		err := filepath.WalkDir(rootClean, func(p string, d fs.DirEntry, walkErr error) error {
+		err := filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			if walkErr != nil {
-				if p == rootClean {
+				if p == walkRoot {
 					return walkErr
 				}
 				return nil
 			}
 			name := d.Name()
-			if p != rootClean && strings.HasPrefix(name, ".") {
+			if p != walkRoot && strings.HasPrefix(name, ".") {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
@@ -460,14 +467,15 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 			if !isSupportedImageExt(name) {
 				return nil
 			}
-			rel, relErr := filepath.Rel(rootClean, p)
+			rel, relErr := filepath.Rel(walkRoot, p)
 			if relErr != nil {
 				rel = name
 			}
+			path := filepath.Join(rootClean, rel)
 			if prefixRoot {
 				rel = filepath.Join(rootBase, rel)
 			}
-			return addFile(p, rel, canonDir, rootBase, prefixRoot, false)
+			return addFile(path, rel, canonDir, rootBase, prefixRoot, false)
 		})
 		if err != nil {
 			if errors.Is(err, errBatchLimit) {

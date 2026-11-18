@@ -135,3 +135,10 @@
 - 修改：有界读取 VP8/VP8L 帧头，核对实际尺寸、3200 万像素上限以及与 VP8X 的一致性，不解码像素。
 - 防复发：有多处尺寸声明的格式必须交叉校验，不能把外层尺寸声明直接当作内存预算依据；每个帧头 reader 都限制在自身块长度内。
 - 验证与 review：`go test ./internal/compress -run 'TestWebP|TestValidateStaticWebP|TestClipboardPNG' -count=1`；检查有损、无损、透明图片和真实编码器输出，保留动画及损坏容器拒绝策略。
+
+### 第 4 轮：显式选择的目录别名应能扫描
+
+- 确认问题：`Stat` 把目录符号链接识别为目录，但 `WalkDir` 不跟随根符号链接，导致用户明确选择的有效文件夹导入零张图片。
+- 修改：解析显式目录根用于遍历和去重，保留所选路径及相对文件名；嵌套文件和目录符号链接仍跳过。
+- 防复发：先明确链接策略作用于显式根还是递归后代；分类使用 `Stat`、遍历使用 `WalkDir` 时必须检查二者的语义差异。
+- 验证与 review：`go test . -run 'TestScanBatchPaths|TestCanonicalBatchKey|TestBatchScan' -count=1`；覆盖别名单独导入、两个导入顺序、根目录去重以及内部链接不越界。

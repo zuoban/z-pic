@@ -83,6 +83,36 @@ func TestScanBatchPathsKeepsExplicitFileSymlinksDistinct(t *testing.T) {
 	}
 }
 
+func TestScanBatchPathsFollowsOnlyExplicitDirectoryAlias(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "album")
+	alias := filepath.Join(root, "chosen-alias")
+	writeTestJPEG(t, filepath.Join(directory, "photo.jpg"), 8, 4, 80)
+	outside := filepath.Join(root, "outside")
+	writeTestJPEG(t, filepath.Join(outside, "excluded.jpg"), 8, 4, 80)
+	for link, target := range map[string]string{
+		alias:                                    directory,
+		filepath.Join(directory, "nested-alias"): outside,
+		filepath.Join(directory, "excluded.jpg"): filepath.Join(outside, "excluded.jpg"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, inputs := range [][]string{{alias}, {directory, alias}, {alias, directory}} {
+		scan, err := scanBatchPaths(context.Background(), inputs, nil, 0)
+		if err != nil || len(scan.items) != 1 || scan.duplicates != len(inputs)-1 {
+			t.Fatalf("explicit directory alias scan: %+v, %v", scan, err)
+		}
+		item := scan.items[0]
+		if item.status != batchPending || item.relPath != "photo.jpg" ||
+			item.sourceDir != canonicalBatchKey(directory) ||
+			item.path != filepath.Join(inputs[0], "photo.jpg") {
+			t.Fatalf("alias changed source identity or relative output: %+v", item)
+		}
+	}
+}
+
 func TestScanBatchPathsRefreshesDirectoryAliasesBetweenScans(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first")
