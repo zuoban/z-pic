@@ -168,6 +168,11 @@ func loadFullSettings(path string) (appSettings, error) {
 	if len(data) > maxSettingsBytes {
 		return appSettings{}, errors.New("设置文件超过 1 MiB 限制")
 	}
+	// encoding/json replaces invalid UTF-8 inside strings. Reject it before
+	// decoding so a stored output path cannot silently change on load.
+	if !utf8.Valid(data) {
+		return appSettings{}, errors.New("设置文件包含无效的 UTF-8 字符")
+	}
 	var stored storedSettings
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
