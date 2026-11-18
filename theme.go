@@ -418,6 +418,25 @@ func quietButton(c *ui.Context, key, label string, height float32, disabled bool
 	return btn
 }
 
+func destructiveAction(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
+	button := quietButton(c, key, label, height, disabled)
+	if disabled {
+		return button
+	}
+	t := c.Theme()
+	mix := float32(0.06)
+	if button.Pressed() {
+		mix = 0.16
+	} else if button.Hovered() {
+		mix = 0.10
+	}
+	border := t.Danger.Alpha(0.35)
+	if c.Preferences().HighContrast {
+		border = t.Danger
+	}
+	return button.Background(panelSurface(c).Mix(t.Danger, mix)).Border(1, border).TextColor(t.Danger)
+}
+
 func quietToolbarButton(c *ui.Context, key, label string, disabled bool) ui.Element {
 	t := c.Theme()
 	btn := ui.Button(c.Key(key), label).Height(32).Radius(pillRadius(32, c)).

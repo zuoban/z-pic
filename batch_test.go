@@ -570,6 +570,7 @@ func TestBatchViewFitsMinimumWindowAndBusyGuards(t *testing.T) {
 				s.busy = true
 				s.phase = "正在压缩 1 / 2 · photo-2.png"
 				s.batch.done, s.batch.total = 1, 2
+				s.batch.running = true
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				s.cancel = cancel
@@ -782,7 +783,7 @@ func TestBatchQueueFilterSearchAndRemoval(t *testing.T) {
 	}
 
 	// Filter to pending items.
-	if err := tt.Click("待处理"); err != nil {
+	if err := tt.Click("待处理 1"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("批量队列 · 1 / 5 张") || !tt.HasText(filepath.Join("sub", "wait.png")) || tt.HasText("done.jpg") {
@@ -793,7 +794,7 @@ func TestBatchQueueFilterSearchAndRemoval(t *testing.T) {
 	}
 
 	// Filter to failed items (shows both retryable failures and invalidInput).
-	if err := tt.Click("失败"); err != nil {
+	if err := tt.Click("失败 3"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("批量队列 · 3 / 5 张") || !tt.HasText("fail-a.jpg") || !tt.HasText("broken.jpg") || !tt.HasText("fail-b.png") {
@@ -1091,9 +1092,10 @@ func TestBatchFilterAndRetryFitMinimumWindow(t *testing.T) {
 				t.Fatalf("filter group must fit inside minimum window: %+v", filterGroup)
 			}
 			sortBtn, ok := tt.AccessByRole(ui.RoleMenuButton, "队列排序")
-			if !ok || sortBtn.Offscreen || sortBtn.Bounds.X < filterGroup.Bounds.X+filterGroup.Bounds.W ||
+			if !ok || sortBtn.Offscreen || sortBtn.Bounds.Y < filterGroup.Bounds.Y+filterGroup.Bounds.H ||
+				sortBtn.Bounds.X < searchField.Bounds.X+searchField.Bounds.W ||
 				sortBtn.Bounds.X+sortBtn.Bounds.W > 880 || sortBtn.Bounds.Y+sortBtn.Bounds.H > 660 {
-				t.Fatalf("sort menu button must sit beside filter without overlap inside 880x660: filter=%+v sort=%+v", filterGroup, sortBtn)
+				t.Fatalf("sort menu must sit beside search below the full-width status filter: search=%+v sort=%+v", searchField, sortBtn)
 			}
 			for _, label := range []string{"移除无效项", "移除失败项", "重试失败项", "重试", "预览", "移除"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
@@ -1489,7 +1491,7 @@ func TestBatchQueueSortingAndSelection(t *testing.T) {
 	}
 
 	// Filter + search compose with active sort; resetting filter keeps sort mode.
-	if err := tt.Click("已完成"); err != nil {
+	if err := tt.Click("已完成 4"); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := s.filteredBatchIndices(), []int{0, 2, 1, 3}; !slices.Equal(got, want) {
@@ -1824,7 +1826,7 @@ func TestBatchCompressionActionsStayInTopToolbar(t *testing.T) {
 		{name: "partial", statuses: []batchStatus{batchDone, batchPending}, actions: []string{"重新压缩", "继续压缩"}},
 		{name: "complete", statuses: []batchStatus{batchDone, batchDone}, actions: []string{"重新压缩"}},
 		{name: "busy", statuses: []batchStatus{batchDone, batchPending}, busy: true, actions: []string{"重新压缩", "继续压缩"}},
-		{name: "preview", statuses: []batchStatus{batchPending, batchPending}, preview: true, actions: []string{"开始压缩"}},
+		{name: "preview", statuses: []batchStatus{batchPending, batchPending}, preview: true},
 		{name: "unprocessable", statuses: []batchStatus{batchPending}, invalid: true, actions: []string{"开始压缩"}},
 	} {
 		t.Run(state.name, func(t *testing.T) {

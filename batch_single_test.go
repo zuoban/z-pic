@@ -155,9 +155,11 @@ func TestBatchSinglePendingActionGuardsAndLayout(t *testing.T) {
 			}, 880, 660)
 			button, ok := tester.AccessByRole(ui.RoleButton, "压缩此张")
 			remove, _ := tester.AccessByRole(ui.RoleButton, "移除")
+			toolbar, _ := tester.AccessByRole(ui.RoleToolbar, "操作栏")
 			if !ok || button.Offscreen || button.Bounds.H < 28 || button.Bounds.X < 0 ||
-				button.Bounds.X+button.Bounds.W > remove.Bounds.X || remove.Bounds.X+remove.Bounds.W > 880 {
-				t.Fatalf("single-item controls must not overlap at minimum size: action=%+v remove=%+v", button, remove)
+				button.Bounds.Y+button.Bounds.H > toolbar.Bounds.Y+toolbar.Bounds.H ||
+				button.Bounds.X+button.Bounds.W > 880 || remove.Bounds.X+remove.Bounds.W > 880 {
+				t.Fatalf("single-item compression must be in toolbar and removal remain bounded: action=%+v remove=%+v", button, remove)
 			}
 			for _, status := range []batchStatus{batchDone, batchProcessing, batchFailed} {
 				app.batch.items[0].status = status

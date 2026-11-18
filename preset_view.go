@@ -40,7 +40,15 @@ func presetDisplayName(preset compressionPreset) string {
 }
 
 func presetOutputExample(options presetSaveOptions) string {
-	name := "example"
+	return presetOutputName(options, "example.png")
+}
+
+func presetOutputName(options presetSaveOptions, filename string) string {
+	if options.Mode == presetSaveOriginal {
+		filename = filepath.Base(filename)
+	}
+	ext := filepath.Ext(filename)
+	name := strings.TrimSuffix(filename, ext)
 	if options.UseSuffix {
 		suffix := options.Suffix
 		if suffix == "" {
@@ -48,7 +56,7 @@ func presetOutputExample(options presetSaveOptions) string {
 		}
 		name += suffix
 	}
-	name += ".png"
+	name += ext
 	if options.supportsSubfolder() && options.UseSubfolder {
 		folder := options.Subfolder
 		if folder == "" {

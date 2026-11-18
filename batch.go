@@ -93,6 +93,7 @@ type batchState struct {
 	previewIndex    int
 	done            int
 	total           int
+	running         bool
 	currentName     string
 
 	cacheReady     bool
@@ -1228,6 +1229,7 @@ func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map
 	ctx, cancel := context.WithCancel(context.Background())
 	s.batch.done = 0
 	s.batch.total = len(tasks)
+	s.batch.running = true
 	s.batch.currentName = ""
 	s.busy, s.phase, s.cancel, s.canceling = true, fmt.Sprintf("正在压缩 0 / %d", len(tasks)), cancel, false
 	s.setMessage("", false)
@@ -1323,6 +1325,7 @@ func (s *application) completeBatchRun(ctx context.Context) {
 	if s.batch == nil {
 		return
 	}
+	s.batch.running = false
 	s.batch.currentName = ""
 	for i := range s.batch.items {
 		if s.batch.items[i].status == batchProcessing {

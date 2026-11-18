@@ -142,6 +142,9 @@ func TestMainToolbarFitsAcrossViews(t *testing.T) {
 					if state == "queue" || state == "partial-queue" || state == "preview" {
 						s.batch = newBatchState([]batchItem{{path: "/photos/example.jpg", absPath: "/photos/example.jpg", relPath: "example.jpg", format: "jpeg", status: batchPending}})
 						s.batch.previewOpen = state == "preview"
+						if s.batch.previewOpen {
+							s.batch.previewIndex = 0
+						}
 						if state == "partial-queue" {
 							s.batch.items = append(s.batch.items, batchItem{path: "/photos/done.jpg", absPath: "/photos/done.jpg", relPath: "done.jpg", format: "jpeg", status: batchDone, originalSize: 4096, outputSize: 2048})
 						}
@@ -173,6 +176,9 @@ func TestMainToolbarFitsAcrossViews(t *testing.T) {
 					}
 					if state == "partial-queue" {
 						labels = append(labels, "继续压缩")
+					}
+					if state == "preview" {
+						labels[2] = "压缩此张"
 					}
 					var controls []ui.AccessInfo
 					for _, label := range labels {
@@ -248,7 +254,7 @@ func TestSingleCompressionActionInTopToolbar(t *testing.T) {
 				}
 			}
 			if state == "result" {
-				for _, saveLabel := range []string{"另存副本", "保存结果"} {
+				for _, saveLabel := range []string{"另存副本", "覆盖原图…"} {
 					if save, ok := tt.AccessByRole(ui.RoleButton, saveLabel); !ok || save.Disabled {
 						t.Fatalf("moving recompression to the toolbar must preserve %s: %+v", saveLabel, save)
 					}
@@ -378,7 +384,11 @@ func TestPNGCompressionResultIsVisible(t *testing.T) {
 					t.Errorf("PNG result must display %q; got %q", text, tt.Texts())
 				}
 			}
-			for _, label := range []string{"重新压缩", "另存副本", "保存结果"} {
+			saveLabel := "覆盖原图…"
+			if unchanged {
+				saveLabel = "无需覆盖（未减小）"
+			}
+			for _, label := range []string{"重新压缩", "另存副本", saveLabel} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Bounds.H < 20 || button.Bounds.Y+button.Bounds.H > 660 {
 					t.Fatalf("%q must remain reachable at minimum window size: %+v", label, button)
@@ -400,7 +410,7 @@ func TestOverwriteRequiresConfirmationAndDefaultsToCancel(t *testing.T) {
 		s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 		result := s.result
 		tt := ui.NewTester(s.view, 880, 660)
-		if err := tt.Click("保存结果"); err != nil {
+		if err := tt.Click("覆盖原图…"); err != nil {
 			t.Fatal(err)
 		}
 		dialog, ok := tt.AccessByRole(ui.RoleAlertDialog, "确认覆盖原图？")
@@ -443,7 +453,12 @@ func TestOverwriteUnavailableWithoutSmallerCurrentResult(t *testing.T) {
 				t.Fatalf("overwrite must not be offered in state %q", state)
 			}
 			tt := ui.NewTester(s.view, 880, 660)
-			label := "保存结果"
+			label := "覆盖原图…"
+			if state == "unchanged" {
+				label = "无需覆盖（未减小）"
+			} else if state == "overwritten" {
+				label = "已覆盖原图"
+			}
 			if button, exists := tt.AccessByRole(ui.RoleButton, label); exists && !button.Disabled {
 				t.Fatalf("unavailable overwrite must be disabled: %+v", button)
 			}
@@ -744,7 +759,7 @@ func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
 					c.SetTheme(theme)
 					s.view(c)
 				}, 880, 660)
-				for _, label := range []string{"更换图片", "重新压缩", "另存副本", "保存结果"} {
+				for _, label := range []string{"更换图片", "重新压缩", "另存副本", "覆盖原图…"} {
 					button, ok := tt.AccessByRole(ui.RoleButton, label)
 					if !ok || button.Offscreen || button.Bounds.H < 28 ||
 						button.Bounds.Y+button.Bounds.H > 660 || button.Bounds.X+button.Bounds.W > 880 {
@@ -753,7 +768,7 @@ func TestResultActionsFitBothThemesAtMinimumSize(t *testing.T) {
 				}
 				compare, ok := tt.AccessByRole(ui.RoleRadioGroup, "预览模式")
 				if !ok || compare.Bounds.W > 200 || compare.Bounds.X+compare.Bounds.W > 880 {
-					t.Fatalf("comparison must share the toolbar with replace: %+v", compare)
+					t.Fatalf("comparison must remain bounded in its dedicated mode row: %+v", compare)
 				}
 			})
 		}
@@ -1146,7 +1161,7 @@ func TestRevealSavedFileLifecycleAndMinimumWindow(t *testing.T) {
 				s.view(c)
 			}, 880, 660)
 
-			for _, label := range []string{"定位文件", "另存副本", "保存结果"} {
+			for _, label := range []string{"定位文件", "另存副本", "覆盖原图…"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
 				if !ok || button.Offscreen || button.Bounds.H < 24 ||
 					button.Bounds.X+button.Bounds.W > 880 || button.Bounds.Y+button.Bounds.H > 660 {

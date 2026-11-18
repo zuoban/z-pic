@@ -223,6 +223,10 @@ func (s *application) floatingView(c *ui.Context) {
 			ui.Row(c).Height(28).Gap(8).AlignItems(ui.Center).Children(func() {
 				quietButton(c, "floating-show-main", "查看队列", 28, false).
 					OnClick(s.showMainWindow)
+				item, selected := s.floatingSelectedImage()
+				quietButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).
+					Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
+					OnClick(s.openFloatingSelection)
 				ui.Box(c).Grow(1)
 				quietButton(c, "floating-downloads", "下载位置", 28, false).
 					Tooltip("打开网页原图下载文件夹").
@@ -316,21 +320,30 @@ func (s *application) floatingHeader(c *ui.Context) {
 		floatingIconButton(c, "floating-collapse", "收起图片", "back",
 			func() { s.setFloatingExpanded(false) })
 		ui.Column(c).Grow(1).Width(0).Gap(4).Children(func() {
-			ui.Textf(c, "%d 张图片", s.floatingImageCount()).FontSize(15).FontWeight(500).FontFeatures("tnum")
+			count := fmt.Sprintf("%d 张图片", s.floatingImageCount())
+			if s.floating.filter != batchFilterAll {
+				count = fmt.Sprintf("%d / %d 张图片", len(s.floating.paths), s.floatingImageCount())
+			}
+			ui.Text(c, count).FontSize(15).FontWeight(500).FontFeatures("tnum").SingleLine()
 			detail := "拖入本地或网页图片"
 			if item, ok := s.floatingSelectedImage(); ok {
 				detail = "已选 1 张 · " + formatSize(item.originalSize)
 			}
 			ui.Text(c, detail).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle()
 		})
-		floatingIconButton(c, "floating-filter", "筛选图片", "filter", nil).
+		filterLabels := []string{"全部图片", "待处理", "已完成", "失败"}
+		filter := floatingIconButton(c, "floating-filter", "筛选图片", "filter", nil).
+			Tooltip("当前筛选："+filterLabels[max(0, min(s.floating.filter, len(filterLabels)-1))]).
 			PopoverMenuButton(func(menu *ui.Menu) {
-				for index, label := range []string{"全部图片", "待处理", "已完成", "失败"} {
+				for index, label := range filterLabels {
 					if menu.Item(label).Radio(s.floating.filter == index).Chosen() {
 						s.floating.filter = index
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
+		if s.floating.filter != batchFilterAll {
+			filter.Selected(true).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+		}
 		floatingIconButton(c, "floating-sort", "图片排序", "sort", nil).
 			PopoverMenuButton(func(menu *ui.Menu) {
 				for _, option := range batchSortOptions {

@@ -129,6 +129,27 @@ func (s *application) zoomPreviewActual() {
 }
 
 func (s *application) previewToolbar(c *ui.Context) {
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		if s.result != nil && !s.overwritten {
+			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "预览模式").FontSize(12).TextColor(metadataColor(c)).Grow(1)
+				s.previewModeControl(c)
+			})
+		}
+		s.previewZoomToolbar(c)
+	})
+}
+
+func (s *application) previewModeControl(c *ui.Context) {
+	if s.result == nil || s.overwritten {
+		return
+	}
+	seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
+		Label("预览模式").FillEqually().Width(168).Height(32).Disabled(s.previewLocked())
+	styleGlassSegmented(seg, c, 32)
+}
+
+func (s *application) previewZoomToolbar(c *ui.Context) {
 	t := c.Theme()
 	width, _ := c.Size()
 	locked := s.previewLocked()
@@ -169,16 +190,22 @@ func (s *application) previewToolbar(c *ui.Context) {
 			ui.Textf(c, "%.0f%%", scale*100).Width(56).FontSize(12).
 				FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted).SingleLine()
 		})
-		quietButton(c, "preview-fit", "适应", 32, locked).
+		fit := quietButton(c, "preview-fit", "适应", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key0).
 			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
 			OnClick(s.resetPreviewFit)
-		quietButton(c, "preview-actual", "1:1", 32, locked).
+		actual := quietButton(c, "preview-actual", "1:1", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key1).
 			Tooltip("按原始尺寸查看（100%） · " + shortcutLabel("1")).
 			OnClick(s.zoomPreviewActual)
+		fit.Selected(s.comparison.scale == 0)
+		actual.Selected(s.comparison.scale == 1)
+		if s.comparison.scale == 0 {
+			fit.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+		} else if s.comparison.scale == 1 {
+			actual.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+		}
 		if width >= 560 {
-			ui.Box(c).Grow(1)
 			hint := "滚轮缩放"
 			if s.comparing() {
 				if s.previewCanPan(bounds) {
@@ -190,6 +217,7 @@ func (s *application) previewToolbar(c *ui.Context) {
 				hint = "拖动平移"
 			}
 			ui.Text(c, hint).FontSize(12).TextColor(metadataColor(c)).
+				Width(0).Grow(1).SingleLine().TextAlign(ui.End).
 				Tooltip("拖动分隔线对比；放大后拖动图片或双指滚动平移；滚轮或捏合缩放")
 		}
 	})
