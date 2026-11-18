@@ -37,7 +37,22 @@ func Read(ctx context.Context, path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("图片输入必须是普通文件")
 	}
-	data, err := readSized(ctx, file, info.Size())
+	data, err := ReadFile(ctx, file, info.Size())
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// ReadFile reads up to MaxSize bytes from the start of an already-opened regular file.
+func ReadFile(ctx context.Context, file *os.File, sizeHint int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("读取图片失败：%w", err)
+	}
+	data, err := readSized(ctx, file, sizeHint)
 	if err != nil {
 		return nil, fmt.Errorf("读取图片失败：%w", err)
 	}

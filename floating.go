@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -15,7 +16,10 @@ import (
 	"zpic/internal/dropimport"
 )
 
-const maxPendingDrops = 16
+const (
+	maxPendingDrops       = 16
+	maxCachedDownloadURLs = 512
+)
 
 func (s *application) setFloatingOpen(open bool) {
 	if !open {
@@ -123,6 +127,10 @@ func (s *application) startNextDropImport() {
 	s.dropQueue = s.dropQueue[1:]
 	dir, dirErr := s.downloadedImagesDir()
 	cached := maps.Clone(s.downloadedURLs)
+	if s.dropTransport == nil {
+		s.dropTransport = dropimport.NewTransport()
+	}
+	transport := s.dropTransport
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel, s.canceling = true, "正在接收拖入的图片", cancel, false
 	if s.clipboardImporting {
@@ -135,8 +143,6 @@ func (s *application) startNextDropImport() {
 	s.saves.Add(1)
 	go func() {
 		defer s.saves.Done()
-		transport := dropimport.NewTransport()
-		defer transport.CloseIdleConnections()
 		resolver := dropimport.NewResolver(dir, transport)
 		items, err := dropimport.ParseContext(ctx, data)
 		var paths []string
@@ -191,10 +197,7 @@ func (s *application) startNextDropImport() {
 			defer cancel()
 			s.busy, s.phase, s.cancel, s.canceling = false, "", nil, false
 			s.dropImporting = false
-			if s.downloadedURLs == nil {
-				s.downloadedURLs = make(map[string]string)
-			}
-			maps.Copy(s.downloadedURLs, savedURLs)
+			s.recordDownloadedURLs(savedURLs)
 			s.dropImportErrors = strings.Join(failures, "\n")
 			if downloaded > 0 {
 				s.dropMessage = fmt.Sprintf("已下载 %d 张，正在加入队列。", downloaded)
@@ -252,6 +255,27 @@ func (s *application) rememberDropFailure(message string) {
 		s.dropFailures = append(s.dropFailures, message)
 	}
 	s.invalidateFloatingWindow()
+}
+
+func (s *application) recordDownloadedURLs(saved map[string]string) {
+	if len(saved) == 0 {
+		return
+	}
+	if s.downloadedURLs == nil {
+		s.downloadedURLs = make(map[string]string)
+	}
+	for rawURL, path := range saved {
+		if _, exists := s.downloadedURLs[rawURL]; !exists {
+			s.downloadedURLOrder = append(s.downloadedURLOrder, rawURL)
+		}
+		s.downloadedURLs[rawURL] = path
+	}
+	if excess := len(s.downloadedURLOrder) - maxCachedDownloadURLs; excess > 0 {
+		for _, evicted := range s.downloadedURLOrder[:excess] {
+			delete(s.downloadedURLs, evicted)
+		}
+		s.downloadedURLOrder = slices.Clone(s.downloadedURLOrder[excess:])
+	}
 }
 
 func (s *application) floatingStatus() (string, bool) {

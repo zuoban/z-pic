@@ -271,27 +271,42 @@ func TestThumbnailRasterDoesNotRetainSource(t *testing.T) {
 }
 
 func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
+	parent := image.Rect(-4, -3, 30, 26)
 	bounds := image.Rect(4, 6, 20, 18)
-	source := image.NewNRGBA(bounds)
-	for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
-		for column := bounds.Min.X; column < bounds.Max.X; column++ {
-			source.SetNRGBA(column, row, color.NRGBA{
+	nrgbaParent := image.NewNRGBA(parent)
+	rgbaParent := image.NewRGBA(parent)
+	for row := parent.Min.Y; row < parent.Max.Y; row++ {
+		for column := parent.Min.X; column < parent.Max.X; column++ {
+			a := uint8((column*31 + row*19) & 0xff)
+			c := color.NRGBA{
 				R: uint8(column * 13),
 				G: uint8(row * 17),
 				B: uint8((column ^ row) * 23),
-				A: uint8(64 + (column+row)%190),
-			})
+				A: a,
+			}
+			nrgbaParent.SetNRGBA(column, row, c)
+			rgbaParent.Set(column, row, c)
 		}
 	}
-	fastThumb, err := thumbnailRaster(context.Background(), source, 7)
-	if err != nil {
-		test.Fatal(err)
-	}
-	slowThumb, err := thumbnailRaster(context.Background(), plainColorImage{bounds: bounds, pixels: source}, 7)
-	if err != nil {
-		test.Fatal(err)
-	}
-	if fastThumb.Rect != slowThumb.Rect || !bytes.Equal(fastThumb.Pix, slowThumb.Pix) {
-		test.Fatal("RGBA64Image thumbnail fast path diverged from Color.RGBA fallback")
+	for _, tc := range []struct {
+		name string
+		img  image.Image
+	}{
+		{"SubNRGBA", nrgbaParent.SubImage(bounds)},
+		{"SubRGBA", rgbaParent.SubImage(bounds)},
+	} {
+		for _, edge := range []int{7, 64} {
+			fastThumb, err := thumbnailRaster(context.Background(), tc.img, edge)
+			if err != nil {
+				test.Fatal(err)
+			}
+			slowThumb, err := thumbnailRaster(context.Background(), colorOnlyImage{tc.img}, edge)
+			if err != nil {
+				test.Fatal(err)
+			}
+			if fastThumb.Rect != slowThumb.Rect || !bytes.Equal(fastThumb.Pix, slowThumb.Pix) {
+				test.Fatalf("%s (edge=%d) thumbnail fast path diverged from Color.RGBA fallback", tc.name, edge)
+			}
+		}
 	}
 }

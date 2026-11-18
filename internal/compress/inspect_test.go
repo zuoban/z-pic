@@ -122,4 +122,37 @@ func TestInspectRejectsAnimatedPNGAndInvalidInputs(t *testing.T) {
 	if _, err := Inspect(ctx, apngPath); err == nil {
 		t.Fatal("canceled context must abort Inspect")
 	}
+
+	// Bad IHDR CRC and unsupported bitDepth/colorType must be rejected.
+	badCRC := bytes.Clone(raw)
+	badCRC[29] ^= 0xff
+	if _, err := Inspect(context.Background(), writeFixture(t, "badcrc.png", badCRC)); err == nil {
+		t.Fatal("corrupt PNG IHDR CRC must be rejected")
+	}
+	badDepth := bytes.Clone(raw)
+	badDepth[24] = 3
+	binary.BigEndian.PutUint32(badDepth[29:33], crc32.ChecksumIEEE(badDepth[12:29]))
+	if _, err := Inspect(context.Background(), writeFixture(t, "baddepth.png", badDepth)); err == nil {
+		t.Fatal("invalid PNG bit depth must be rejected")
+	}
+
+	// Cancellation during multi-segment JPEG header scan must abort promptly.
+	baseJPEG := jpegFixture(t, 85)
+	paddedJPEG := bytes.Clone(baseJPEG[:2])
+	for range 8 {
+		paddedJPEG = append(paddedJPEG, 0xff, 0xe2, 0xff, 0xff)
+		paddedJPEG = append(paddedJPEG, make([]byte, 65533)...)
+	}
+	paddedJPEG = append(paddedJPEG, baseJPEG[2:]...)
+	paddedPath := writeFixture(t, "padded.jpg", paddedJPEG)
+	info, err := Inspect(context.Background(), paddedPath)
+	if err != nil || info.Format != "jpeg" || info.Width != 128 || info.Height != 96 {
+		t.Fatalf("padded JPEG Inspect = %+v, %v", info, err)
+	}
+	cBase, cCancel := context.WithCancel(context.Background())
+	defer cCancel()
+	cCtx := &cancelAtCheckpoint{Context: cBase, cancel: cCancel, limit: 6}
+	if _, err := Inspect(cCtx, paddedPath); err == nil {
+		t.Fatal("JPEG header scan ignored mid-stream cancellation")
+	}
 }

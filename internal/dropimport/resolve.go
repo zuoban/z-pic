@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +22,38 @@ import (
 	"zpic/internal/nameseq"
 )
 
-// Resolve honors cancellation before leaving local paths untouched.
+// InspectBytes validates in-memory image bytes before touching the filesystem.
+func inspectInMemory(ctx context.Context, payload []byte) (string, error) {
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(payload)))
+	if err != nil {
+		return "", fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+	}
+	if format != "jpeg" && format != "png" && format != "webp" {
+		return "", fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
+	}
+	const maxPixels = 32_000_000
+	if config.Width <= 0 || config.Height <= 0 || uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
+		return "", fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
+	}
+	if format == "png" {
+		if err := compress.ValidatePNG(ctx, payload); err != nil {
+			return "", err
+		}
+	}
+	if format == "webp" {
+		if err := compress.ValidateWebP(ctx, payload); err != nil {
+			return "", err
+		}
+	}
+	if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(payload))); err != nil {
+		return "", fmt.Errorf("图片数据损坏：%w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return format, nil
+}
+
 // Remote and byte inputs are saved
 // unchanged only after header inspection and full static JPEG/PNG/WebP decoding.
 // The caller owns successful downloaded files and their eventual removal.
@@ -73,6 +105,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		return "", false, fmt.Errorf("图片保存目录不能为空")
 	}
 	var reader io.Reader
+	var prevalidatedFormat string
 	name := "image"
 	if item.URL != "" {
 		parsed, err := httpURL(item.URL)
@@ -92,8 +125,14 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 				if len(via) >= 5 {
 					return fmt.Errorf("图片下载重定向次数过多")
 				}
-				_, err := httpURL(req.URL.String())
-				return err
+				target, err := httpURL(req.URL.String())
+				if err != nil {
+					return err
+				}
+				if len(via) > 0 && !isLocalOrPrivateHost(via[0].URL.Hostname()) && isLocalOrPrivateHost(target.Hostname()) {
+					return fmt.Errorf("拒绝从公网地址重定向到本地或内网地址")
+				}
+				return nil
 			},
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -111,7 +150,19 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		if response.ContentLength > maxImage {
 			return "", false, fmt.Errorf("图片超过 64 MiB 限制")
 		}
-		reader = response.Body
+		// Reject login/error pages before downloading the whole response or
+		// creating a temporary file. The complete validation below remains required.
+		buffered := bufio.NewReaderSize(contextio.NewReader(ctx, response.Body), 512)
+		header, err := buffered.Peek(12)
+		if err != nil && err != io.EOF {
+			return "", false, err
+		}
+		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
+			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
+			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
+			return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		}
+		reader = buffered
 	} else {
 		if len(item.Data) == 0 {
 			return "", false, unsupported()
@@ -119,23 +170,22 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		if len(item.Data) > maxImage {
 			return "", false, fmt.Errorf("图片超过 64 MiB 限制")
 		}
+		header := item.Data[:min(12, len(item.Data))]
+		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
+			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
+			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
+			return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		}
 		reader = bytes.NewReader(item.Data)
 	}
-	// Reject login/error pages before downloading the whole response or
-	// creating a temporary file. The complete validation below remains required.
-	buffered := bufio.NewReaderSize(contextio.NewReader(ctx, reader), 512)
-	header, err := buffered.Peek(12)
-	if err != nil && err != io.EOF {
-		return "", false, err
-	}
-	if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
-		!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
-		!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
-		return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
-	}
-	reader = buffered
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", false, fmt.Errorf("无法创建图片目录：%w", err)
+	}
+	if len(item.Data) > 0 {
+		prevalidatedFormat, err = inspectInMemory(ctx, item.Data)
+		if err != nil {
+			return "", false, err
+		}
 	}
 	temp, err := os.CreateTemp(dir, ".drop-*")
 	if err != nil {
@@ -156,15 +206,19 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	if size > maxImage {
 		return "", false, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	info, err := compress.Inspect(ctx, tempName)
-	if err != nil {
-		return "", false, err
-	}
-	if _, err := temp.Seek(0, io.SeekStart); err != nil {
-		return "", false, err
-	}
-	if _, _, err := image.Decode(contextio.NewReader(ctx, temp)); err != nil {
-		return "", false, fmt.Errorf("图片数据损坏：%w", err)
+	format := prevalidatedFormat
+	if format == "" {
+		info, err := compress.Inspect(ctx, tempName)
+		if err != nil {
+			return "", false, err
+		}
+		if _, err := temp.Seek(0, io.SeekStart); err != nil {
+			return "", false, err
+		}
+		if _, _, err := image.Decode(contextio.NewReader(ctx, temp)); err != nil {
+			return "", false, fmt.Errorf("图片数据损坏：%w", err)
+		}
+		format = info.Format
 	}
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -175,9 +229,9 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	}
 	tempClosed = true
 	extension := ".png"
-	if info.Format == "jpeg" {
+	if format == "jpeg" {
 		extension = ".jpg"
-	} else if info.Format == "webp" {
+	} else if format == "webp" {
 		extension = ".webp"
 	}
 	if resolver.saved == nil {
@@ -272,4 +326,18 @@ func filename(parsed *url.URL) string {
 		return "image"
 	}
 	return safe.String()
+}
+
+func isLocalOrPrivateHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() || addr.IsUnspecified()
 }

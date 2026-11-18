@@ -88,6 +88,16 @@ func (s *application) floatingImage(index int) batchItem {
 }
 
 func (s *application) floatingSelectedImage() (batchItem, bool) {
+	if s.floating.selected == "" {
+		return batchItem{}, false
+	}
+	if s.batch != nil && s.batch.floatingReady &&
+		s.floating.cursor >= 0 && s.floating.cursor < len(s.batch.cachedFloating) {
+		candidate := s.batch.items[s.batch.cachedFloating[s.floating.cursor]]
+		if candidate.path == s.floating.selected {
+			return candidate, true
+		}
+	}
 	for index := range s.floatingImageCount() {
 		item := s.floatingImage(index)
 		if item.path == s.floating.selected {

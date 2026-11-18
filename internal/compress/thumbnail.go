@@ -8,11 +8,18 @@ import (
 	"math"
 
 	"zpic/internal/contextio"
+	"zpic/internal/imageinput"
 )
 
 // Thumbnail decodes a static JPEG, PNG or WebP into an independent raster, fitting
 // its display orientation within maxEdge without upscaling.
 func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, error) {
+	return ThumbnailWithAcquire(ctx, path, maxEdge, nil)
+}
+
+// ThumbnailWithAcquire inspects headers once, acquires caller memory budget
+// before reading full payload bytes, and decodes the thumbnail from the same file.
+func ThumbnailWithAcquire(ctx context.Context, path string, maxEdge int, acquire func(ImageInfo) (func(), error)) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -22,31 +29,35 @@ func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, erro
 	if path == "" {
 		return nil, fmt.Errorf("图片路径不能为空")
 	}
-	data, err := readInput(ctx, path)
+	var data []byte
+	if acquire == nil {
+		var err error
+		data, err = readInput(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		f, info, err := openAndInspect(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		release, err := acquire(info)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		data, err = imageinput.ReadFile(ctx, f, info.Size)
+		_ = f.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	config, format, err := inspectBytes(ctx, data)
 	if err != nil {
 		return nil, err
 	}
-	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
-	if err != nil {
-		return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
-	}
-	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
-	}
-	if config.Width <= 0 || config.Height <= 0 ||
-		uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
-		return nil, fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
-	}
-	if format == "png" {
-		if err := ValidatePNG(ctx, data); err != nil {
-			return nil, err
-		}
-	}
-	if format == "webp" {
-		if err := ValidateWebP(ctx, data); err != nil {
-			return nil, err
-		}
-	}
+	_ = config
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -65,6 +76,14 @@ func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, erro
 		return nil, err
 	}
 	return output, nil
+}
+
+func inspectBytes(ctx context.Context, data []byte) (image.Config, string, error) {
+	format, width, height, err := inspectStream(ctx, bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return image.Config{}, "", err
+	}
+	return image.Config{Width: width, Height: height}, format, nil
 }
 
 type thumbnailSampleX struct {
@@ -103,6 +122,8 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 			fractionX: sourceX - float64(left),
 		}
 	}
+	rgbaSource, isRGBA := source.(*image.RGBA)
+	nrgbaSource, isNRGBA := source.(*image.NRGBA)
 	rgba64Source, hasRGBA64 := source.(image.RGBA64Image)
 	for row := 0; row < height; row++ {
 		if err := ctx.Err(); err != nil {
@@ -114,6 +135,58 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 		fractionY := sourceY - float64(top)
 		topY := bounds.Min.Y + top
 		bottomY := bounds.Min.Y + bottom
+		if isRGBA {
+			topRow := (topY - rgbaSource.Rect.Min.Y) * rgbaSource.Stride
+			botRow := (bottomY - rgbaSource.Rect.Min.Y) * rgbaSource.Stride
+			minX := rgbaSource.Rect.Min.X
+			outRow := row * output.Stride
+			for column := 0; column < width; column++ {
+				if column%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
+				sample := samplesX[column]
+				lOff := (sample.left - minX) * 4
+				rOff := (sample.right - minX) * 4
+				p00 := rgbaSource.Pix[topRow+lOff : topRow+lOff+4 : topRow+lOff+4]
+				p10 := rgbaSource.Pix[topRow+rOff : topRow+rOff+4 : topRow+rOff+4]
+				p01 := rgbaSource.Pix[botRow+lOff : botRow+lOff+4 : botRow+lOff+4]
+				p11 := rgbaSource.Pix[botRow+rOff : botRow+rOff+4 : botRow+rOff+4]
+				out := output.Pix[outRow+column*4 : outRow+column*4+4 : outRow+column*4+4]
+				out[0] = thumbnailChannel(uint32(p00[0])*0x101, uint32(p10[0])*0x101, uint32(p01[0])*0x101, uint32(p11[0])*0x101, sample.fractionX, fractionY)
+				out[1] = thumbnailChannel(uint32(p00[1])*0x101, uint32(p10[1])*0x101, uint32(p01[1])*0x101, uint32(p11[1])*0x101, sample.fractionX, fractionY)
+				out[2] = thumbnailChannel(uint32(p00[2])*0x101, uint32(p10[2])*0x101, uint32(p01[2])*0x101, uint32(p11[2])*0x101, sample.fractionX, fractionY)
+				out[3] = thumbnailChannel(uint32(p00[3])*0x101, uint32(p10[3])*0x101, uint32(p01[3])*0x101, uint32(p11[3])*0x101, sample.fractionX, fractionY)
+			}
+			continue
+		}
+		if isNRGBA {
+			topRow := (topY - nrgbaSource.Rect.Min.Y) * nrgbaSource.Stride
+			botRow := (bottomY - nrgbaSource.Rect.Min.Y) * nrgbaSource.Stride
+			minX := nrgbaSource.Rect.Min.X
+			outRow := row * output.Stride
+			for column := 0; column < width; column++ {
+				if column%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
+				sample := samplesX[column]
+				lOff := (sample.left - minX) * 4
+				rOff := (sample.right - minX) * 4
+				r00, g00, b00, a00 := premultiplyNRGBA16(nrgbaSource.Pix[topRow+lOff : topRow+lOff+4 : topRow+lOff+4])
+				r10, g10, b10, a10 := premultiplyNRGBA16(nrgbaSource.Pix[topRow+rOff : topRow+rOff+4 : topRow+rOff+4])
+				r01, g01, b01, a01 := premultiplyNRGBA16(nrgbaSource.Pix[botRow+lOff : botRow+lOff+4 : botRow+lOff+4])
+				r11, g11, b11, a11 := premultiplyNRGBA16(nrgbaSource.Pix[botRow+rOff : botRow+rOff+4 : botRow+rOff+4])
+				out := output.Pix[outRow+column*4 : outRow+column*4+4 : outRow+column*4+4]
+				out[0] = thumbnailChannel(r00, r10, r01, r11, sample.fractionX, fractionY)
+				out[1] = thumbnailChannel(g00, g10, g01, g11, sample.fractionX, fractionY)
+				out[2] = thumbnailChannel(b00, b10, b01, b11, sample.fractionX, fractionY)
+				out[3] = thumbnailChannel(a00, a10, a01, a11, sample.fractionX, fractionY)
+			}
+			continue
+		}
 		if hasRGBA64 {
 			for column := 0; column < width; column++ {
 				if column%256 == 0 {
@@ -158,14 +231,70 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 	return output, nil
 }
 
+func premultiplyNRGBA16(p []byte) (uint32, uint32, uint32, uint32) {
+	a := uint32(p[3])
+	if a == 0xff {
+		return uint32(p[0]) * 0x101, uint32(p[1]) * 0x101, uint32(p[2]) * 0x101, 0xffff
+	}
+	if a == 0 {
+		return 0, 0, 0, 0
+	}
+	return (uint32(p[0]) * 0x101 * a) / 0xff,
+		(uint32(p[1]) * 0x101 * a) / 0xff,
+		(uint32(p[2]) * 0x101 * a) / 0xff,
+		a * 0x101
+}
+
 // An unscaled thumbnail only needs one sample per pixel. Keep the same
 // premultiplied, nearest-8-bit rounding as the bilinear path, including for
 // 16-bit sources, and never retain the decoder's backing pixel buffer.
 func copyThumbnailRaster(ctx context.Context, output *image.RGBA, source image.Image) error {
 	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if rgba, ok := source.(*image.RGBA); ok {
+		for row := 0; row < height; row++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			srcStart := (bounds.Min.Y-rgba.Rect.Min.Y+row)*rgba.Stride + (bounds.Min.X-rgba.Rect.Min.X)*4
+			dstStart := row * output.Stride
+			copy(output.Pix[dstStart:dstStart+width*4], rgba.Pix[srcStart:srcStart+width*4])
+		}
+		return ctx.Err()
+	}
+	if nrgba, ok := source.(*image.NRGBA); ok {
+		for row := 0; row < height; row++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			srcRow := (bounds.Min.Y-nrgba.Rect.Min.Y+row)*nrgba.Stride + (bounds.Min.X-nrgba.Rect.Min.X)*4
+			dstRow := row * output.Stride
+			for column := 0; column < width; column++ {
+				if column%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				p := nrgba.Pix[srcRow+column*4 : srcRow+column*4+4 : srcRow+column*4+4]
+				out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+				if p[3] == 0xff {
+					out[0], out[1], out[2], out[3] = p[0], p[1], p[2], 0xff
+				} else if p[3] == 0 {
+					out[0], out[1], out[2], out[3] = 0, 0, 0, 0
+				} else {
+					r, g, b, a := premultiplyNRGBA16(p)
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = uint8((a + 128) / 257)
+				}
+			}
+		}
+		return ctx.Err()
+	}
 	rgba64Source, hasRGBA64 := source.(image.RGBA64Image)
-	for row := 0; row < bounds.Dy(); row++ {
-		for column := 0; column < bounds.Dx(); column++ {
+	for row := 0; row < height; row++ {
+		for column := 0; column < width; column++ {
 			if column%256 == 0 {
 				if err := ctx.Err(); err != nil {
 					return err

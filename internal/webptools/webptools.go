@@ -3,16 +3,13 @@ package webptools
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"zpic/internal/toolcache"
@@ -27,15 +24,9 @@ const (
 
 var errOutputLimit = errors.New("WebP 工具输出超过 64 MiB 限制")
 
-type cachedToolState struct {
-	sum [sha256.Size]byte
-	has bool
-}
-
 var (
 	userCacheDir = os.UserCacheDir
-	toolCacheMu  sync.Mutex
-	toolCache    cachedToolState
+	cwebpSlot    toolcache.Slot
 )
 
 func Encode(ctx context.Context, data []byte, quality int) ([]byte, error) {
@@ -74,16 +65,9 @@ func encode(ctx context.Context, data []byte, quality int, smallerOnly bool) ([]
 		fallback = data
 	}
 	return runCommandWithFallback(ctx, path, []string{
-		"-q", strconv.Itoa(quality), "-m", "4", "-alpha_q", "100",
+		"-q", strconv.Itoa(quality), "-m", "4", "-mt", "-alpha_q", "100",
 		"-metadata", "all", "-quiet", "-o", "-", "--", "-",
 	}, data, maxWebPBytes, fallback)
-}
-
-func executableFilename() string {
-	if runtime.GOOS == "windows" {
-		return "cwebp.exe"
-	}
-	return "cwebp"
 }
 
 func acquireTool() (string, func(), error) {
@@ -92,40 +76,9 @@ func acquireTool() (string, func(), error) {
 		return "", nil, fmt.Errorf("当前平台 %s/%s 未捆绑 cwebp；请参照 scripts/prepare-webptools.sh 构建并打包原生工具",
 			runtime.GOOS, runtime.GOARCH)
 	}
-	if path, err := cachedToolPath(asset); err == nil {
-		return path, func() {}, nil
-	}
-	return extractBundledTool(asset)
-}
-
-func cachedToolPath(asset []byte) (string, error) {
-	toolCacheMu.Lock()
-	defer toolCacheMu.Unlock()
-	cacheRoot, err := userCacheDir()
-	if err != nil || cacheRoot == "" {
-		return "", errors.New("缓存目录不可用")
-	}
-	if !toolCache.has {
-		toolCache.sum = sha256.Sum256(asset)
-		toolCache.has = true
-	}
-	entryDir := filepath.Join(cacheRoot, "z-pic", "tools", fmt.Sprintf("cwebp-%x", toolCache.sum[:16]))
-	binaryPath := filepath.Join(entryDir, executableFilename())
-	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic")); err != nil {
-		return "", err
-	}
-	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic", "tools")); err != nil {
-		return "", err
-	}
-	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
-		return "", err
-	}
-	if _, err := toolcache.Verify(binaryPath, int64(len(asset)), toolCache.sum); err != nil {
-		if _, err := toolcache.Stage(entryDir, binaryPath, asset); err != nil {
-			return "", err
-		}
-	}
-	return binaryPath, nil
+	return cwebpSlot.Acquire("cwebp", "zpic-webptools-", asset, func() (string, error) {
+		return userCacheDir()
+	})
 }
 
 func extractTool() (string, func(), error) {
@@ -134,21 +87,7 @@ func extractTool() (string, func(), error) {
 		return "", nil, fmt.Errorf("当前平台 %s/%s 未捆绑 cwebp；请参照 scripts/prepare-webptools.sh 构建并打包原生工具",
 			runtime.GOOS, runtime.GOARCH)
 	}
-	return extractBundledTool(asset)
-}
-
-func extractBundledTool(asset []byte) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "zpic-webptools-")
-	if err != nil {
-		return "", nil, fmt.Errorf("无法创建 WebP 工具临时目录：%w", err)
-	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
-	path := filepath.Join(dir, executableFilename())
-	if err := os.WriteFile(path, asset, 0700); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("无法释放 cwebp 工具：%w", err)
-	}
-	return path, cleanup, nil
+	return toolcache.ExtractTemp("zpic-webptools-", "cwebp", asset)
 }
 
 func runCommand(ctx context.Context, path string, args []string, data []byte, limit int) ([]byte, error) {

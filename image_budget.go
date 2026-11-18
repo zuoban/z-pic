@@ -53,18 +53,19 @@ func (budget *imageMemoryBudget) acquire(ctx context.Context, estimate int64) (f
 }
 
 func imageMemoryEstimate(info compress.ImageInfo, thumbnail bool) int64 {
-	pixelBytes := int64(24)
-	if thumbnail {
-		pixelBytes = 8
-	} else if info.Format == "jpeg" {
-		pixelBytes = 8
-	} else if info.Format == "webp" {
-		pixelBytes = 16
-	}
 	if info.Width <= 0 || info.Height <= 0 ||
 		int64(info.Width) > int64(maxPixels)/int64(info.Height) ||
 		info.Size < 0 || info.Size > maxInputBytes {
 		return imageMemoryLimit
+	}
+	if thumbnail {
+		return int64(info.Width)*int64(info.Height)*8 + info.Size + 2<<20
+	}
+	pixelBytes := int64(24)
+	if info.Format == "jpeg" {
+		pixelBytes = 8
+	} else if info.Format == "webp" {
+		pixelBytes = 16
 	}
 	return int64(info.Width)*int64(info.Height)*pixelBytes + 3*info.Size + 8<<20
 }

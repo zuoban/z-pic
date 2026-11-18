@@ -5,17 +5,14 @@ package pngtools
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"zpic/internal/toolcache"
@@ -30,16 +27,17 @@ const (
 
 var errOutputLimit = errors.New("PNG 工具输出超过 64 MiB 限制")
 
-type cachedToolEntry struct {
-	sum [sha256.Size]byte
-	has bool
-}
-
 var (
 	userCacheDir = os.UserCacheDir
-	toolCacheMu  sync.Mutex
-	toolCache    = make(map[string]cachedToolEntry)
+	toolSlots    = map[string]*toolcache.Slot{
+		"oxipng":   {},
+		"pngquant": {},
+	}
 )
+
+func pngThreadCount() string {
+	return strconv.Itoa(min(4, max(2, runtime.GOMAXPROCS(0)/2)))
+}
 
 // Optimize losslessly recompresses PNG data with Oxipng 10.2.1.
 // It preserves decoded samples (including invisible RGB and 16-bit samples).
@@ -59,7 +57,7 @@ func Optimize(ctx context.Context, data []byte) ([]byte, error) {
 	if immutable {
 		return data, nil
 	}
-	args := []string{"-o", "2", "--threads", "2"}
+	args := []string{"-o", "2", "--threads", pngThreadCount()}
 	if representationMetadata {
 		args = append(args, "--nx")
 	}
@@ -145,57 +143,19 @@ func invoke(ctx context.Context, name string, args []string, data []byte) ([]byt
 	return runCommand(ctx, name, path, args, data, maxPNGBytes)
 }
 
-func executableFilename(name string) string {
-	if runtime.GOOS == "windows" {
-		return name + ".exe"
-	}
-	return name
-}
-
 func acquireTool(name string) (string, func(), error) {
 	asset := bundledTool(name)
 	if len(asset) == 0 {
 		return "", nil, fmt.Errorf("当前平台 %s/%s 未捆绑 %s；请参照 scripts/prepare-pngtools.sh 构建并打包原生工具",
 			runtime.GOOS, runtime.GOARCH, name)
 	}
-	if path, err := cachedToolPath(name, asset); err == nil {
-		return path, func() {}, nil
+	slot := toolSlots[name]
+	if slot == nil {
+		return toolcache.ExtractTemp("zpic-pngtools-", name, asset)
 	}
-	return extractBundledTool(name, asset)
-}
-
-func cachedToolPath(name string, asset []byte) (string, error) {
-	toolCacheMu.Lock()
-	defer toolCacheMu.Unlock()
-	cacheRoot, err := userCacheDir()
-	if err != nil || cacheRoot == "" {
-		return "", errors.New("缓存目录不可用")
-	}
-	entry := toolCache[name]
-	if !entry.has {
-		entry.sum = sha256.Sum256(asset)
-		entry.has = true
-	}
-	entryDir := filepath.Join(cacheRoot, "z-pic", "tools", fmt.Sprintf("%s-%x", name, entry.sum[:16]))
-	binaryPath := filepath.Join(entryDir, executableFilename(name))
-	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic")); err != nil {
-		return "", err
-	}
-	if err := toolcache.EnsurePrivateDir(filepath.Join(cacheRoot, "z-pic", "tools")); err != nil {
-		return "", err
-	}
-	if err := toolcache.EnsurePrivateDir(entryDir); err != nil {
-		return "", err
-	}
-	// Cache the immutable bundled digest, never a trust decision about a
-	// mutable executable. Size, inode and mtime can all survive tampering.
-	toolCache[name] = entry
-	if _, err := toolcache.Verify(binaryPath, int64(len(asset)), entry.sum); err != nil {
-		if _, err := toolcache.Stage(entryDir, binaryPath, asset); err != nil {
-			return "", err
-		}
-	}
-	return binaryPath, nil
+	return slot.Acquire(name, "zpic-pngtools-", asset, func() (string, error) {
+		return userCacheDir()
+	})
 }
 
 func extractTool(name string) (string, func(), error) {
@@ -204,21 +164,7 @@ func extractTool(name string) (string, func(), error) {
 		return "", nil, fmt.Errorf("当前平台 %s/%s 未捆绑 %s；请参照 scripts/prepare-pngtools.sh 构建并打包原生工具",
 			runtime.GOOS, runtime.GOARCH, name)
 	}
-	return extractBundledTool(name, asset)
-}
-
-func extractBundledTool(name string, asset []byte) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "zpic-pngtools-")
-	if err != nil {
-		return "", nil, fmt.Errorf("无法创建 PNG 工具临时目录：%w", err)
-	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
-	path := filepath.Join(dir, executableFilename(name))
-	if err := os.WriteFile(path, asset, 0700); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("无法释放 %s 工具：%w", name, err)
-	}
-	return path, cleanup, nil
+	return toolcache.ExtractTemp("zpic-pngtools-", name, asset)
 }
 
 // runCommand is private so tests can exercise process behavior without a
@@ -236,7 +182,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	// No PATH lookup or inherited dynamic-library overrides are necessary.
-	cmd.Env = []string{"PATH=", "LC_ALL=C", "RAYON_NUM_THREADS=2"}
+	cmd.Env = []string{"PATH=", "LC_ALL=C", "RAYON_NUM_THREADS=" + pngThreadCount()}
 	cmd.WaitDelay = time.Second
 	err := cmd.Run()
 	if ctx.Err() != nil {

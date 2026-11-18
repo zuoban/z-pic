@@ -627,7 +627,8 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 	}
 	if s.batch.previewOpen && s.result != nil {
 		quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
-			Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片").OnClick(s.copyResult)
+			KeyShortcuts(ui.Cmd, ui.KeyC).
+			Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 	}
 	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 }
@@ -688,16 +689,8 @@ func (s *application) batchOutputCard(c *ui.Context) {
 func (s *application) batchResultSummary(c *ui.Context) {
 	t := c.Theme()
 	total, pending, done, failed, origTotal, outTotal, _ := s.batchStats()
-	var doneOrig int64
-	var unchanged int
-	for _, item := range s.batch.items {
-		if item.status == batchDone {
-			doneOrig += item.originalSize
-			if item.unchanged {
-				unchanged++
-			}
-		}
-	}
+	doneOrig := s.batch.cachedStats.doneOrigTotal
+	unchanged := s.batch.cachedStats.unchangedDone
 	firstLabel, original := "原始总计", formatSize(origTotal)
 	secondLabel, output := "输出总计", "—"
 	label, color := fmt.Sprintf("等待压缩 · %d 张", total), t.TextMuted

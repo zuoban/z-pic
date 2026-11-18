@@ -226,3 +226,37 @@ func TestBatchPreviewRetainsClipboardResultSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyResultKeyboardShortcut(t *testing.T) {
+	app := testSelectedApplication()
+	data := webPAppFixture(t, "alpha.webp")
+	app.result = &compress.Result{Data: data, Format: "webp", OriginalSize: 4096, OutputSize: int64(len(data))}
+	updates := make(chan func(), 2)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	writes := 0
+	app.writeClipboardImage = func(pngData []byte) error {
+		writes++
+		return nil
+	}
+	tester := ui.NewTester(app.view, 880, 660)
+	tester.Key(ui.Cmd, ui.KeyC)
+	select {
+	case update := <-updates:
+		update()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Cmd+C copy timed out")
+	}
+	if writes != 1 {
+		t.Fatalf("expected Cmd+C to copy result once, got %d", writes)
+	}
+
+	// When focused in batch search input, Cmd+C must not trigger image copy.
+	app.batch = newBatchState([]batchItem{{path: app.file.path, absPath: app.file.path, relPath: "photo.webp", status: batchDone}})
+	tester.Frame()
+	tester.Key(ui.Cmd, ui.KeyF)
+	tester.Frame()
+	tester.Key(ui.Cmd, ui.KeyC)
+	if app.busy || writes != 1 {
+		t.Fatal("Cmd+C inside search input must not trigger image copy")
+	}
+}

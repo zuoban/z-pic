@@ -5,6 +5,7 @@ package compress
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -59,8 +60,7 @@ type Result struct {
 
 // File reads and compresses an image. Quality must be in [1, 100], including
 // for PNG inputs. PNG's zero value uses the balanced quantization defaults.
-// Decoding checks cancellation while reading. JPEG encoding cannot be
-// interrupted; cancellation is checked before and after encoding.
+// Decoding and JPEG encoding check cancellation on reads/writes.
 // Native PNG/WebP processes are canceled with ctx.
 func File(ctx context.Context, path string, options Options) (*Result, error) {
 	sourcePath, err := validateRequest(ctx, path, options)
@@ -72,6 +72,45 @@ func File(ctx context.Context, path string, options Options) (*Result, error) {
 		return nil, err
 	}
 	return compressData(ctx, data, path, sourcePath, options, nil)
+}
+
+// FileWithAcquire inspects headers on a single open descriptor, calls acquire
+// before reading full file bytes into memory, and returns the acquired release
+// callback alongside the compression outcome so callers can control lifetime.
+func FileWithAcquire(
+	ctx context.Context,
+	path string,
+	options Options,
+	acquire func(ImageInfo) (func(), error),
+	onStart func(),
+) (*Result, func(), error) {
+	sourcePath, err := validateRequest(ctx, path, options)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, info, err := openAndInspect(ctx, sourcePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	info.Path = path
+	var release func()
+	if acquire != nil {
+		release, err = acquire(info)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if onStart != nil {
+		onStart()
+	}
+	data, err := imageinput.ReadFile(ctx, f, info.Size)
+	_ = f.Close()
+	if err != nil {
+		return nil, release, err
+	}
+	result, err := compressData(ctx, data, path, sourcePath, options, nil)
+	return result, release, err
 }
 
 // Bytes compresses an immutable snapshot without reading sourcePath. The path
@@ -159,12 +198,22 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
 		width, height = img.Bounds().Dx(), img.Bounds().Dy()
-		output := jpegOutput{limit: len(data)}
-		err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
-		if output.discarded {
-			encoded = data
+		iccSegments, iccBytes := jpegICCSegments(data)
+		output := jpegOutput{ctx: ctx, limit: len(data) - iccBytes, stopOnDiscard: true}
+		if output.limit <= 2 {
+			output.discarded = true
 		} else {
-			encoded = output.buf.Bytes()
+			err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
+			if errors.Is(err, errJPEGNoSavings) {
+				err = nil
+			}
+		}
+		if err == nil {
+			if output.discarded {
+				encoded = data
+			} else {
+				encoded = injectJPEGICCSegments(output.buf.Bytes(), iccSegments, iccBytes)
+			}
 		}
 	} else if format == "webp" {
 		if config.Width > 16383 || config.Height > 16383 {

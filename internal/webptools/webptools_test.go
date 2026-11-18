@@ -190,15 +190,10 @@ func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
 		test.Skip("native asset unavailable for this platform")
 	}
 	originalDir := userCacheDir
-	toolCacheMu.Lock()
-	savedCache := toolCache
-	toolCache = cachedToolState{}
-	toolCacheMu.Unlock()
+	cwebpSlot.Reset()
 	test.Cleanup(func() {
-		toolCacheMu.Lock()
 		userCacheDir = originalDir
-		toolCache = savedCache
-		toolCacheMu.Unlock()
+		cwebpSlot.Reset()
 	})
 
 	cacheRoot := test.TempDir()

@@ -141,7 +141,7 @@ func (s *application) startNextBatchThumbnail() {
 				if err == nil && !reused {
 					thumbnail, err = s.loadBatchThumbnail(ctx, path)
 				}
-				s.update(func() {
+				s.updateWithInvalidate(!reused, func() {
 					cache.active, cache.cancel = nil, nil
 					cache.activePath = ""
 					if s.batch == owner && cache.owner == owner && cache.entries[path] == entry && ctx.Err() == nil {
@@ -170,16 +170,9 @@ func sameThumbnailFile(previous, current os.FileInfo) bool {
 }
 
 func (s *application) loadBatchThumbnail(ctx context.Context, path string) (image.Image, error) {
-	info, err := compress.Inspect(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	release, err := s.imageMemory.acquire(ctx, imageMemoryEstimate(info, true))
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	return compress.Thumbnail(ctx, path, batchThumbnailPixels)
+	return compress.ThumbnailWithAcquire(ctx, path, batchThumbnailPixels, func(info compress.ImageInfo) (func(), error) {
+		return s.imageMemory.acquire(ctx, imageMemoryEstimate(info, true))
+	})
 }
 
 func (s *application) invalidateBatchThumbnail(path string) {

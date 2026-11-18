@@ -82,6 +82,9 @@ func (s *application) view(c *ui.Context) {
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyV, s.pasteImages)
+		if !c.FocusTakesText() && s.canCopyResult() {
+			c.OnWindowShortcut(ui.Cmd, ui.KeyC, s.copyResult)
+		}
 		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveActiveAction)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyComma, func() { s.setSettingsOpen(true) })
@@ -472,7 +475,8 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				quietButton(c, "save-copy", "另存副本", 32, s.busy).Width(0).Grow(1).
 					OnClick(s.saveCopy)
 				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
-					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片").OnClick(s.copyResult)
+					KeyShortcuts(ui.Cmd, ui.KeyC).
+					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 			})
 		}
 		ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))

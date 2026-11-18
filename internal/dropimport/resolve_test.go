@@ -11,6 +11,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,6 +123,12 @@ func TestResolveBytesAndLocal(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("local resolution created directory")
+	}
+	if _, _, err := Resolve(context.Background(), Item{Data: []byte("not an image")}, dir); err == nil {
+		t.Fatal("non-image in-memory payload accepted")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("non-image in-memory payload created destination directory")
 	}
 	payload := imageBytes(t, "png")
 	path, downloaded, err = Resolve(context.Background(), Item{Data: payload}, dir)
@@ -442,5 +449,44 @@ func assertFileCount(t *testing.T, dir string, want int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != want {
 		t.Fatalf("directory contents = %v, %v; want %d files", entries, err, want)
+	}
+}
+
+func TestResolveBlocksPublicToLocalOrPrivateRedirect(t *testing.T) {
+	var localHits atomic.Int32
+	localTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localHits.Add(1)
+		_, _ = w.Write(imageBytes(t, "png"))
+	}))
+	defer localTarget.Close()
+
+	for _, redirectURL := range []string{
+		localTarget.URL + "/secret.png",
+		"http://localhost/secret.png",
+		"http://[::1]/secret.png",
+		"http://169.254.169.254/latest/meta-data",
+		"http://192.168.1.1/admin",
+	} {
+		publicRedirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+		}))
+		redirectorAddr := publicRedirector.Listener.Addr().String()
+		transport := NewTransport()
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if strings.HasPrefix(addr, "cdn.example.com:") {
+				return (&net.Dialer{}).DialContext(ctx, network, redirectorAddr)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		dir := t.TempDir()
+		path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://cdn.example.com/photo.png"}, dir, transport)
+		transport.CloseIdleConnections()
+		publicRedirector.Close()
+		if err == nil || saved || path != "" || !strings.Contains(err.Error(), "重定向到本地或内网") {
+			t.Fatalf("redirect to %s should be blocked: path=%q saved=%v err=%v", redirectURL, path, saved, err)
+		}
+		if localHits.Load() != 0 {
+			t.Fatalf("redirect to %s reached local target", redirectURL)
+		}
 	}
 }

@@ -148,7 +148,7 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			ui.Column(c).FillWidth().Children(func() {
 				for index, shortcut := range []struct{ label, key string }{
-					{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
+					{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
 				} {
 					if index > 0 {
 						ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))

@@ -403,3 +403,21 @@ func TestFloatingDropLimitsAndClosedApplication(t *testing.T) {
 		t.Fatal("a late background result must not mutate a closed application")
 	}
 }
+
+func TestFloatingDownloadedURLCacheIsBounded(t *testing.T) {
+	app := newApplication()
+	for i := range maxCachedDownloadURLs + 50 {
+		url := fmt.Sprintf("https://cdn.example.com/%d.png", i)
+		app.recordDownloadedURLs(map[string]string{url: fmt.Sprintf("/tmp/%d.png", i)})
+	}
+	if len(app.downloadedURLs) != maxCachedDownloadURLs || len(app.downloadedURLOrder) != maxCachedDownloadURLs {
+		t.Fatalf("downloadedURLs not bounded: map=%d order=%d", len(app.downloadedURLs), len(app.downloadedURLOrder))
+	}
+	if _, exists := app.downloadedURLs["https://cdn.example.com/0.png"]; exists {
+		t.Fatal("oldest URL was not evicted")
+	}
+	lastURL := fmt.Sprintf("https://cdn.example.com/%d.png", maxCachedDownloadURLs+49)
+	if app.downloadedURLs[lastURL] == "" {
+		t.Fatal("newest URL was not retained")
+	}
+}

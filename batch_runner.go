@@ -89,6 +89,7 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 		ctx:       ctx,
 		used:      usedPaths,
 		sequences: make(map[string]batchOutputSequence),
+		parents:   make(map[string]batchParentPath),
 	}
 	paths := make(map[int]string, len(tasks))
 	failures := make(map[int]error)
@@ -139,29 +140,32 @@ func (s *application) runBatchTasks(
 		if err := outputErrors[task.index]; err != nil {
 			return batchCompressionOutcome{err: err}
 		}
-		info, err := compress.Inspect(ctx, task.path)
-		if err != nil {
-			return batchCompressionOutcome{err: err}
-		}
-		release, err := s.imageMemory.acquire(ctx, imageMemoryEstimate(info, false))
-		if err != nil {
-			return batchCompressionOutcome{err: err}
-		}
 		name := filepath.Base(task.path)
-		emit(func() {
-			if ctx.Err() != nil {
-				return
-			}
-			if s.batch != nil && task.index < len(s.batch.items) {
-				s.batch.items[task.index].status = batchProcessing
-				s.batch.currentName = name
-				if !s.canceling {
-					s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", min(total, s.batch.done+1), total, name)
-				}
-			}
-		})
-		result, err := compress.File(ctx, task.path, options)
-		return batchCompressionOutcome{result: result, err: err, started: true, release: release}
+		started := false
+		result, release, err := compress.FileWithAcquire(
+			ctx,
+			task.path,
+			options,
+			func(info compress.ImageInfo) (func(), error) {
+				return s.imageMemory.acquire(ctx, imageMemoryEstimate(info, false))
+			},
+			func() {
+				started = true
+				emit(func() {
+					if ctx.Err() != nil {
+						return
+					}
+					if s.batch != nil && task.index < len(s.batch.items) {
+						s.batch.items[task.index].status = batchProcessing
+						s.batch.currentName = name
+						if !s.canceling {
+							s.phase = fmt.Sprintf("正在压缩 %d / %d · %s", min(total, s.batch.done+1), total, name)
+						}
+					}
+				})
+			},
+		)
+		return batchCompressionOutcome{result: result, err: err, started: started, release: release}
 	}
 	runBatchPipeline(ctx, tasks, batchWorkerCount(total), process, func(task batchTask, outcome batchCompressionOutcome) {
 		if ctx.Err() != nil {

@@ -15,89 +15,103 @@ import (
 )
 
 func ValidateWebP(ctx context.Context, data []byte) error {
-	return validateWebPContainer(ctx, bytes.NewReader(data), int64(len(data)))
+	_, _, err := validateWebPContainerSize(ctx, bytes.NewReader(data), int64(len(data)))
+	return err
 }
 
 func validateWebPContainer(ctx context.Context, reader io.ReadSeeker, size int64) error {
+	_, _, err := validateWebPContainerSize(ctx, reader, size)
+	return err
+}
+
+func validateWebPContainerSize(ctx context.Context, reader io.ReadSeeker, size int64) (int, int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, 0, err
 	}
 	if size < 20 || size > maxInputSize {
-		return fmt.Errorf("WebP 文件为空、损坏或超过 64 MiB 限制")
+		return 0, 0, fmt.Errorf("WebP 文件为空、损坏或超过 64 MiB 限制")
 	}
 	if _, err := reader.Seek(0, io.SeekStart); err != nil {
-		return err
+		return 0, 0, err
 	}
 	var header [12]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return fmt.Errorf("无法读取 WebP 头部：%w", err)
+		return 0, 0, fmt.Errorf("无法读取 WebP 头部：%w", err)
 	}
 	if string(header[:4]) != "RIFF" || string(header[8:]) != "WEBP" ||
 		int64(binary.LittleEndian.Uint32(header[4:8]))+8 != size {
-		return fmt.Errorf("WebP 容器头部或文件长度无效")
+		return 0, 0, fmt.Errorf("WebP 容器头部或文件长度无效")
 	}
 	foundImage, foundExtended := false, false
 	var canvasWidth, canvasHeight int
+	var imageWidth, imageHeight int
 	for offset := int64(12); offset < size; {
 		if err := ctx.Err(); err != nil {
-			return err
+			return 0, 0, err
 		}
 		if size-offset < 8 {
-			return fmt.Errorf("WebP 数据块头部不完整")
+			return 0, 0, fmt.Errorf("WebP 数据块头部不完整")
 		}
 		if _, err := reader.Seek(offset, io.SeekStart); err != nil {
-			return err
+			return 0, 0, err
 		}
 		var chunk [8]byte
 		if _, err := io.ReadFull(reader, chunk[:]); err != nil {
-			return fmt.Errorf("无法读取 WebP 数据块：%w", err)
+			return 0, 0, fmt.Errorf("无法读取 WebP 数据块：%w", err)
 		}
 		length := int64(binary.LittleEndian.Uint32(chunk[4:]))
 		padded := length + length%2
 		if padded > size-offset-8 {
-			return fmt.Errorf("WebP 数据块长度无效")
+			return 0, 0, fmt.Errorf("WebP 数据块长度无效")
 		}
 		switch string(chunk[:4]) {
 		case "ANIM", "ANMF":
-			return fmt.Errorf("不支持动画 WebP，仅支持静态 JPEG/PNG/WebP")
+			return 0, 0, fmt.Errorf("不支持动画 WebP，仅支持静态 JPEG/PNG/WebP")
 		case "VP8X":
 			if foundExtended || offset != 12 || length != 10 {
-				return fmt.Errorf("WebP 扩展头部无效")
+				return 0, 0, fmt.Errorf("WebP 扩展头部无效")
 			}
 			foundExtended = true
 			var extended [10]byte
 			if _, err := io.ReadFull(reader, extended[:]); err != nil {
-				return err
+				return 0, 0, err
 			}
 			if extended[0]&2 != 0 {
-				return fmt.Errorf("不支持动画 WebP，仅支持静态 JPEG/PNG/WebP")
+				return 0, 0, fmt.Errorf("不支持动画 WebP，仅支持静态 JPEG/PNG/WebP")
 			}
 			canvasWidth = 1 + int(extended[4]) + int(extended[5])<<8 + int(extended[6])<<16
 			canvasHeight = 1 + int(extended[7]) + int(extended[8])<<8 + int(extended[9])<<16
+			if canvasWidth <= 0 || canvasHeight <= 0 || uint64(canvasWidth) > uint64(maxPixels)/uint64(canvasHeight) {
+				return 0, 0, fmt.Errorf("WebP 图片超过 3200 万像素限制或尺寸无效")
+			}
 		case "VP8 ", "VP8L":
 			if foundImage || length == 0 {
-				return fmt.Errorf("WebP 图片数据无效")
+				return 0, 0, fmt.Errorf("WebP 图片数据无效")
 			}
 			// DecodeConfig stops at VP8X. Cross-check the actual frame header
 			// before any decoder or native preview allocates pixel buffers.
 			width, height, err := webPFrameSize(reader, string(chunk[:4]), length)
 			if err != nil {
-				return fmt.Errorf("WebP 图片头部损坏：%w", err)
+				return 0, 0, fmt.Errorf("WebP 图片头部损坏：%w", err)
 			}
 			if width <= 0 || height <= 0 || uint64(width) > uint64(maxPixels)/uint64(height) {
-				return fmt.Errorf("WebP 图片超过 3200 万像素限制或尺寸无效")
+				return 0, 0, fmt.Errorf("WebP 图片超过 3200 万像素限制或尺寸无效")
 			}
 			if foundExtended && (width != canvasWidth || height != canvasHeight) {
-				return fmt.Errorf("WebP 画布与图片尺寸不一致")
+				return 0, 0, fmt.Errorf("WebP 画布与图片尺寸不一致")
 			}
+			imageWidth, imageHeight = width, height
 			foundImage = true
 		}
 		offset += 8 + padded
 	}
 	if !foundImage {
-		return fmt.Errorf("WebP 缺少静态图片数据")
+		return 0, 0, fmt.Errorf("WebP 缺少静态图片数据")
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	return imageWidth, imageHeight, nil
 }
 
 func webPFrameSize(reader io.Reader, kind string, length int64) (int, int, error) {

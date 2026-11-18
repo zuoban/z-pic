@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,6 +97,8 @@ type application struct {
 	dropImportErrors      string
 	downloadDir           string
 	downloadedURLs        map[string]string
+	downloadedURLOrder    []string
+	dropTransport         *http.Transport
 }
 
 func newApplication() *application {
@@ -117,13 +120,19 @@ func (s *application) modalOpen() bool {
 }
 
 func (s *application) update(fn func()) {
+	s.updateWithInvalidate(true, fn)
+}
+
+func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 	apply := func() {
 		if s.closed {
 			return
 		}
 		fn()
 		s.startNextDropImport()
-		s.invalidateFloatingWindow()
+		if invalidateFloating {
+			s.invalidateFloatingWindow()
+		}
 	}
 	if s.dispatchUpdate != nil {
 		s.dispatchUpdate(apply)
