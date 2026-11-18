@@ -337,6 +337,18 @@ func glassControlPressed(c *ui.Context) ui.Color {
 	return ui.RGBA(255, 255, 255, 0.94)
 }
 
+// Small passive surfaces stay opaque so they remain legible over native glass.
+func keycapSurface(c *ui.Context) ui.Color {
+	t := c.Theme()
+	return t.Surface.Mix(t.Text, 0.045)
+}
+
+func keyboardKeycap(c *ui.Context, key string) ui.Element {
+	return ui.Text(c, shortcutLabel(key)).FontSize(12).FontFeatures("tnum").
+		TextColor(c.Theme().TextMuted).Padding(2, 8).Radius(4).
+		Background(keycapSurface(c)).Border(1, controlBorder(c)).SingleLine()
+}
+
 func controlBorder(c *ui.Context) ui.Color {
 	t := c.Theme()
 	if c.Preferences().HighContrast {
@@ -406,11 +418,11 @@ func quietButton(c *ui.Context, key, label string, height float32, disabled bool
 	return btn
 }
 
-func quietToolbarButton(c *ui.Context, key, label string) ui.Element {
+func quietToolbarButton(c *ui.Context, key, label string, disabled bool) ui.Element {
 	t := c.Theme()
 	btn := ui.Button(c.Key(key), label).Height(32).Radius(pillRadius(32, c)).
-		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted)
-	if !btn.IsDisabled() {
+		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted).Disabled(disabled)
+	if !disabled {
 		if btn.Pressed() {
 			btn.Background(glassControlPressed(c)).TextColor(t.Text)
 		} else if btn.Hovered() {

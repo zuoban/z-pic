@@ -41,6 +41,7 @@ func TestThemeTextContrast(t *testing.T) {
 					"window": theme.Background, "panel": theme.Surface,
 					"stage": stageBackground(c), "subtle": subtleSurface(c),
 					"selection": selectionBackground(c),
+					"keycap":    keycapSurface(c),
 				}
 				foregrounds := map[string]ui.Color{
 					"body": theme.Text, "secondary": theme.TextMuted, "metadata": metadataColor(c),

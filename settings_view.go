@@ -52,7 +52,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 			At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
 			Panel: func(panel ui.Element) {
 				panel.MinWidth(max(180, picker.Bounds().W)).MaxWidth(360).
-					Radius(12).Background(t.Surface).Border(1, controlBorder(c)).
+					Radius(12).Background(t.Surface).
 					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.14))
 			},
 		}).Label("选择预设").Tooltip("保存后使用："+preset.name).
@@ -86,8 +86,9 @@ func (s *application) settingsNavigation(c *ui.Context) {
 		Background(panelSurface(c)).Children(func() {
 		ui.Text(c, "设置").FontSize(16).FontWeight(600).Grow(1)
 		section := int(s.editor.section)
-		ui.Segmented(c.Key("settings-navigation"), &section, "通用", "预设").
+		navigation := ui.Segmented(c.Key("settings-navigation"), &section, "通用", "预设").
 			Label("设置分类").FillEqually().Width(224).Height(32).Disabled(s.busy || s.editor.confirmDelete)
+		styleGlassSegmented(navigation, c, 32)
 		s.editor.section = settingsSection(section)
 	})
 }
@@ -106,16 +107,19 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			ui.Text(c, "立即预览外观，保存后记住选择；取消可恢复原主题。").
 				FontSize(12).TextColor(metadataColor(c)).MaxLines(2)
 		})
-		ui.Column(c).FillWidth().Gap(12).Children(func() {
+		ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
+			Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
 			ui.Text(c, "快捷键").FontSize(16).FontWeight(500)
-			for _, shortcut := range []struct{ label, key string }{
+			for index, shortcut := range []struct{ label, key string }{
 				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"开始或继续压缩", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
 			} {
-				ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, shortcut.label).FontSize(13).TextColor(t.TextMuted).Grow(1)
-					ui.Text(c, shortcutLabel(shortcut.key)).FontSize(12).FontFeatures("tnum").
-						Padding(4, 8).Radius(4).Background(glassControlSurface(c)).
-						Border(1, glassBorder(c)).TextColor(t.TextMuted)
+				if index > 0 {
+					ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+				}
+				ui.Row(c).FillWidth().MinHeight(28).Gap(16).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, shortcut.label).FontSize(13).TextColor(t.TextMuted).
+						Width(0).Grow(1).SingleLine()
+					keyboardKeycap(c, shortcut.key).Padding(4, 8)
 				})
 			}
 		})

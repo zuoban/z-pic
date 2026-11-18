@@ -30,12 +30,8 @@ func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 	button := ui.PrimaryButton(c.Key(key), label).Radius(pillRadius(36, c)).Disabled(disabled)
 	if disabled {
-		if usesGlass(c) {
-			button.Background(glassControlSurface(c)).Border(1, glassBorder(c)).
-				TextColor(c.Theme().TextMuted).DimDisabled(false)
-		} else {
-			button.Background(c.Theme().SurfacePressed).TextColor(c.Theme().TextMuted).DimDisabled(false)
-		}
+		button.Background(keycapSurface(c)).Border(1, controlBorder(c)).
+			TextColor(c.Theme().TextMuted).DimDisabled(false)
 	}
 	return button
 }
@@ -81,7 +77,7 @@ func (s *application) view(c *ui.Context) {
 		bodyTopPad = panelGap
 	} else if width < 960 {
 		pagePadding, panelGap = 16, 16
-		bodyTopPad = 6
+		bodyTopPad = 8
 	}
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
@@ -130,7 +126,7 @@ func (s *application) view(c *ui.Context) {
 					shortcutHint(c, "打开", "O")
 					shortcutHint(c, "压缩", "↵")
 					if s.batch == nil {
-						shortcutHint(c, "另存", "S")
+						shortcutHint(c, "保存", "S")
 					} else if !s.batch.previewOpen && s.batch.outputMode == batchOutputFolder {
 						shortcutHint(c, "输出位置", "S")
 					}
@@ -161,10 +157,10 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 	}
 	availWidth := max(0, width-leftPad-rightPad)
 	utilityControls := func() {
-		pasteButton := quietToolbarButton(c, "paste-images", "").Label("粘贴图片").
+		pasteButton := quietToolbarButton(c, "paste-images", "", !s.canPasteImages()).Label("粘贴图片").
 			KeyShortcuts(ui.Cmd, ui.KeyV).
 			Tooltip("从剪贴板粘贴图片并加入队列 · " + shortcutLabel("V")).
-			Disabled(!s.canPasteImages()).OnClick(s.pasteImages)
+			OnClick(s.pasteImages)
 		if availWidth >= 850 || mobile {
 			toolbarButtonContent(c, pasteButton, "粘贴图片", toolbarPasteIcon)
 		} else {
@@ -174,17 +170,16 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		if s.floatingOpen {
 			floatingLabel = "收起悬浮窗"
 		}
-		floatingBtn := toolbarButtonContent(c, quietToolbarButton(c, "toggle-floating", ""), floatingLabel, toolbarFloatingIcon).
+		floatingBtn := toolbarButtonContent(c, quietToolbarButton(c, "toggle-floating", "", false), floatingLabel, toolbarFloatingIcon).
 			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
 		if s.floatingOpen {
 			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
 		}
 		settingsDisabled := s.busy || s.confirmOverwrite || s.confirmBatchOverwrite
-		toolbarButtonContent(c, quietToolbarButton(c, "open-settings", ""), "设置", toolbarSettingsIcon).
+		toolbarButtonContent(c, quietToolbarButton(c, "open-settings", "", settingsDisabled), "设置", toolbarSettingsIcon).
 			KeyShortcuts(ui.Cmd, ui.KeyComma).
 			Tooltip("打开设置（" + shortcutLabel(",") + "）").
-			Disabled(settingsDisabled).
 			OnClick(func() { s.setSettingsOpen(true) })
 	}
 	if mobile || availWidth < 560 {
@@ -234,15 +229,9 @@ func shortcutLabel(key string) string {
 }
 
 func shortcutHint(c *ui.Context, label, key string) {
-	t := c.Theme()
-	radius := float32(4)
-	if usesGlass(c) {
-		radius = 6
-	}
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(12).TextColor(metadataColor(c))
-		ui.Text(c, shortcutLabel(key)).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
-			Padding(0, 5).Radius(radius).Background(glassControlSurface(c)).Border(1, glassBorder(c))
+		keyboardKeycap(c, key).Padding(0, 5)
 	})
 }
 
@@ -268,7 +257,7 @@ func (s *application) previewPanel(c *ui.Context) {
 	}
 	panel.Children(func() {
 		ui.Row(c).Height(32).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "图片预览").FontSize(16).FontWeight(500).Width(0).Grow(1).SingleLine()
+			ui.Text(c, "图片预览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
 			if s.result != nil && !s.overwritten {
 				seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
 					Label("预览模式").FillEqually().Width(168).Height(32).
@@ -287,7 +276,7 @@ func (s *application) previewPanel(c *ui.Context) {
 		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
 			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
 			if s.preview == nil {
-				ui.Column(c).Fill().Center().Gap(12).Padding(20).Children(func() {
+				ui.Column(c).Fill().Center().Gap(20).Padding(24).Children(func() {
 					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
 						card := ui.Rect{X: bounds.X + 6, Y: bounds.Y + 8, W: 44, H: 40}
 						p.Fill(card, panelSurface(c), 8)
@@ -307,20 +296,24 @@ func (s *application) previewPanel(c *ui.Context) {
 							{bounds.X + 42, bounds.Y + 38},
 						}, 1.5, t.TextMuted)
 					})
-					ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(500)
-					ui.Text(c, "支持单张、多张图片或文件夹").FontSize(13).TextColor(t.TextMuted)
-					ui.Text(c, "复制图片后按 "+shortcutLabel("V")+" 粘贴入队").FontSize(12).TextColor(metadataColor(c))
-					ui.Row(c).Gap(8).Margin(4, 0).Children(func() {
-						primaryAction(c, "select", "选择图片", s.busy).Height(36).Padding(0, 16).
-							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
-							OnClick(s.chooseFile)
-						quietButton(c, "select-folder", "选择文件夹", 36, s.busy).Padding(0, 16).
-							Tooltip("选择包含图片的文件夹").
-							OnClick(s.chooseFolder)
+					ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(600)
+						ui.Text(c, "支持单张、多张图片或文件夹").FontSize(13).TextColor(t.TextMuted)
+						ui.Text(c, "复制图片后按 "+shortcutLabel("V")+" 粘贴入队").FontSize(12).TextColor(metadataColor(c))
 					})
-					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "JPEG · PNG · WebP").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
-						ui.Text(c, "单张最大 64 MiB · 3200 万像素").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
+					ui.Column(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).Gap(8).Children(func() {
+							primaryAction(c, "select", "选择图片", s.busy).Height(36).Padding(0, 16).
+								KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
+								OnClick(s.chooseFile)
+							quietButton(c, "select-folder", "选择文件夹", 36, s.busy).Padding(0, 16).
+								Tooltip("选择包含图片的文件夹").
+								OnClick(s.chooseFolder)
+						})
+						ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "JPEG · PNG · WebP").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
+							ui.Text(c, "单张最大 64 MiB · 3200 万像素").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
+						})
 					})
 				})
 				return
@@ -459,8 +452,8 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 
 func (s *application) presetOverview(c *ui.Context) {
 	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "压缩概览").FontSize(16).FontWeight(500).Grow(1)
+		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "压缩概览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
 			badge := "等待图片"
 			if s.batch != nil {
 				badge = fmt.Sprintf("%d 张图片", len(s.batch.items))
@@ -468,7 +461,7 @@ func (s *application) presetOverview(c *ui.Context) {
 				badge = "单张图片"
 			}
 			ui.Text(c, badge).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
-				Padding(2, 8).Radius(pillRadius(20, c)).Background(panelStageBackground(c)).Border(1, glassBorder(c))
+				Padding(2, 8).Shrink(0).Radius(pillRadius(20, c)).Background(panelStageBackground(c))
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
@@ -579,18 +572,18 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 				}
 				ui.Column(c).Width(0).Grow(grow).Gap(4).Children(func() {
 					ui.Text(c, row.label).FontSize(12).TextColor(metadataColor(c))
-					size := float32(16)
+					size := float32(18)
 					weight := 500
 					valColor := t.TextMuted
 					if compact {
-						size = 15
+						size = 16
 					}
 					if index == 1 {
-						size = 22
+						size = 24
 						weight = 600
 						valColor = t.Text
 						if compact {
-							size = 19
+							size = 20
 						}
 					}
 					ui.Text(c, row.value).FontSize(size).FontWeight(weight).FontFeatures("tnum").
@@ -603,13 +596,14 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 			if ratio >= 1 {
 				barColor = t.TextMuted.Alpha(0.45)
 			}
-			ui.Box(c).FillWidth().Height(4).Draw(func(p *ui.Painter, r ui.Rect) {
-				p.Fill(r, glassControlPressed(c), 2)
-				fillW := max(4, r.W*float32(min(1, ratio)))
-				p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
-			})
+			ui.Box(c).FillWidth().Height(4).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
+				Draw(func(p *ui.Painter, r ui.Rect) {
+					p.Fill(r, glassControlPressed(c), 2)
+					fillW := max(4, r.W*float32(min(1, ratio)))
+					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
+				})
 		}
-		ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").
+		ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
 			TextColor(statusColor).MaxLines(2).Tooltip(status)
 		if note != "" {
 			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).

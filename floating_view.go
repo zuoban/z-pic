@@ -339,7 +339,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(0).Radius(pillRadius(28, c)).Background(panelStageBackground(c)).Border(1, glassBorder(c)).Children(func() {
+		ui.Row(c).Gap(4).Padding(2).Radius(8).Background(panelStageBackground(c)).Border(1, glassBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -459,10 +459,12 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		image := ui.Column(c).Grow(1).FillWidth().Center()
 		if list {
 			image.Grow(0).Size(56, 40).Shrink(0)
+		} else {
+			image.Height(48).Grow(0).Shrink(0)
 		}
 		image.Children(func() {
 			if bitmap != nil {
-				maxWidth, maxHeight := float32(96), float32(64)
+				maxWidth, maxHeight := float32(96), float32(48)
 				if list {
 					maxWidth, maxHeight = 56, 40
 				}
@@ -492,12 +494,32 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 			}
 			if item.status == batchFailed {
 				detail = "失败 · " + detail
+				secondary = theme.Danger
 			}
-			metadata := ui.Text(c, detail).FontSize(12).FontFeatures("tnum").TextColor(secondary).
-				SingleLine().TruncateMiddle().FillWidth().Tooltip(item.errMsg)
+			detailTooltip := detail
+			if item.errMsg != "" {
+				detailTooltip += "\n" + item.errMsg
+			}
+			displayDetail := detail
 			if !list {
+				// Keep each measured size and its unit together in narrow cells.
+				displayDetail = formatSize(item.originalSize)
+				if item.status == batchDone && item.outputSize > 0 {
+					displayDetail += "\n→ " + formatSize(item.outputSize)
+				} else if item.width > 0 && item.height > 0 {
+					displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
+				}
+				if item.status == batchFailed {
+					displayDetail = "失败 · " + displayDetail
+				}
+			}
+			metadata := ui.Text(c, displayDetail).FontSize(12).FontFeatures("tnum").TextColor(secondary).
+				FillWidth().Tooltip(detailTooltip)
+			if list {
+				metadata.SingleLine().TruncateMiddle()
+			} else {
 				filename.TextAlign(ui.Center)
-				metadata.TextAlign(ui.Center)
+				metadata.MaxLines(2).TextAlign(ui.Center)
 			}
 		})
 	})
@@ -542,9 +564,15 @@ func (s *application) floatingFeedback(c *ui.Context) {
 
 func floatingIconButton(c *ui.Context, key, label, icon string, action func()) ui.Element {
 	theme := c.Theme()
-	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(pillRadius(28, c)).
+	radius := float32(8)
+	if icon == "close" || icon == "back" || icon == "down" {
+		radius = 14
+	}
+	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(radius).
 		Background(glassControlSurface(c)).Border(1, glassBorder(c)).Label(label).Tooltip(label)
-	if button.Hovered() {
+	if button.Pressed() {
+		button.Background(glassControlPressed(c))
+	} else if button.Hovered() {
 		button.Background(glassControlHover(c))
 	}
 	if action != nil {

@@ -134,37 +134,41 @@ func (s *application) previewToolbar(c *ui.Context) {
 	locked := s.previewLocked()
 	bounds := s.comparison.viewport
 	scale := s.previewScale(bounds)
-	ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-		for _, action := range []struct {
-			key, label string
-			keyCode    ui.Key
-			hintKey    string
-			factor     float64
-		}{
-			{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
-			{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
-		} {
-			disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
-			strokeColor := t.Text
-			if disabled {
-				strokeColor = t.TextMuted.Alpha(0.5)
-			}
-			button := quietButton(c, action.key, "", 32, disabled).Label(action.label).
-				KeyShortcuts(ui.Cmd, action.keyCode).
-				Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
-				Size(32, 32)
-			button.DrawOver(func(p *ui.Painter, r ui.Rect) {
-				p.Line(r.X+10.5, r.Y+r.H/2, r.X+r.W-10.5, r.Y+r.H/2, 1.5, strokeColor)
-				if action.factor > 1 {
-					p.Line(r.X+r.W/2, r.Y+10.5, r.X+r.W/2, r.Y+r.H-10.5, 1.5, strokeColor)
+	ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).
+		Role(ui.RoleToolbar).Label("图片缩放").Children(func() {
+		ui.Row(c).Height(32).Gap(0).Radius(innerRadius(c)).
+			Background(keycapSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
+			for _, action := range []struct {
+				key, label string
+				keyCode    ui.Key
+				hintKey    string
+				factor     float64
+			}{
+				{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
+				{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
+			} {
+				disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
+				strokeColor := t.Text
+				if disabled {
+					strokeColor = t.TextMuted.Alpha(0.5)
 				}
-			}).OnClick(func() {
-				s.zoomPreviewBy(action.factor)
-			})
-		}
-		ui.Textf(c, "%.0f%%", scale*100).MinWidth(52).Padding(4, 8).Radius(pillRadius(26, c)).
-			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).FontSize(12).
-			FontFeatures("tnum").TextAlign(ui.Center).TextColor(metadataColor(c)).SingleLine()
+				button := quietButton(c, action.key, "", 32, disabled).
+					Background(ui.Transparent).Border(0, ui.Transparent).Label(action.label).
+					KeyShortcuts(ui.Cmd, action.keyCode).
+					Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
+					Size(32, 32)
+				button.DrawOver(func(p *ui.Painter, r ui.Rect) {
+					p.Line(r.X+10.5, r.Y+r.H/2, r.X+r.W-10.5, r.Y+r.H/2, 1.5, strokeColor)
+					if action.factor > 1 {
+						p.Line(r.X+r.W/2, r.Y+10.5, r.X+r.W/2, r.Y+r.H-10.5, 1.5, strokeColor)
+					}
+				}).OnClick(func() {
+					s.zoomPreviewBy(action.factor)
+				})
+			}
+			ui.Textf(c, "%.0f%%", scale*100).Width(56).FontSize(12).
+				FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted).SingleLine()
+		})
 		quietButton(c, "preview-fit", "适应", 32, locked).
 			KeyShortcuts(ui.Cmd, ui.Key0).
 			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).

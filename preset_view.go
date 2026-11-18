@@ -117,7 +117,8 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 						if editor.selected == index {
 							weight = 500
 						}
-						ui.Text(c, preset.name).FontSize(13).FontWeight(weight).SingleLine().TruncateMiddle()
+						ui.Text(c, preset.name).FontSize(13).FontWeight(weight).SingleLine().TruncateMiddle().
+							MaxWidth(144).MinWidth(0).Shrink(1)
 						if editor.active == index {
 							presetActiveIndicator(c)
 						}
@@ -141,7 +142,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 		Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetQualityIcon).Size(16, 16).TextColor(t.TextMuted)
-			ui.Text(c, "图片质量").FontSize(15).FontWeight(500)
+			ui.Text(c, "图片质量").FontSize(16).FontWeight(500)
 			ui.Icon(c, presetInfoIcon).Size(16, 16).TextColor(t.TextMuted).
 				Tooltip("压缩参数随图片质量自动调整。质量越高，越接近原图；质量越低，文件通常越小。")
 			ui.Box(c).Grow(1)
@@ -213,11 +214,15 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 		Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetSaveIcon).Size(16, 16).TextColor(t.TextMuted)
-			ui.Text(c, "保存到").FontSize(15).FontWeight(500)
-			ui.Box(c).Grow(1)
-			ui.Text(c, presetSaveDescription(*options)).FontSize(12).TextColor(metadataColor(c)).
-				MaxWidth(380).SingleLine().TruncateMiddle().Tooltip(presetSaveDescription(*options))
+			ui.Text(c, "保存到").FontSize(16).FontWeight(500)
 		})
+		description := presetSaveDescription(*options)
+		descriptionColor := metadataColor(c)
+		if options.replacesOriginal() {
+			descriptionColor = t.Danger
+		}
+		ui.Text(c, description).FontSize(12).TextColor(descriptionColor).
+			FillWidth().SingleLine().TruncateMiddle().Tooltip(description)
 		if presetSaveSegments(c, options, s.busy) {
 			s.editor.message = ""
 		}
@@ -254,7 +259,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 				ui.Text(c, folder+"/example.png").FontSize(12).FontFeatures("tnum").
 					TextColor(metadataColor(c)).Width(0).Grow(1).MinWidth(120).SingleLine().TruncateMiddle()
 				subField := ui.TextInput(c.Key("preset-subfolder-name"), &options.Subfolder).Label("子文件夹名称").
-					Placeholder(defaultSubfolderName).Width(148).Height(32).Disabled(s.busy || !options.UseSubfolder)
+					Placeholder(defaultSubfolderName).Width(148).Height(32).Padding(0, 12).Disabled(s.busy || !options.UseSubfolder)
 				styleGlassField(subField, c, 32)
 				if subField.Changed() {
 					s.editor.message = ""
@@ -280,7 +285,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset, c
 			ui.Text(c, "example"+suffix+".png").FontSize(12).FontFeatures("tnum").
 				TextColor(metadataColor(c)).Width(0).Grow(1).MinWidth(120).SingleLine().TruncateMiddle()
 			sufField := ui.TextInput(c.Key("preset-suffix-value"), &options.Suffix).Label("文件名后缀").
-				Placeholder(defaultFilenameSuffix).Width(148).Height(32).Disabled(s.busy || !options.UseSuffix)
+				Placeholder(defaultFilenameSuffix).Width(148).Height(32).Padding(0, 12).Disabled(s.busy || !options.UseSuffix)
 			styleGlassField(sufField, c, 32)
 			if sufField.Changed() {
 				s.editor.message = ""
