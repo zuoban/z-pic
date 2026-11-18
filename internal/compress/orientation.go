@@ -2,6 +2,7 @@ package compress
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -108,9 +109,12 @@ func normalizeOrientation(img image.Image, orientation int) image.Image {
 	return orientedImage{Image: img, orientation: orientation}
 }
 
-func orientForJPEGEncode(img image.Image, orientation int) image.Image {
+func orientForJPEGEncode(ctx context.Context, img image.Image, orientation int) (image.Image, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if orientation < 2 || orientation > 8 {
-		return img
+		return img, nil
 	}
 	oriented := orientedImage{Image: img, orientation: orientation}
 	bounds := oriented.Bounds()
@@ -124,16 +128,25 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 			ratio = image.YCbCrSubsampleRatio420
 		}
 		output := image.NewYCbCr(bounds, ratio)
-		copyOrientedPlane(output.Y, output.YStride, source.Y, source.YStride, oriented, 0)
+		if err := copyOrientedPlane(ctx, output.Y, output.YStride, source.Y, source.YStride, oriented, 0); err != nil {
+			return nil, err
+		}
 		if ratio == image.YCbCrSubsampleRatio420 {
-			copyOrientedPlane(output.Cb, output.CStride, source.Cb, source.CStride, oriented, 1)
-			copyOrientedPlane(output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1)
-			return output
+			if err := copyOrientedPlane(ctx, output.Cb, output.CStride, source.Cb, source.CStride, oriented, 1); err != nil {
+				return nil, err
+			}
+			if err := copyOrientedPlane(ctx, output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1); err != nil {
+				return nil, err
+			}
+			return output, nil
 		}
 		originX, originY := oriented.mapCoords(0, 0)
 		nextX, nextY := oriented.mapCoords(1, 0)
 		stepX, stepY := nextX-originX, nextY-originY
 		for row := 0; row < height; row++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			rowBase := row * output.CStride
 			mappedX, mappedY := oriented.mapCoords(0, row)
 			for column := 0; column < width; column++ {
@@ -144,14 +157,22 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 				mappedY += stepY
 			}
 		}
-		return output
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return output, nil
 	case *image.Gray:
 		output := image.NewGray(bounds)
-		copyOrientedPlane(output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0)
-		return output
+		if err := copyOrientedPlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0); err != nil {
+			return nil, err
+		}
+		return output, nil
 	default:
 		output := image.NewRGBA(bounds)
 		for row := 0; row < height; row++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			rowBase := row * output.Stride
 			for column := 0; column < width; column++ {
 				pixel := oriented.RGBA64At(column, row)
@@ -162,11 +183,14 @@ func orientForJPEGEncode(img image.Image, orientation int) image.Image {
 				output.Pix[offset+3] = uint8(pixel.A >> 8)
 			}
 		}
-		return output
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return output, nil
 	}
 }
 
-func copyOrientedPlane(output []byte, outputStride int, source []byte, sourceStride int, oriented orientedImage, subsampleShift int) {
+func copyOrientedPlane(ctx context.Context, output []byte, outputStride int, source []byte, sourceStride int, oriented orientedImage, subsampleShift int) error {
 	bounds := oriented.Bounds()
 	width, height := bounds.Dx()>>subsampleShift, bounds.Dy()>>subsampleShift
 	sourceBounds := oriented.Image.Bounds()
@@ -187,6 +211,9 @@ func copyOrientedPlane(output []byte, outputStride int, source []byte, sourceStr
 		for left := 0; left < width; left += blockWidth {
 			right := min(left+blockWidth, width)
 			for row := top; row < bottom; row++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				outputRow := output[row*outputStride+left : row*outputStride+right]
 				sourceIndex := origin + row*rowStep + left*columnStep
 				for column := range outputRow {
@@ -196,6 +223,7 @@ func copyOrientedPlane(output []byte, outputStride int, source []byte, sourceStr
 			}
 		}
 	}
+	return ctx.Err()
 }
 
 func (img orientedImage) Bounds() image.Rectangle {

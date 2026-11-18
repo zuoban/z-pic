@@ -417,11 +417,14 @@ func TestOrientForJPEGEncodePlanes(test *testing.T) {
 	wideGray := grayParent.SubImage(image.Rect(2, 3, 69, 4))
 
 	for _, source := range []image.Image{ycbcrSource, graySource, paddedGray, narrowGray, shortGray, tiledGray, tallGray, wideGray, nrgba} {
-		if unchanged := orientForJPEGEncode(source, 1); unchanged != source {
+		if unchanged, err := orientForJPEGEncode(context.Background(), source, 1); err != nil || unchanged != source {
 			test.Fatalf("orientation 1 must return original %T", source)
 		}
 		for orientation := 2; orientation <= 8; orientation++ {
-			got := orientForJPEGEncode(source, orientation)
+			got, err := orientForJPEGEncode(context.Background(), source, orientation)
+			if err != nil {
+				test.Fatal(err)
+			}
 			want := normalizeOrientation(source, orientation)
 			if got.Bounds() != want.Bounds() {
 				test.Fatalf("%T orientation %d bounds = %v, want %v", source, orientation, got.Bounds(), want.Bounds())
@@ -488,7 +491,11 @@ func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
 			beforeY, beforeCb, beforeCr := bytes.Clone(source.Y), bytes.Clone(source.Cb), bytes.Clone(source.Cr)
 			for orientation := 2; orientation <= 8; orientation++ {
 				test.Run(strconv.Itoa(orientation), func(test *testing.T) {
-					output := orientForJPEGEncode(source, orientation).(*image.YCbCr)
+					oriented, err := orientForJPEGEncode(context.Background(), source, orientation)
+					if err != nil {
+						test.Fatal(err)
+					}
+					output := oriented.(*image.YCbCr)
 					expected := normalizeOrientation(source, orientation)
 					if output.Bounds() != expected.Bounds() || output.SubsampleRatio != scenario.wantRatio {
 						test.Fatalf("bounds=%v ratio=%v, want %v %v", output.Bounds(), output.SubsampleRatio, expected.Bounds(), scenario.wantRatio)

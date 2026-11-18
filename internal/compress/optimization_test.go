@@ -41,6 +41,52 @@ func TestJPEGDecodeObservesCancellationDuringReads(t *testing.T) {
 	}
 }
 
+func TestJPEGOrientationObservesCancellationDuringConversion(t *testing.T) {
+	bounds := image.Rect(0, 0, 96, 80)
+	for _, source := range []image.Image{
+		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio420),
+		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio444),
+		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio422),
+		image.NewGray(bounds),
+		image.NewNRGBA(bounds),
+	} {
+		for orientation := 2; orientation <= 8; orientation++ {
+			base, cancel := context.WithCancel(context.Background())
+			ctx := &cancelAtCheckpoint{Context: base, cancel: cancel, limit: 3}
+			output, err := orientForJPEGEncode(ctx, source, orientation)
+			cancel()
+			if output != nil || !errors.Is(err, context.Canceled) || ctx.checks != 3 {
+				t.Fatalf("%T orientation %d: canceled conversion returned %T, %v after %d checks",
+					source, orientation, output, err, ctx.checks)
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if output, err := orientForJPEGEncode(ctx, image.NewGray(bounds), 1); output != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("already canceled orientation returned %T, %v", output, err)
+	}
+}
+
+func TestOrientedPlaneStopsBeforeCopyCompletes(t *testing.T) {
+	source := image.NewGray(image.Rect(0, 0, 96, 80))
+	for index := range source.Pix {
+		source.Pix[index] = 255
+	}
+	for _, orientation := range []int{2, 6} {
+		oriented := normalizeOrientation(source, orientation).(orientedImage)
+		output := image.NewGray(oriented.Bounds())
+		base, cancel := context.WithCancel(context.Background())
+		ctx := &cancelAtCheckpoint{Context: base, cancel: cancel, limit: 2}
+		err := copyOrientedPlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0)
+		cancel()
+		copied := bytes.Count(output.Pix, []byte{255})
+		if !errors.Is(err, context.Canceled) || copied == 0 || copied == len(output.Pix) {
+			t.Fatalf("orientation %d copied %d/%d pixels before %v", orientation, copied, len(output.Pix), err)
+		}
+	}
+}
+
 func TestJPEGHeadersObserveCancellationDuringReads(t *testing.T) {
 	original := jpegFixture(t, 90)
 	data := bytes.Clone(original[:2])

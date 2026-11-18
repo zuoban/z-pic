@@ -150,7 +150,10 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		if err != nil {
 			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 		}
-		img = orientForJPEGEncode(img, jpegOrientation(data))
+		img, err = orientForJPEGEncode(ctx, img, jpegOrientation(data))
+		if err != nil {
+			return nil, fmt.Errorf("调整图片方向已取消：%w", err)
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}

@@ -144,7 +144,10 @@ func BenchmarkOrientedJPEGEncode(bench *testing.B) {
 		sub.ResetTimer()
 		for iter := 0; iter < sub.N; iter++ {
 			output.Reset()
-			oriented := orientForJPEGEncode(decodedYCbCr, 6)
+			oriented, err := orientForJPEGEncode(context.Background(), decodedYCbCr, 6)
+			if err != nil {
+				sub.Fatal(err)
+			}
 			if err := jpeg.Encode(&output, oriented, options); err != nil {
 				sub.Fatal(err)
 			}
@@ -185,7 +188,10 @@ func BenchmarkOrientYCbCr42012MP(bench *testing.B) {
 			sub.ReportAllocs()
 			sub.ResetTimer()
 			for iteration := 0; iteration < sub.N; iteration++ {
-				oriented := orientForJPEGEncode(source, scenario.orientation)
+				oriented, err := orientForJPEGEncode(context.Background(), source, scenario.orientation)
+				if err != nil {
+					sub.Fatal(err)
+				}
 				if oriented.Bounds().Dx()*oriented.Bounds().Dy() != 12_000_000 {
 					sub.Fatal(oriented.Bounds())
 				}
