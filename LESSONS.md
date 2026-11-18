@@ -236,3 +236,10 @@
 - 修改：语法和 schema 检查通过后逐对象检查重复字段，按照 JSON struct 匹配的 Unicode simple folding 处理大小写和转义名称。
 - 防复发：拒绝未知字段不等于拒绝歧义；相同字段可以出现在不同预设对象中，但单个对象不能重复声明。
 - 验证与 review：`go test . -run 'TestLoadSettings|TestSaveSettings|TestAppSettings' -count=1`；覆盖嵌套对象、转义、大小写、长 s 折叠、合法多预设往返和失败保留原文件。
+
+### 第 6 轮：空压缩结果不能产生成功保存
+
+- 确认问题：零值 `Result` 或空 `Data` 调用 `Save` 会创建零字节图片并返回成功；新增回归在修复前失败。
+- 修改：在路径解析和创建文件之前拒绝空输出，和 nil 结果采用相同错误处理。
+- 防复发：非 nil 对象不代表有可交付内容；成功状态必须对应实际有效载荷，失败应不留下输出占位文件。
+- 验证与 review：`go test ./internal/compress -run 'TestSave|TestFile|TestBytes' -count=1`；覆盖 nil/零值/空切片、已有文件保护及正常保存。

@@ -339,6 +339,18 @@ func TestRejectOversizedFile(t *testing.T) {
 	}
 }
 
+func TestSaveRejectsEmptyResultWithoutCreatingFile(t *testing.T) {
+	for _, result := range []*Result{nil, {}, {Data: []byte{}}} {
+		path := filepath.Join(t.TempDir(), "output.png")
+		if err := result.Save(path); err == nil {
+			t.Fatal("empty compression result saved successfully")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("empty output artifact created: %v", err)
+		}
+	}
+}
+
 func TestSaveNeverOverwrites(t *testing.T) {
 	data := jpegFixture(t, 100)
 	source := writeFixture(t, "source.jpg", data)

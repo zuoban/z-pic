@@ -307,7 +307,7 @@ func (r contextReader) Read(p []byte) (int, error) {
 // Save creates a new file and never overwrites an existing path. Failed writes
 // or closes remove the file created by this call.
 func (r *Result) Save(path string) (err error) {
-	if r == nil {
+	if r == nil || len(r.Data) == 0 {
 		return fmt.Errorf("没有可保存的压缩结果")
 	}
 	if path == "" {
