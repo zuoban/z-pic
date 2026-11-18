@@ -17,6 +17,32 @@ import (
 
 const validStoredSettings = `{"version":1,"selected":"均衡","presets":[{"name":"体积优先","quality":60,"png":{"MinQuality":40,"MaxQuality":65,"Colors":128,"Speed":3}},{"name":"均衡","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"画质优先","quality":92,"png":{"MinQuality":85,"MaxQuality":100,"Colors":256,"Speed":1}}]}`
 
+func TestLoadSettingsRejectsDuplicateFields(t *testing.T) {
+	for name, data := range map[string]string{
+		"top level":      strings.Replace(validStoredSettings, `"version":1`, `"version":2,"version":1`, 1),
+		"escaped":        strings.Replace(validStoredSettings, `"selected":"均衡"`, `"selected":"其他","\u0073elected":"均衡"`, 1),
+		"case folded":    strings.Replace(validStoredSettings, `"selected":"均衡"`, `"selected":"其他","SELECTED":"均衡"`, 1),
+		"unicode folded": strings.Replace(validStoredSettings, `"selected":"均衡"`, `"selected":"其他","ſelected":"均衡"`, 1),
+		"preset":         strings.Replace(validStoredSettings, `"quality":60`, `"quality":1,"quality":60`, 1),
+		"png options":    strings.Replace(validStoredSettings, `"Colors":128`, `"Colors":2,"colors":128`, 1),
+		"output":         strings.Replace(validStoredSettings, `"quality":60`, `"output":{"mode":"fixed","mode":"ask"},"quality":60`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadFullSettings(path); err == nil || !strings.Contains(err.Error(), "重复字段") {
+				t.Fatalf("ambiguous settings accepted: %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != data {
+				t.Fatalf("rejected settings changed: %v", err)
+			}
+		})
+	}
+}
+
 func TestSettingsFilePathUsesOverrideOrUserDirectory(test *testing.T) {
 	override := filepath.Join(test.TempDir(), "portable", "schemes.json")
 	test.Setenv("ZPIC_CONFIG_FILE", override)

@@ -229,3 +229,10 @@
 - 修改：每个输出最多考虑 10,000 个候选，后继索引跳跃也受此上限约束，耗尽返回明确错误且不预留输出。
 - 防复发：取消和工作量上限解决不同问题；外部占用不能永久记入后继缓存，否则释放名称后无法重试。
 - 验证与 review：`go test . -run 'TestBatchOutput|TestPlanBatchOutputs|TestPresetOutput' -count=1`；覆盖耗尽、最后一个合法候选恢复、目录别名和现有重名规划。
+
+### 第 5 轮：严格设置文件也要拒绝重复字段
+
+- 确认问题：`DisallowUnknownFields` 仍接受同一对象的重复字段，后面的版本、质量或保存方式会覆盖前面的声明；7 类回归在修复前均被接受。
+- 修改：语法和 schema 检查通过后逐对象检查重复字段，按照 JSON struct 匹配的 Unicode simple folding 处理大小写和转义名称。
+- 防复发：拒绝未知字段不等于拒绝歧义；相同字段可以出现在不同预设对象中，但单个对象不能重复声明。
+- 验证与 review：`go test . -run 'TestLoadSettings|TestSaveSettings|TestAppSettings' -count=1`；覆盖嵌套对象、转义、大小写、长 s 折叠、合法多预设往返和失败保留原文件。

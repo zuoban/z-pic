@@ -181,6 +181,9 @@ func loadFullSettings(path string) (appSettings, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return appSettings{}, errors.New("设置文件包含多余内容")
 	}
+	if err := uniqueSettingsFields(data); err != nil {
+		return appSettings{}, err
+	}
 	if stored.Version != 1 {
 		return appSettings{}, fmt.Errorf("不支持的设置文件版本：%d", stored.Version)
 	}
@@ -208,6 +211,63 @@ func loadFullSettings(path string) (appSettings, error) {
 		batchOutputDir: sanitizeStoredBatchOutputDir(stored.BatchOutputDir),
 		theme:          mode.normalized(),
 	}, nil
+}
+
+// Run after schema/syntax decoding: encoding/json accepts duplicate fields and
+// matches struct fields using Unicode simple folding. Check each object
+// separately, including escaped keys and nested PNG/output options.
+func uniqueSettingsFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var value func() error
+	value = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, compound := token.(json.Delim)
+		if !compound {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]bool)
+			for decoder.More() {
+				token, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := token.(string)
+				if !ok {
+					return errors.New("设置文件对象字段无效")
+				}
+				folded := strings.Map(func(character rune) rune {
+					smallest := character
+					for next := unicode.SimpleFold(character); next != character; next = unicode.SimpleFold(next) {
+						smallest = min(smallest, next)
+					}
+					return smallest
+				}, key)
+				if seen[folded] {
+					return fmt.Errorf("设置文件包含重复字段：%s", key)
+				}
+				seen[folded] = true
+				if err := value(); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for decoder.More() {
+				if err := value(); err != nil {
+					return err
+				}
+			}
+		default:
+			return errors.New("设置文件结构无效")
+		}
+		_, err = decoder.Token()
+		return err
+	}
+	return value()
 }
 
 // encoding/json replaces invalid UTF-8 and unpaired UTF-16 escapes. Check both
