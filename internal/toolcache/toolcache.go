@@ -8,6 +8,8 @@ import (
 	"runtime"
 )
 
+const permissionMask = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
 func EnsurePrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -19,7 +21,7 @@ func EnsurePrivateDir(dir string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("缓存路径不是普通目录")
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
+	if runtime.GOOS != "windows" && info.Mode()&permissionMask != 0700 {
 		if err := os.Chmod(dir, 0700); err != nil {
 			return err
 		}
@@ -32,7 +34,7 @@ func Verify(binaryPath string, expectedSize int64, expectedSum [sha256.Size]byte
 	if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() != expectedSize {
 		return nil, errors.New("缓存工具不存在或大小不匹配")
 	}
-	if runtime.GOOS != "windows" && fileInfo.Mode().Perm() != 0700 {
+	if runtime.GOOS != "windows" && fileInfo.Mode()&permissionMask != 0700 {
 		return nil, errors.New("缓存工具权限无效")
 	}
 	file, err := os.Open(binaryPath)
@@ -93,7 +95,7 @@ func Stage(entryDir, binaryPath string, asset []byte) (os.FileInfo, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("缓存工具替换失败")
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
+	if runtime.GOOS != "windows" && info.Mode()&permissionMask != 0700 {
 		return nil, errors.New("缓存工具权限不匹配")
 	}
 	return info, nil
