@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -220,5 +221,22 @@ func TestScanBatchPathsDeduplicatesBeforeCapacityCheck(t *testing.T) {
 	scan, err = scanBatchPaths(context.Background(), []string{source, source, other}, nil, maxBatchFiles-1)
 	if err != nil || len(scan.items) != 1 || scan.duplicates != 1 || !scan.truncated {
 		t.Fatalf("capacity must apply only to new entries: %+v, %v", scan, err)
+	}
+}
+
+func TestCompleteBatchScanReportsCapacityWithNoAddedItems(t *testing.T) {
+	for _, duplicates := range []int{0, 2} {
+		app := newApplication()
+		owner := newBatchState([]batchItem{{path: "existing.jpg", status: batchPending}})
+		app.batch = owner
+		app.busy = true
+		app.completeBatchScan(context.Background(), batchScanResult{duplicates: duplicates, truncated: true}, true, nil)
+		if app.batch != owner || app.busy || app.failed ||
+			!strings.Contains(app.message, "2000") || !strings.Contains(app.message, "未加入") {
+			t.Fatalf("capacity must be reported without clearing the queue: %q", app.message)
+		}
+		if duplicates > 0 && !strings.Contains(app.message, "重复项") {
+			t.Fatalf("duplicate count was hidden by capacity message: %q", app.message)
+		}
 	}
 }

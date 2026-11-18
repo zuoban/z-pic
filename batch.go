@@ -286,7 +286,9 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		return
 	}
 	if len(scan.items) == 0 {
-		if appendMode && scan.duplicates > 0 {
+		if scan.truncated {
+			s.setMessage(batchScanMessage(0, scan.duplicates, true, appendMode), false)
+		} else if appendMode && scan.duplicates > 0 {
 			s.setMessage("所选图片均已在批量队列中。", false)
 		} else {
 			s.setMessage("未找到可处理的 JPEG、PNG 或 WebP 图片。", true)
