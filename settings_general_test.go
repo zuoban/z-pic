@@ -237,5 +237,76 @@ func TestGeneralSettingsControlsFitWindow(t *testing.T) {
 				t.Fatalf("%q must fit %v: %+v", label, size, control)
 			}
 		}
+		// All shortcuts should be readable without scrolling at the supported
+		// minimum size, rather than disappearing beneath the fixed footer.
+		shortcut, ok := tester.AccessByRole(ui.RoleText, "打开设置")
+		save, _ := tester.AccessByRole(ui.RoleButton, "保存")
+		if !ok || shortcut.Offscreen || shortcut.Bounds.Y+shortcut.Bounds.H > save.Bounds.Y-12 {
+			t.Fatalf("the last shortcut must fit above the footer at %v: %+v", size, shortcut)
+		}
+	}
+}
+
+func TestSettingsGlassTextContrast(t *testing.T) {
+	for _, mode := range []themeMode{themeLight, themeDark} {
+		for _, preference := range []struct {
+			name  string
+			value ui.Preferences
+		}{
+			{"glass", ui.Preferences{}},
+			{"reduced-transparency", ui.Preferences{ReduceTransparency: true}},
+			{"high-contrast", ui.Preferences{HighContrast: true}},
+		} {
+			t.Run(string(mode)+"/"+preference.name, func(t *testing.T) {
+				app := newApplication()
+				app.setSettingsOpen(true)
+				app.editor.theme = mode
+				var theme ui.Theme
+				var metadata ui.Color
+				tester := ui.NewTester(func(c *ui.Context) {
+					app.settingsView(c)
+					theme = *c.Theme()
+					metadata = metadataColor(c)
+				}, 640, 600)
+				tester.SetVibrancy(true)
+				tester.SetPreferences(preference.value)
+				for _, active := range []bool{true, false} {
+					tester.SetWindowActive(active)
+					save, _ := tester.AccessByRole(ui.RoleButton, "保存")
+					heading, _ := tester.AccessByRole(ui.RoleHeading, "外观")
+					frame := tester.Image()
+					foreground := theme.AccentText
+					if !active && preference.name != "glass" {
+						foreground = theme.Text
+					}
+					background := frame.RGBAAt(int(save.Bounds.X+save.Bounds.W/2), int(save.Bounds.Y+6))
+					if ratio := themeContrast(foreground, ui.RGB(background.R, background.G, background.B)); ratio < 4.5 {
+						t.Errorf("save label contrast %.2f in active=%t window, want 4.5", ratio, active)
+					}
+					if preference.name == "glass" {
+						// The inactive window's native default button uses a dark
+						// label. A blue glass action must explicitly keep white text.
+						whitePixels := 0
+						for y := int(save.Bounds.Y + 10); y < int(save.Bounds.Y+26); y++ {
+							for x := int(save.Bounds.X + 28); x < int(save.Bounds.X+60); x++ {
+								pixel := frame.RGBAAt(x, y)
+								if pixel.R > 220 && pixel.G > 220 && pixel.B > 220 {
+									whitePixels++
+								}
+							}
+						}
+						if whitePixels < 4 {
+							t.Errorf("glass save action lost its white label in active=%t window", active)
+						}
+					}
+					panel := frame.RGBAAt(int(heading.Bounds.X+4), int(heading.Bounds.Y-6))
+					for _, foreground := range []ui.Color{theme.TextMuted, metadata} {
+						if ratio := themeContrast(foreground, ui.RGB(panel.R, panel.G, panel.B)); ratio < 4.5 {
+							t.Errorf("panel fallback text contrast %.2f, want 4.5", ratio)
+						}
+					}
+				}
+			})
+		}
 	}
 }

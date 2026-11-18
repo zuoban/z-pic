@@ -1,6 +1,10 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"fmt"
+
+	"github.com/egoist/mygo/ui"
+)
 
 var (
 	settingsChevronIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6.5 3 3 3-3"/></svg>`))
@@ -14,12 +18,20 @@ func (s *application) settingsView(c *ui.Context) {
 	if s.editor == nil || s.editor.selectedPreset() == nil {
 		return
 	}
-	c.OnWindowShortcut(0, ui.KeyEscape, func() { s.setSettingsOpen(false) })
+	c.OnWindowShortcut(0, ui.KeyEscape, func() {
+		if s.editor.confirmDelete {
+			s.editor.confirmDelete = false
+			s.editor.focusField = "delete-preset"
+			return
+		}
+		s.setSettingsOpen(false)
+	})
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveSettingsEdits)
 	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("应用设置").Children(func() {
-		s.settingsNavigation(c)
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-		s.settingsPresetSelection(c)
+		ui.Column(c).FillWidth().Background(panelSurface(c)).Children(func() {
+			s.settingsNavigation(c)
+			s.settingsPresetSelection(c)
+		})
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		if s.editor.section == settingsPresets {
 			s.presetSettingsContent(c)
@@ -33,17 +45,17 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(64).Padding(12, 16).Gap(12).AlignItems(ui.Center).
-		Background(panelSurface(c)).Children(func() {
-		ui.Text(c, "当前预设").FontSize(13).TextColor(t.TextMuted).Shrink(0)
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 56)).Padding(0, settingsPagePadding(c)).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
 		picker := ui.ButtonBase(c.Key("settings-preset-picker"))
 		picker.PopoverMenuButton(func(menu *ui.Menu) {
 			menu.MaxWidth(360)
 			for index, option := range editor.presets {
-				item := menu.Item(option.name).Radio(editor.active == index).
-					Tooltip(option.name).Disabled(s.busy || editor.confirmDelete)
+				name := presetDisplayName(option)
+				item := menu.Item(name).Radio(editor.active == index).
+					Tooltip(name).Disabled(s.settingsDraftLocked())
 				if item.Chosen() {
 					s.selectSettingsPreset(index)
 				}
@@ -55,8 +67,8 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 					Radius(12).Background(t.Surface).
 					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.14))
 			},
-		}).Label("选择预设").Tooltip("保存后使用："+preset.name).
-			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(36).Padding(0, 12).Gap(8).
+		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip("保存后使用："+presetDisplayName(preset)).
+			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).
 			AlignItems(ui.Center).Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 		if !disabled {
@@ -66,14 +78,15 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 				picker.Background(glassControlHover(c))
 			}
 		}
+		settingsGlassControl(picker, c, 36, disabled, ui.Transparent)
 		picker.Children(func() {
-			ui.Text(c, preset.name).FontSize(13).FontWeight(500).SingleLine().TruncateMiddle().
+			ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
 				Width(0).Grow(1).MinWidth(0)
 			ui.Icon(c, settingsChevronIcon).Size(16, 16).Shrink(0).TextColor(t.TextMuted)
 		})
 		ui.Box(c).Grow(1).MinWidth(0)
 		if editor.section == settingsGeneral {
-			quietButton(c, "manage-presets", "管理预设", 32, s.busy).OnClick(func() {
+			settingsButton(c, "manage-presets", "管理预设", 32, s.settingsDraftLocked()).OnClick(func() {
 				editor.selected = editor.active
 				editor.section = settingsPresets
 			})
@@ -82,46 +95,71 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 }
 
 func (s *application) settingsNavigation(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(56).Padding(0, 16).Gap(16).AlignItems(ui.Center).
-		Background(panelSurface(c)).Children(func() {
-		ui.Text(c, "设置").FontSize(16).FontWeight(600).Grow(1)
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 56)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
 		section := int(s.editor.section)
-		navigation := ui.Segmented(c.Key("settings-navigation"), &section, "通用", "预设").
-			Label("设置分类").FillEqually().Width(224).Height(32).Disabled(s.busy || s.editor.confirmDelete)
-		styleGlassSegmented(navigation, c, 32)
+		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设").
+			Width(settingsFontSize(c, 200))
 		s.editor.section = settingsSection(section)
 	})
 }
 
+// Categories and destinations share the same quiet, inset selection treatment.
+func settingsSegments(c *ui.Context, key, label string, selected *int, disabled bool, options ...string) ui.Element {
+	t := c.Theme()
+	parts := ui.SegmentedBase(c.Key(key), selected, len(options))
+	parts.Track.Label(label).Height(settingsControlHeight(c, 36)).Padding(4).Radius(innerRadius(c)).
+		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+		AlignItems(ui.Stretch).Disabled(disabled).Children(func() {
+		for index, option := range options {
+			segment := parts.Segment(index).Label(option).Radius(8).Center().
+				Border(1, ui.Transparent).TextColor(t.TextMuted)
+			weight := 400
+			if *selected == index {
+				segment.Background(glassControlSurface(c)).Border(1, controlBorder(c)).TextColor(t.Text)
+				settingsGlassControl(segment, c, 28, disabled, ui.Transparent)
+				weight = 500
+			} else if !disabled {
+				if segment.Pressed() {
+					segment.Background(glassControlPressed(c))
+				} else if segment.Hovered() {
+					segment.Background(glassControlHover(c)).TextColor(t.Text)
+				}
+			}
+			segment.Children(func() { ui.Text(c, option).FontSize(settingsFontSize(c, 13)).FontWeight(weight).SingleLine() })
+		}
+	})
+	if usesGlass(c) {
+		parts.Track.Radius(settingsControlHeight(c, 36) / 2)
+	}
+	return parts.Track.FillEqually()
+}
+
 func (s *application) generalSettingsContent(c *ui.Context) {
 	t := c.Theme()
-	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(24).Gap(24).Children(func() {
-		ui.Column(c).FillWidth().Gap(4).Children(func() {
-			ui.Text(c, "通用").FontSize(24).FontWeight(600)
-			ui.Text(c, "应用外观与常用快捷键").FontSize(13).TextColor(t.TextMuted)
-		})
-		ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
-			Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
-			ui.Text(c, "外观").FontSize(16).FontWeight(500)
+	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(20, settingsPagePadding(c)).Gap(20).Children(func() {
+		settingsPanel(c, "settings-appearance-panel").Children(func() {
+			ui.Text(c, "外观").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
 			ui.Text(c, "立即预览外观，保存后记住选择；取消可恢复原主题。").
-				FontSize(12).TextColor(metadataColor(c)).MaxLines(2)
+				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
-		ui.Column(c).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
-			Background(panelSurface(c)).Border(1, glassBorder(c)).Children(func() {
-			ui.Text(c, "快捷键").FontSize(16).FontWeight(500)
-			for index, shortcut := range []struct{ label, key string }{
-				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"开始或继续压缩", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
-			} {
-				if index > 0 {
-					ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
+			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Column(c).FillWidth().Children(func() {
+				for index, shortcut := range []struct{ label, key string }{
+					{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"开始或继续压缩", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
+				} {
+					if index > 0 {
+						ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+					}
+					ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 28)).Gap(16).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, shortcut.label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
+							Width(0).Grow(1).SingleLine()
+						keyboardKeycap(c, shortcut.key).FontSize(settingsFontSize(c, 12))
+					})
 				}
-				ui.Row(c).FillWidth().MinHeight(28).Gap(16).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, shortcut.label).FontSize(13).TextColor(t.TextMuted).
-						Width(0).Grow(1).SingleLine()
-					keyboardKeycap(c, shortcut.key).Padding(4, 8)
-				})
-			}
+			})
 		})
 	})
 }
@@ -136,18 +174,21 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 	}
 	icons := [...]*ui.SVG{settingsSystemIcon, settingsLightIcon, settingsDarkIcon}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
-	choice.Track.Label("外观主题").Height(80).Gap(8).AlignItems(ui.Stretch).Disabled(s.busy).
+	locked := s.settingsDraftLocked()
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 64)).Gap(8).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
-					Radius(innerRadius(c)).Padding(12, 8).
+					Radius(innerRadius(c)).Padding(8).
 					Background(glassControlSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
-				} else if !s.busy {
+					settingsGlassControl(segment, c, 64, locked, t.Accent.Alpha(0.14)).
+						Radius(innerRadius(c))
+				} else if !locked {
 					if segment.Pressed() {
 						segment.Background(glassControlPressed(c))
 					} else if segment.Hovered() {
@@ -155,10 +196,10 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 					}
 				}
 				segment.Children(func() {
-					ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
 						ui.Icon(c, icons[index]).Size(20, 20).TextColor(color)
 						ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, option.label).FontSize(13).FontWeight(500).SingleLine().TextColor(t.Text)
+							ui.Text(c, option.label).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TextColor(t.Text)
 							if active {
 								ui.Icon(c, presetCheckIcon).Size(12, 12).TextColor(color)
 							}
@@ -174,43 +215,76 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 
 func (s *application) settingsFooter(c *ui.Context) {
 	t, editor := c.Theme(), s.editor
-	width, _ := c.Size()
-	padding := float32(24)
-	if width < 560 {
-		padding = 16
-	}
+	padding := settingsPagePadding(c)
 	ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 	if editor.confirmDelete {
 		ui.Row(c).Padding(12, padding).Gap(8).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "删除「%s」？保存后生效。", editor.selectedPreset().name).
-				FontSize(12).Width(0).Grow(1).SingleLine().TruncateMiddle()
-			quietButton(c, "cancel-delete", "保留预设", 32, false).
-				OnClick(func() { editor.confirmDelete = false })
-			quietButton(c, "confirm-delete", "确认删除", 32, false).TextColor(t.Danger).
+			name := presetDisplayName(*editor.selectedPreset())
+			short := []rune(name)
+			if len(short) > 16 {
+				short = append(short[:16], '…')
+			}
+			message := fmt.Sprintf("删除「%s」？保存后生效。", string(short))
+			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).Width(0).Grow(1).MaxLines(2).
+				Tooltip("删除「" + name + "」？保存后生效。")
+			keep := settingsButton(c, "cancel-delete", "保留预设", 32, false).
+				OnClick(func() {
+					editor.confirmDelete = false
+					editor.focusField = "delete-preset"
+				})
+			s.focusSettingsFieldDuringDelete(keep)
+			settingsButton(c, "confirm-delete", "确认删除", 32, false).TextColor(t.Danger).
 				OnClick(s.deletePreset)
 		})
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 	}
 	ui.Column(c).Padding(12, padding).Gap(8).Background(panelSurface(c)).Children(func() {
 		message, color, role := "更改将在保存后生效", t.TextMuted, ui.RoleStatus
+		dirty := s.settingsHaveChanges()
+		if dirty {
+			message = "有未保存的更改"
+		}
 		if editor.presets[editor.active].name != s.scheme {
-			message = "保存后使用：" + editor.presets[editor.active].name
+			message = "保存后使用：" + presetDisplayName(editor.presets[editor.active])
 		}
 		if editor.message != "" {
 			message, color, role = editor.message, t.Danger, ui.RoleAlert
 		}
-		ui.Text(c, message).FontSize(12).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
+		width, _ := c.Size()
+		statusAbove := editor.message != "" || editor.presets[editor.active].name != s.scheme || (dirty && width < 560)
+		if statusAbove {
+			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
+		}
 		ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			if editor.section == settingsPresets {
-				quietButton(c, "duplicate-preset", "复制预设", 36, s.busy).OnClick(s.duplicatePreset)
-				quietButton(c, "delete-preset", "删除预设", 36, s.busy || len(editor.presets) <= 1).
-					TextColor(t.Danger).OnClick(s.requestDeletePreset)
+				quietToolbarButton(c, "duplicate-preset", "复制预设", s.settingsDraftLocked()).
+					Height(settingsControlHeight(c, 32)).FontSize(settingsFontSize(c, 13)).OnClick(s.duplicatePreset)
+				deleteButton := quietToolbarButton(c, "delete-preset", "删除预设", s.settingsDraftLocked() || len(editor.presets) <= 1).
+					Height(settingsControlHeight(c, 32)).FontSize(settingsFontSize(c, 13)).TextColor(t.Danger).OnClick(s.requestDeletePreset)
+				if len(editor.presets) <= 1 {
+					deleteButton.Tooltip("至少保留一个预设")
+				}
+				s.focusSettingsField(deleteButton, "delete-preset")
 			}
-			ui.Box(c).Grow(1)
-			quietButton(c, "cancel-settings", "取消", 36, s.busy).Width(72).
+			inlineStatus := !statusAbove && (editor.section == settingsGeneral || dirty)
+			if inlineStatus {
+				ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).
+					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(message)
+			} else {
+				ui.Box(c).Grow(1)
+			}
+			settingsButton(c, "cancel-settings", "取消", 36, s.busy).Width(72).
 				OnClick(func() { s.setSettingsOpen(false) })
-			primaryAction(c, "save-settings", "保存", s.busy || editor.confirmDelete).Width(88).Height(36).
-				KeyShortcuts(ui.Cmd, ui.KeyS).OnClick(s.saveSettingsEdits)
+			saveDisabled := s.busy || editor.confirmDelete
+			settingsSaveButton(c, saveDisabled).Width(88).Height(settingsControlHeight(c, 36)).
+				Tooltip("更改将在保存后生效").KeyShortcuts(ui.Cmd, ui.KeyS).OnClick(s.saveSettingsEdits)
 		})
 	})
+}
+
+func (s *application) focusSettingsFieldDuringDelete(keep ui.Element) {
+	if s.editor.focusField == "cancel-delete" && !s.busy {
+		keep.Focus()
+		s.editor.focusField = ""
+	}
 }

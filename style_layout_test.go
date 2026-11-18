@@ -184,16 +184,29 @@ func TestStyleReviewRenders(t *testing.T) {
 		accessible.SetVibrancy(true)
 		accessible.SetPreferences(ui.Preferences{HighContrast: true, ReduceTransparency: true})
 		save("high-contrast-760-"+theme, accessible)
-		for _, width := range []int{640, 724} {
+		for _, size := range [][2]int{{640, 600}, {724, 700}} {
+			width, height := size[0], size[1]
 			for _, section := range []settingsSection{settingsGeneral, settingsPresets} {
 				app := styleReviewApplication(t, "empty")
 				app.setSettingsOpen(true)
 				app.editor.section = section
 				app.editor.presets[0].name = strings.Repeat("预设", 20)
 				app.editor.presets[0].output = presetSaveOptions{Mode: presetSaveFixed, Directory: "/Users/example/Pictures/很长的输出路径/项目素材/已压缩图片", UseSubfolder: true, Subfolder: "zpic", UseSuffix: true, Suffix: "-zpic"}
-				tester := ui.NewTester(app.settingsView, width, 600)
+				tester := ui.NewTester(app.settingsView, width, height)
 				tester.SetDark(dark)
 				save(fmt.Sprintf("settings-%d-%d-%s", section, width, theme), tester)
+				tester.SetVibrancy(true)
+				save(fmt.Sprintf("settings-glass-%d-%d-%s", section, width, theme), tester)
+				for _, preferences := range []struct {
+					name  string
+					value ui.Preferences
+				}{
+					{"reduced-transparency", ui.Preferences{ReduceTransparency: true}},
+					{"high-contrast", ui.Preferences{HighContrast: true}},
+				} {
+					tester.SetPreferences(preferences.value)
+					save(fmt.Sprintf("settings-%s-%d-%d-%s", preferences.name, section, width, theme), tester)
+				}
 			}
 		}
 		for _, state := range []string{"compact", "grid", "list"} {

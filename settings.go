@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -70,6 +71,8 @@ type settingsEditor struct {
 	active        int
 	message       string
 	confirmDelete bool
+	focusField    string
+	selectName    bool
 }
 
 func defaultPresets() []compressionPreset {
@@ -81,6 +84,33 @@ func (e *settingsEditor) selectedPreset() *compressionPreset {
 		return nil
 	}
 	return &e.presets[e.selected]
+}
+
+func (s *application) settingsDraftLocked() bool {
+	return s.busy || s.editor == nil || s.editor.confirmDelete
+}
+
+func (e *settingsEditor) nameProblem() string {
+	preset := e.selectedPreset()
+	if preset == nil {
+		return ""
+	}
+	name := strings.TrimSpace(preset.name)
+	if problem := presetNameProblem(name); problem != "" {
+		return problem
+	}
+	for index, other := range e.presets {
+		if index != e.selected && strings.TrimSpace(other.name) == name {
+			return "预设名称已存在，请换一个名称"
+		}
+	}
+	return ""
+}
+
+func (s *application) settingsHaveChanges() bool {
+	e := s.editor
+	return e != nil && (e.theme.normalized() != s.effectiveThemeMode() ||
+		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme)
 }
 
 func (s *application) restoreSettings() {
@@ -218,7 +248,7 @@ func (s *application) applyScheme(name string) {
 }
 
 func (s *application) editQualityLevel(level int) {
-	if s.busy || s.editor.selectedPreset() == nil || level < 0 || level >= len(imageQualityLevels) {
+	if s.settingsDraftLocked() || s.editor.selectedPreset() == nil || level < 0 || level >= len(imageQualityLevels) {
 		return
 	}
 	quality := imageQualityLevels[level]
@@ -228,7 +258,7 @@ func (s *application) editQualityLevel(level int) {
 }
 
 func (s *application) addPreset() {
-	if s.busy || s.editor == nil {
+	if s.settingsDraftLocked() {
 		return
 	}
 	editor := s.editor
@@ -242,10 +272,11 @@ func (s *application) addPreset() {
 	editor.presets = append(editor.presets, preset)
 	editor.selected = len(editor.presets) - 1
 	editor.message, editor.confirmDelete = "", false
+	editor.focusField, editor.selectName = "preset-name", true
 }
 
 func (s *application) duplicatePreset() {
-	if s.busy || s.editor == nil {
+	if s.settingsDraftLocked() {
 		return
 	}
 	editor := s.editor
@@ -270,6 +301,7 @@ func (s *application) duplicatePreset() {
 	editor.presets = append(editor.presets, preset)
 	editor.selected = len(editor.presets) - 1
 	editor.message, editor.confirmDelete = "", false
+	editor.focusField, editor.selectName = "preset-name", true
 }
 
 func (s *application) requestDeletePreset() {
@@ -277,6 +309,7 @@ func (s *application) requestDeletePreset() {
 		return
 	}
 	s.editor.confirmDelete = true
+	s.editor.focusField = "cancel-delete"
 }
 
 func (s *application) deletePreset() {
@@ -293,6 +326,7 @@ func (s *application) deletePreset() {
 	}
 	editor.selected = min(index, len(editor.presets)-1)
 	editor.message, editor.confirmDelete = "", false
+	editor.focusField = "preset-name"
 }
 
 func (s *application) saveSettingsEdits() {
@@ -306,6 +340,11 @@ func (s *application) saveSettingsEdits() {
 	selected := presets[s.editor.active].name
 	if err := validatePresets(presets, selected); err != nil {
 		s.editor.section = settingsPresets
+		var invalid *presetValidationError
+		if errors.As(err, &invalid) {
+			s.editor.selected = invalid.index
+			s.editor.focusField, s.editor.selectName = invalid.field, false
+		}
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}

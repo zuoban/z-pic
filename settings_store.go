@@ -52,37 +52,56 @@ func settingsFilePath() (string, error) {
 	return filepath.Join(directory, "z-pic", "settings.json"), nil
 }
 
+// Keep validation authoritative while allowing the editor to reveal the control
+// that needs attention. Error text also remains useful when loading JSON.
+type presetValidationError struct {
+	index int
+	field string
+	err   error
+}
+
+func (e *presetValidationError) Error() string { return e.err.Error() }
+func (e *presetValidationError) Unwrap() error { return e.err }
+
+func presetNameProblem(name string) string {
+	if !utf8.ValidString(name) || name == "" ||
+		name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > 40 {
+		return "预设名称不能为空、首尾不能有空格，且不能超过 40 个字符"
+	}
+	if strings.ContainsFunc(name, unicode.IsControl) {
+		return "预设名称不能包含换行或控制字符"
+	}
+	return ""
+}
+
 func validatePresets(presets []compressionPreset, selected string) error {
 	if len(presets) == 0 {
 		return errors.New("至少需要保留一个压缩预设")
 	}
 	names := make(map[string]bool, len(presets))
-	for _, preset := range presets {
-		if !utf8.ValidString(preset.name) || preset.name == "" ||
-			preset.name != strings.TrimSpace(preset.name) || utf8.RuneCountInString(preset.name) > 40 {
-			return errors.New("预设名称不能为空、首尾不能有空格，且不能超过 40 个字符")
+	for index, preset := range presets {
+		invalid := func(field string, err error) error {
+			return &presetValidationError{index: index, field: field, err: err}
 		}
-		for _, character := range preset.name {
-			if unicode.IsControl(character) {
-				return errors.New("预设名称不能包含换行或控制字符")
-			}
+		if problem := presetNameProblem(preset.name); problem != "" {
+			return invalid("preset-name", errors.New(problem))
 		}
 		if names[preset.name] {
-			return fmt.Errorf("预设名称不能重复：%s", preset.name)
+			return invalid("preset-name", fmt.Errorf("预设名称不能重复：%s", preset.name))
 		}
 		names[preset.name] = true
 		if math.IsNaN(preset.quality) || math.IsInf(preset.quality, 0) ||
 			preset.quality < 1 || preset.quality > 100 || math.Trunc(preset.quality) != preset.quality {
-			return fmt.Errorf("预设「%s」的 JPEG / WebP 质量必须是 1 到 100 之间的整数", preset.name)
+			return invalid("quality-level", fmt.Errorf("预设「%s」的 JPEG / WebP 质量必须是 1 到 100 之间的整数", preset.name))
 		}
 		if preset.png == (compress.PNGOptions{}) {
-			return fmt.Errorf("预设「%s」必须指定完整的 PNG 参数", preset.name)
+			return invalid("quality-level", fmt.Errorf("预设「%s」必须指定完整的 PNG 参数", preset.name))
 		}
 		if err := preset.png.Validate(); err != nil {
-			return fmt.Errorf("预设「%s」的 PNG 参数无效：%w", preset.name, err)
+			return invalid("quality-level", fmt.Errorf("预设「%s」的 PNG 参数无效：%w", preset.name, err))
 		}
-		if err := preset.output.validate(); err != nil {
-			return fmt.Errorf("预设「%s」的保存设置无效：%w", preset.name, err)
+		if field, err := preset.output.validateField(); err != nil {
+			return invalid(field, fmt.Errorf("预设「%s」的保存设置无效：%w", preset.name, err))
 		}
 	}
 	if !names[selected] {

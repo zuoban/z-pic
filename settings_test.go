@@ -78,7 +78,7 @@ func TestDuplicatePresetCopiesCurrentDraft(t *testing.T) {
 			originals := slices.Clone(editor.presets)
 			published := slices.Clone(application.presets)
 			active := editor.active
-			editor.message, editor.confirmDelete = "旧提示", true
+			editor.message = "旧提示"
 			application.duplicatePreset()
 			expected := source
 			expected.name = source.name + " 副本"
@@ -169,6 +169,7 @@ func TestDuplicatePresetCancelSaveAndRestart(t *testing.T) {
 			application.duplicatePreset()
 			application.editQualityLevel(2)
 			copyPreset := *application.editor.selectedPreset()
+			tester.Frame()
 			afterCopy, err := os.ReadFile(application.settingsFile)
 			if err != nil {
 				t.Fatal(err)
@@ -213,14 +214,16 @@ func TestDuplicatePresetCancelSaveAndRestart(t *testing.T) {
 }
 
 func TestDuplicatePresetGuards(t *testing.T) {
-	for _, guard := range []string{"busy", "no editor", "negative selection", "past end", "empty presets"} {
+	for _, guard := range []string{"busy", "pending deletion", "no editor", "negative selection", "past end", "empty presets"} {
 		t.Run(guard, func(t *testing.T) {
 			application := newApplication()
 			openTestSettings(t, application)
-			application.editor.message, application.editor.confirmDelete = "保留提示", true
+			application.editor.message = "保留提示"
 			switch guard {
 			case "busy":
 				application.busy = true
+			case "pending deletion":
+				application.editor.confirmDelete = true
 			case "no editor":
 				application.editor = nil
 			case "negative selection":

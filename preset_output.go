@@ -43,25 +43,34 @@ func (o presetSaveOptions) supportsSubfolder() bool {
 }
 
 func (o presetSaveOptions) validate() error {
+	_, err := o.validateField()
+	return err
+}
+
+func (o presetSaveOptions) validateField() (string, error) {
 	if o.Mode != presetSaveOriginal && o.Mode != presetSaveAsk && o.Mode != presetSaveFixed {
-		return errors.New("未知的保存方式")
+		return "preset-save-mode", errors.New("未知的保存方式")
 	}
-	if !utf8.ValidString(o.Directory) || !utf8.ValidString(o.Subfolder) || !utf8.ValidString(o.Suffix) {
-		return errors.New("保存设置包含无效的 UTF-8 字符")
+	for _, value := range []struct{ field, text string }{
+		{"preset-output-directory", o.Directory}, {"preset-subfolder-name", o.Subfolder}, {"preset-suffix-value", o.Suffix},
+	} {
+		if !utf8.ValidString(value.text) {
+			return value.field, errors.New("保存设置包含无效的 UTF-8 字符")
+		}
 	}
 	if strings.ContainsRune(o.Directory, 0) {
-		return errors.New("输出目录不能包含空字符")
+		return "preset-output-directory", errors.New("输出目录不能包含空字符")
 	}
 	if o.Mode == presetSaveFixed && o.Directory != "" && !filepath.IsAbs(o.Directory) {
-		return errors.New("固定输出目录必须是绝对路径")
+		return "preset-output-directory", errors.New("固定输出目录必须是绝对路径")
 	}
 	if o.supportsSubfolder() && o.UseSubfolder && !validOutputComponent(o.Subfolder) {
-		return errors.New("子文件夹必须是单个合法名称")
+		return "preset-subfolder-name", errors.New("子文件夹必须是单个合法名称")
 	}
 	if o.UseSuffix && !validOutputComponent(o.Suffix) {
-		return errors.New("文件名后缀不能包含路径或控制字符")
+		return "preset-suffix-value", errors.New("文件名后缀不能包含路径或控制字符")
 	}
-	return nil
+	return "", nil
 }
 
 func (o presetSaveOptions) replacesOriginal() bool {

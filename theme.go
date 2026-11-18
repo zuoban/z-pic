@@ -105,7 +105,7 @@ func (s *application) syncThemeAppearance(mode themeMode) {
 }
 
 func (s *application) previewSettingsTheme(mode themeMode) {
-	if s.busy || !s.settingsOpen || s.editor == nil || mode.validate() != nil {
+	if s.settingsDraftLocked() || !s.settingsOpen || mode.validate() != nil {
 		return
 	}
 	s.editor.theme = mode.normalized()
