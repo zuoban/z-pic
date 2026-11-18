@@ -234,6 +234,44 @@ func TestParseMultipleItemsAndLazyAlternatives(t *testing.T) {
 	}
 }
 
+func TestParseCountsReferencesAcrossNativeItemsBeforeDeduplication(t *testing.T) {
+	for _, scenario := range []struct {
+		format transfer.Format
+		entry  string
+	}{
+		{transfer.FileList, "/tmp/repeated.png\n"},
+		{transfer.URIList, "https://example.test/repeated.png\n"},
+		{transfer.HTML, `<img src="https://example.test/repeated.png">`},
+	} {
+		for _, total := range []int{maxItems, maxItems + 1} {
+			t.Run(fmt.Sprintf("%s/%d", scenario.format, total), func(t *testing.T) {
+				sources := []transfer.Item{
+					transfer.NewItem(representation(scenario.format, strings.Repeat(scenario.entry, maxItems/2))),
+					transfer.NewItem(representation(scenario.format, strings.Repeat(scenario.entry, total-maxItems/2))),
+				}
+				lateReads := 0
+				if total > maxItems {
+					sources = append(sources, transfer.NewItem(transfer.Lazy(transfer.PNG, func() ([]byte, error) {
+						lateReads++
+						return []byte("late image"), nil
+					})))
+				}
+				items, err := Parse(transfer.New(sources...))
+				if total == maxItems {
+					if err != nil || len(items) != 1 {
+						t.Fatalf("exact reference limit must allow deduplication: %v, %v", items, err)
+					}
+				} else {
+					var limit resourceLimitError
+					if items != nil || !errors.As(err, &limit) || lateReads != 0 {
+						t.Fatalf("cross-item duplicates bypassed limits: %v, %v, late reads=%d", items, err, lateReads)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestParseMixedDropPreservesValidItems(t *testing.T) {
 	firstFailure := errors.New("first provider failed")
 	secondFailure := errors.New("second provider failed")

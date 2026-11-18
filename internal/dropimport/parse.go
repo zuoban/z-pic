@@ -43,6 +43,7 @@ func Parse(data transfer.Data) ([]Item, error) {
 	var failures []error
 	seen := make(map[string]bool)
 	budget := maxTransfer
+	remainingItems := maxItems
 	for _, source := range native {
 		items, err := parseItem(source, &budget)
 		if err != nil {
@@ -53,6 +54,12 @@ func Parse(data transfer.Data) ([]Item, error) {
 			}
 			continue
 		}
+		// Bound work across the entire transfer, including repeated references
+		// split over several native items. Deduplication is a separate concern.
+		if len(items) > remainingItems {
+			return nil, errors.Join(append(failures, itemLimit())...)
+		}
+		remainingItems -= len(items)
 		for _, item := range items {
 			key := ""
 			if item.Path != "" {
@@ -65,9 +72,6 @@ func Parse(data transfer.Data) ([]Item, error) {
 			}
 			if key != "" {
 				seen[key] = true
-			}
-			if len(result) == maxItems {
-				return nil, errors.Join(append(failures, itemLimit())...)
 			}
 			result = append(result, item)
 		}

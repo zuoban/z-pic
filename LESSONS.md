@@ -170,3 +170,10 @@
 - 修改：只在 HTML 未声明图片时才读取和解析文本，图片备用表示直接进入 PNG/JPEG/WebP 分支。
 - 防复发：懒加载 provider 应在确认业务需要后才调用，不能先加载、计入资源上限，再决定丢弃。
 - 验证与 review：`go test ./internal/dropimport -run TestParse -count=1`；新增超大无关文本与有效图片备用场景，核对 HTML、URL、文件列表优先级和必要 provider 的限制不变。
+
+### 第 9 轮：跨原生条目共享原始引用数量上限
+
+- 确认问题：每个原生条目内虽限制 2000 个引用，但多个条目中重复的文件/URL/HTML 图片在去重后可绕过整次导入数量限制，继续解析后续 provider。
+- 修改：整次传输共享 2000 个有效原始引用预算，先扣减再去重；超限拒绝整次导入并停止读取后续条目。
+- 防复发：资源上限的作用域应与整个用户操作一致，不能在子列表或 provider 边界重置；业务去重不能抵消已经发生的解析工作量。
+- 验证与 review：`go test ./internal/dropimport -run 'TestParse|TestLines' -count=1`；三个表示类型分别覆盖恰好 2000、2001 个跨条目重复引用，以及超限后 provider 不执行。
