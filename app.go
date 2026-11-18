@@ -23,6 +23,8 @@ import (
 const (
 	maxInputBytes = imageinput.MaxSize
 	maxPixels     = 32_000_000
+	// A save dialog suggestion is advisory; actual saving uses O_EXCL.
+	maxSuggestedPathChecks = 1000
 )
 
 type selectedImage struct {
@@ -518,13 +520,16 @@ func (s *application) revealFileInFolder(path string) {
 func suggestedPath(source, ext string) string {
 	base := strings.TrimSuffix(source, filepath.Ext(source)) + "-compressed"
 	path := base + ext
-	for i := 2; ; i++ {
+	for i := 2; i <= maxSuggestedPathChecks+1; i++ {
 		_, err := os.Lstat(path)
 		if err != nil {
 			return path
 		}
 		path = fmt.Sprintf("%s-%d%s", base, i, ext)
 	}
+	// Stop scanning crowded directories. The user can edit this suggestion,
+	// and Result.Save will still refuse any existing destination.
+	return path
 }
 
 func formatSize(size int64) string {

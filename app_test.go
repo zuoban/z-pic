@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"os"
@@ -1280,6 +1281,36 @@ func TestSuggestedPathAvoidsExistingCopies(t *testing.T) {
 	}
 	if path := suggestedPath(source, ".jpg"); path != filepath.Join(dir, "photo-compressed-2.jpg") {
 		t.Fatalf("suggested path would overwrite an existing copy: %q", path)
+	}
+}
+
+func TestSuggestedPathBoundsCollisionSearch(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "photo.jpg")
+	base := filepath.Join(dir, "photo-compressed")
+	for number := 1; number <= maxSuggestedPathChecks+1; number++ {
+		path := base + ".jpg"
+		if number > 1 {
+			path = fmt.Sprintf("%s-%d.jpg", base, number)
+		}
+		if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The final suggestion is deliberately occupied. Returning the next free
+	// name would mean the filesystem search continued beyond its budget.
+	path := suggestedPath(source, ".jpg")
+	want := fmt.Sprintf("%s-%d.jpg", base, maxSuggestedPathChecks+1)
+	if path != want {
+		t.Fatalf("unbounded collision search: got %q, want %q", path, want)
+	}
+	result := &compress.Result{SourcePath: source, Data: []byte("new")}
+	if err := result.Save(path); err == nil {
+		t.Fatal("an advisory suggestion bypassed exclusive saving")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "existing" {
+		t.Fatal("suggestion collision changed an existing file")
 	}
 }
 
