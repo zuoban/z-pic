@@ -125,6 +125,12 @@ func TestEmbeddedLosslessSamplesAndMetadata(t *testing.T) {
 		if err != nil || !bytes.Equal(out, data) {
 			t.Fatalf("%s was changed: %v", name, err)
 		}
+		out, err = QuantizeWithOptions(context.Background(), data, QuantizeOptions{
+			MinQuality: 0, MaxQuality: 100, Colors: 16, Speed: 10,
+		})
+		if err != nil || !bytes.Equal(out, data) {
+			t.Fatalf("quantization changed %s: %v", name, err)
+		}
 	}
 	if _, err := Optimize(context.Background(), []byte("broken PNG")); err == nil {
 		t.Fatal("invalid PNG accepted")

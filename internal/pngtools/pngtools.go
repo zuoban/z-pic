@@ -72,7 +72,8 @@ func Quantize(ctx context.Context, data []byte) ([]byte, error) {
 // and speed. All-zero options select defaults. Exit codes 98 and 99
 // return the original bytes, discarding any partial stdout. Successful output
 // that does not save space also returns the original bytes. This is lossy;
-// callers run Optimize afterwards and validate the final output.
+// signed/offset-dependent caBX and iDOT inputs are returned untouched, as in
+// Optimize. Callers run Optimize afterwards and validate the final output.
 func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptions) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
@@ -82,6 +83,9 @@ func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptio
 	}
 	if err := options.Validate(); err != nil {
 		return nil, err
+	}
+	if immutable, _ := chunkConstraints(data); immutable {
+		return data, nil
 	}
 	return invoke(ctx, "pngquant", []string{
 		fmt.Sprintf("--quality=%d-%d", options.MinQuality, options.MaxQuality),
