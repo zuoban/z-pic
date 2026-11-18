@@ -250,3 +250,10 @@
 - 修改：统一为 `internal/contextio.NewReader`，删除三份重复类型；所有原有入口及取消回归使用同一实现。
 - 防复发：适配器不要嵌入底层 reader，否则 `WriterTo` 等快路径可能被提升，`io.Copy` 会绕过取消检查；此适配器仍不能中断已阻塞的底层同步读取。
 - 验证与 review：`go test ./internal/contextio ./internal/imageinput ./internal/dropimport ./internal/compress -count=1`；额外使用实现 `WriterTo` 的 `strings.Reader` 验证取消时 `io.Copy` 写入零字节。
+
+### 第 8 轮：让 PNG 捆绑资产校验进入 CI
+
+- 确认问题：CI 只校验 WebP 捆绑资产；PNG 脚本没有只验证模式，源码包在解压/构建前也未固定摘要。
+- 修改：PNG 脚本增加 `--verify`，核对仓库源码快照 SHA-256、两个二进制的 manifest 摘要、固定版本及 macOS 签名；构建前同样检查源码包，CI 执行验证模式。
+- 防复发：覆盖所有实际分发的工具；验证模式应在构建工具检查及临时目录创建之前返回。固定当前仓库快照不等于独立证明所有上游依赖来源。
+- 验证与 review：`bash -n scripts/prepare-pngtools.sh` 和 `bash scripts/prepare-pngtools.sh --verify` 通过；隔离副本分别篡改二进制、版本声明、源码包，均在预期检查处失败，未修改真实资产。

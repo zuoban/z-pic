@@ -34,5 +34,7 @@ jobs:
         run: go tool mygo vet
       - name: Verify bundled WebP tool
         run: bash scripts/prepare-webptools.sh --verify
+      - name: Verify bundled PNG tools
+        run: bash scripts/prepare-pngtools.sh --verify
       - name: Build application
         run: go build ./...

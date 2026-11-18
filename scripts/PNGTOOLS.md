@@ -17,6 +17,12 @@ Source pinning makes preparation repeatable; different compilers/SDKs/paths
 may produce different binary hashes. This is not a bit-for-bit reproducible
 build claim.
 
+Run `bash scripts/prepare-pngtools.sh --verify` to verify the shipped source
+archive digest, binary digests against the manifest, pinned tool versions and
+macOS signatures without building or requiring Rust/Cargo. CI runs this check.
+The source digest pins the repository's vendored snapshot; it does not
+independently attest to the origin of every vendored dependency.
+
 The pins are:
 
 | Tool | Official tag | Commit |
@@ -61,6 +67,7 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
   configurations fail before execution. The UI adjusts all PNG parameters with
   image quality; presets and legacy custom values are documented in README.md.
   There is no separate lossless mode.
+  Like Optimize, quantization returns `caBX`/`iDOT` files unchanged.
   Exit 98/99 discards stdout and returns the exact original input without error.
   Caller then runs Optimize and validates dimensions/output PNG.
 

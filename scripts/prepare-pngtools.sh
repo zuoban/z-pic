@@ -4,8 +4,18 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/zpic-pngtools-build.XXXXXX")"
-trap 'rm -rf "$work_dir"' EXIT
+if [[ $# -gt 1 || ( $# -eq 1 && "${1:-}" != --verify ) ]]; then
+  echo "Usage: $0 [--verify]" >&2
+  exit 1
+fi
+source_sha=844426084a044fcafe6913faf8102d74f5da0e0aaf9c98a67599d723f0d9d45d
+command -v python3 >/dev/null || { echo "Missing tool: python3" >&2; exit 1; }
+python3 - "$repo_root/licenses/pngtools-source.tar.gz" "$source_sha" <<'PY'
+import hashlib, pathlib, sys
+actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
+if actual != sys.argv[2]:
+    raise SystemExit("PNG source archive checksum mismatch")
+PY
 
 case "$(uname -s)" in
   Darwin) target_os=darwin ;;
@@ -17,6 +27,31 @@ case "$(uname -m)" in
   x86_64|amd64) target_arch=amd64 ;;
   *) echo "Unsupported architecture." >&2; exit 1 ;;
 esac
+asset_dir="$repo_root/internal/pngtools/assets/${target_os}_${target_arch}"
+if [[ "${1:-}" == --verify ]]; then
+  python3 - "$asset_dir" <<'PY'
+import hashlib, json, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads((root / "manifest.json").read_text())
+for name, version in (("oxipng", "10.2.1"), ("pngquant", "3.0.3")):
+    entry = manifest[name]
+    binary = root / name
+    if entry["version"] != version:
+        raise SystemExit(f"Wrong {name} manifest version")
+    if entry["sha256"] != hashlib.sha256(binary.read_bytes()).hexdigest():
+        raise SystemExit(f"{name} binary checksum mismatch")
+    if sys.platform == "darwin":
+        subprocess.run(["codesign", "--verify", "--strict", str(binary)], check=True)
+    actual = subprocess.check_output([str(binary), "--version"], env={}, text=True).strip()
+    if actual not in (version, f"{name} {version}"):
+        raise SystemExit(f"Wrong {name} binary version: {actual}")
+    print(f"Verified {name} {version}")
+PY
+  exit 0
+fi
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/zpic-pngtools-build.XXXXXX")"
+trap 'rm -rf "$work_dir"' EXIT
 for tool in cargo rustc python3 tar; do
   command -v "$tool" >/dev/null || { echo "Missing build tool: $tool" >&2; exit 1; }
 done
@@ -74,7 +109,6 @@ PY
   env -i PATH= "$binary" --version
 done
 
-asset_dir="$repo_root/internal/pngtools/assets/${target_os}_${target_arch}"
 mkdir -p "$asset_dir"
 for name in oxipng pngquant; do
   install -m 755 "$work_dir/$name-target/release/$name" "$asset_dir/$name"
