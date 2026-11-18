@@ -3,6 +3,7 @@ package dropimport
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -35,6 +36,16 @@ type Item struct {
 // and failed providers without a usable alternative produce joined errors
 // alongside valid items. Resource limits stop parsing and reject the whole drop.
 func Parse(data transfer.Data) ([]Item, error) {
+	return ParseContext(context.Background(), data)
+}
+
+// ParseContext checks cancellation between providers and during list/HTML
+// traversal. A provider already executing must return before it can be stopped.
+// Cancellation rejects the entire transfer, including previously parsed items.
+func ParseContext(ctx context.Context, data transfer.Data) ([]Item, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	native := data.Items()
 	if len(native) > maxItems {
 		return nil, itemLimit()
@@ -45,7 +56,10 @@ func Parse(data transfer.Data) ([]Item, error) {
 	budget := maxTransfer
 	remainingItems := maxItems
 	for _, source := range native {
-		items, err := parseItem(source, &budget)
+		items, err := parseItem(ctx, source, &budget)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err != nil {
 			failures = append(failures, err)
 			var limit resourceLimitError
@@ -92,19 +106,24 @@ func itemLimit() error {
 	return resourceLimitError(fmt.Sprintf("一次最多导入 %d 张图片", maxItems))
 }
 
-func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
+func parseItem(ctx context.Context, source transfer.Item, budget *int) (items []Item, err error) {
 	var readErrors []error
 	var resourceErr error
 	defer func() {
-		if resourceErr != nil {
+		if canceled := ctx.Err(); canceled != nil {
+			items, err = nil, canceled
+		} else if resourceErr != nil {
 			items, err = nil, errors.Join(append(readErrors, resourceErr)...)
 		}
 	}()
 	read := func(format transfer.Format, limit int) []byte {
-		if resourceErr != nil {
+		if resourceErr != nil || ctx.Err() != nil {
 			return nil
 		}
 		value, err := source.Read(format)
+		if ctx.Err() != nil {
+			return nil
+		}
 		if errors.Is(err, transfer.ErrFormat) {
 			return nil
 		}
@@ -120,11 +139,11 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 		return value
 	}
 	files := string(read(transfer.FileList, maxText))
-	if items, err := localItems(files); err != nil || len(items) > 0 {
+	if items, err := localItems(ctx, files); err != nil || len(items) > 0 {
 		return items, err
 	}
 	uris := string(read(transfer.URIList, maxText))
-	if items, err := localItems(uris); err != nil || len(items) > 0 {
+	if items, err := localItems(ctx, uris); err != nil || len(items) > 0 {
 		return items, err
 	}
 	markup := read(transfer.HTML, maxText)
@@ -132,6 +151,9 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 	if len(markup) > 0 {
 		var base *url.URL
 		for line := range lines(uris) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if parsed, err := httpURL(line); err == nil {
 				base = parsed
 				break
@@ -140,6 +162,9 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 		var images []Item
 		tokenizer := html.NewTokenizer(bytes.NewReader(markup))
 		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			tokenType := tokenizer.Next()
 			if tokenType == html.ErrorToken {
 				if err := tokenizer.Err(); err != io.EOF {
@@ -178,12 +203,15 @@ func parseItem(source transfer.Item, budget *int) (items []Item, err error) {
 	}
 	if !hadImage {
 		text := string(read(transfer.Text, maxText))
-		if items, err := localItems(text); err != nil || len(items) > 0 {
+		if items, err := localItems(ctx, text); err != nil || len(items) > 0 {
 			return items, err
 		}
 		for _, representation := range []string{uris, text} {
 			var items []Item
 			for line := range lines(representation) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if item, err := reference(line); err == nil {
 					items = append(items, item)
 				}
@@ -221,9 +249,12 @@ func lines(text string) iter.Seq[string] {
 	}
 }
 
-func localItems(text string) ([]Item, error) {
+func localItems(ctx context.Context, text string) ([]Item, error) {
 	var result []Item
 	for line := range lines(text) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		path := line
 		if scheme, _, ok := strings.Cut(line, ":"); ok && strings.EqualFold(scheme, "file") {
 			parsed, err := url.Parse(line)

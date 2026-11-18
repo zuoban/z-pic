@@ -138,7 +138,7 @@ func (s *application) startNextDropImport() {
 		transport := dropimport.NewTransport()
 		defer transport.CloseIdleConnections()
 		resolver := dropimport.NewResolver(dir, transport)
-		items, err := dropimport.Parse(data)
+		items, err := dropimport.ParseContext(ctx, data)
 		var paths []string
 		var failures []string
 		savedURLs := make(map[string]string)

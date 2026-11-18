@@ -2,6 +2,7 @@ package dropimport
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -331,10 +332,46 @@ func TestParseTransferBudgetStopsProviders(t *testing.T) {
 			return []byte("image"), nil
 		}),
 	)
-	got, err := parseItem(source, &budget)
+	got, err := parseItem(context.Background(), source, &budget)
 	var limit resourceLimitError
 	if got != nil || !errors.As(err, &limit) {
 		t.Fatalf("budget exceeded returned %#v, %v", got, err)
+	}
+}
+
+func TestParseContextStopsProvidersAndRejectsPartialItems(t *testing.T) {
+	for _, preCanceled := range []bool{false, true} {
+		t.Run(fmt.Sprint(preCanceled), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if preCanceled {
+				cancel()
+			}
+			reads := 0
+			source := transfer.NewItem(
+				transfer.Lazy(transfer.FileList, func() ([]byte, error) {
+					reads++
+					cancel()
+					return []byte("/tmp/second.png"), nil
+				}),
+				transfer.Lazy(transfer.Text, func() ([]byte, error) {
+					t.Fatal("provider read after cancellation")
+					return nil, nil
+				}),
+			)
+			data := transfer.New(
+				transfer.NewItem(representation(transfer.FileList, "/tmp/first.png")),
+				source, source,
+			)
+			items, err := ParseContext(ctx, data)
+			wantReads := 1
+			if preCanceled {
+				wantReads = 0
+			}
+			if items != nil || !errors.Is(err, context.Canceled) || reads != wantReads {
+				t.Fatalf("items=%v err=%v reads=%d, want %d", items, err, reads, wantReads)
+			}
+		})
 	}
 }
 

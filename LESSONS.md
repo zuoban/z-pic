@@ -208,3 +208,10 @@
 - 修改：量化与无损优化复用同一元数据约束，遇到不可改写文件返回原始字节；先验证选项，避免快路径吞掉参数错误。
 - 防复发：多阶段流水线的保留策略必须覆盖第一个修改阶段，不能只保护最后阶段。
 - 验证与 review：`go test ./internal/pngtools ./internal/compress -count=1`；检查两类元数据的逐字节保留和正常 PNG 压缩。
+
+### 第 2 轮：取消应覆盖拖放解析
+
+- 确认问题：接收任务只在解析后检查取消，解析阶段仍读取后续懒加载 provider 并遍历列表。
+- 修改：增加 `ParseContext` 并接入实际导入任务；provider 前后、原生条目和列表/HTML 循环检查取消，取消后丢弃部分结果；保留 `Parse` 兼容入口。
+- 防复发：把 context 传到产生工作量的阶段；同步 provider 已经执行时仍需等它返回，不能声称可以强制中断任意回调。
+- 验证与 review：`go test ./internal/dropimport . -count=1`；覆盖预先取消、provider 中途取消、部分结果不发布以及后续 provider 不执行。
