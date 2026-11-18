@@ -40,6 +40,9 @@ func TestThemeTextContrast(t *testing.T) {
 				backgrounds := map[string]ui.Color{
 					"window": theme.Background, "panel": theme.Surface,
 					"stage": stageBackground(c), "subtle": subtleSurface(c),
+					"control": controlSurface(c), "field": fieldSurface(c),
+					"card": cardSurface(c), "hover": theme.SurfaceHover,
+					"pressed":   theme.SurfacePressed,
 					"selection": selectionBackground(c),
 					"keycap":    keycapSurface(c),
 				}
@@ -102,7 +105,7 @@ func TestThemePreservesAccessibilityPreferences(t *testing.T) {
 					if theme.FontSize != 16.25 {
 						t.Fatalf("text scale must apply once, got font size %v", theme.FontSize)
 					}
-					if theme.Accent != ui.Hex("#2563eb") {
+					if theme.Accent != ui.Hex(productAccentHex) {
 						t.Fatal("accessibility preferences must retain the product accent")
 					}
 					wantDark := mode == themeDark || mode == themeSystem && dark
@@ -170,8 +173,8 @@ func TestThemeSelectionIsAvailableOnlyInSettings(t *testing.T) {
 }
 
 func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
-	lightBg := color.RGBA{R: 0xf7, G: 0xf7, B: 0xf8, A: 0xff}
-	darkBg := color.RGBA{R: 0x14, G: 0x14, B: 0x16, A: 0xff}
+	lightBg := color.RGBA{R: 0xee, G: 0xf1, B: 0xf6, A: 0xff}
+	darkBg := color.RGBA{R: 0x12, G: 0x15, B: 0x1c, A: 0xff}
 
 	s := floatingTestApplication()
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
@@ -413,8 +416,8 @@ func TestResponsiveMobileViewportFitsControlsWithoutHorizontalOverflow(t *testin
 }
 
 func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
-	lightBg := color.RGBA{R: 0xf7, G: 0xf7, B: 0xf8, A: 0xff}
-	darkBg := color.RGBA{R: 0x14, G: 0x14, B: 0x16, A: 0xff}
+	lightBg := color.RGBA{R: 0xee, G: 0xf1, B: 0xf6, A: 0xff}
+	darkBg := color.RGBA{R: 0x12, G: 0x15, B: 0x1c, A: 0xff}
 
 	s := testSelectedApplication()
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}

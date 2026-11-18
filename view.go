@@ -41,14 +41,14 @@ func brandLockup(c *ui.Context, showSubtitle bool) {
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Grow(1).MinWidth(0).Children(func() {
 		ui.Box(c).Size(24, 24).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
 			frame := ui.Rect{X: r.X + 2, Y: r.Y + 2, W: 20, H: 20}
-			p.Fill(frame, glassSelectionBackground(c), 4)
-			p.Stroke(frame, selectionBorder(c), 4, 1)
+			p.Fill(frame, t.Accent, 5)
+			p.Stroke(frame, ui.RGBA(255, 255, 255, 0.22), 5, 1)
 			p.StrokePolyline([][2]float32{
-				{r.X + 6, r.Y + 10}, {r.X + 6, r.Y + 6}, {r.X + 10, r.Y + 6},
-			}, 1.5, accentForeground(t))
+				{r.X + 6.5, r.Y + 10}, {r.X + 6.5, r.Y + 6.5}, {r.X + 10, r.Y + 6.5},
+			}, 1.5, t.AccentText)
 			p.StrokePolyline([][2]float32{
-				{r.X + 14, r.Y + 18}, {r.X + 18, r.Y + 18}, {r.X + 18, r.Y + 14},
-			}, 1.5, accentForeground(t))
+				{r.X + 14, r.Y + 17.5}, {r.X + 17.5, r.Y + 17.5}, {r.X + 17.5, r.Y + 14},
+			}, 1.5, t.AccentText)
 		})
 		ui.Text(c, "Z Pic").FontSize(18).FontWeight(600).SingleLine()
 		if showSubtitle {
@@ -277,22 +277,26 @@ func (s *application) previewPanel(c *ui.Context) {
 			if s.preview == nil {
 				ui.Column(c).Fill().Center().Gap(20).Padding(24).Children(func() {
 					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
-						card := ui.Rect{X: bounds.X + 6, Y: bounds.Y + 8, W: 44, H: 40}
-						p.Fill(card, panelSurface(c), 8)
-						p.Stroke(card, glassBorder(c), 8, 1)
+						back := ui.Rect{X: bounds.X + 10, Y: bounds.Y + 5, W: 40, H: 36}
+						p.Fill(back, panelSubtleSurface(c), 8)
+						p.Stroke(back, glassBorder(c), 8, 1)
+						card := ui.Rect{X: bounds.X + 5, Y: bounds.Y + 10, W: 44, H: 40}
+						p.Shadow(card, 8, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.08))
+						p.Fill(card, glassCardSurface(c), 8)
+						p.Stroke(card, controlBorder(c), 8, 1)
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 12, bounds.Y + 20}, {bounds.X + 12, bounds.Y + 14}, {bounds.X + 18, bounds.Y + 14},
+							{bounds.X + 11, bounds.Y + 22}, {bounds.X + 11, bounds.Y + 16}, {bounds.X + 17, bounds.Y + 16},
 						}, 1.5, accentForeground(t))
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 38, bounds.Y + 42}, {bounds.X + 44, bounds.Y + 42}, {bounds.X + 44, bounds.Y + 36},
+							{bounds.X + 37, bounds.Y + 44}, {bounds.X + 43, bounds.Y + 44}, {bounds.X + 43, bounds.Y + 38},
 						}, 1.5, accentForeground(t))
-						p.Stroke(ui.Rect{X: bounds.X + 33, Y: bounds.Y + 17, W: 5, H: 5}, t.TextMuted, 2.5, 1.5)
+						p.Stroke(ui.Rect{X: bounds.X + 32, Y: bounds.Y + 19, W: 5, H: 5}, t.TextMuted, 2.5, 1.5)
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 14, bounds.Y + 38},
-							{bounds.X + 24, bounds.Y + 27},
-							{bounds.X + 31, bounds.Y + 34},
-							{bounds.X + 36, bounds.Y + 30},
-							{bounds.X + 42, bounds.Y + 38},
+							{bounds.X + 13, bounds.Y + 40},
+							{bounds.X + 23, bounds.Y + 29},
+							{bounds.X + 30, bounds.Y + 36},
+							{bounds.X + 35, bounds.Y + 32},
+							{bounds.X + 41, bounds.Y + 40},
 						}, 1.5, t.TextMuted)
 					})
 					ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -528,7 +532,7 @@ func (s *application) presetOverview(c *ui.Context) {
 				badge = "单张图片"
 			}
 			ui.Text(c, badge).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
-				Padding(2, 8).Shrink(0).Radius(pillRadius(20, c)).Background(panelStageBackground(c))
+				Padding(2, 8).Shrink(0).Radius(pillRadius(20, c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c))
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
@@ -699,7 +703,7 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 			}
 			ui.Box(c).FillWidth().Height(4).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
 				Draw(func(p *ui.Painter, r ui.Rect) {
-					p.Fill(r, glassControlPressed(c), 2)
+					p.Fill(r, meterTrackColor(c), 2)
 					fillW := max(4, r.W*float32(min(1, ratio)))
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
 				})

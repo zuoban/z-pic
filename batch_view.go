@@ -60,21 +60,30 @@ func (s *application) batchListPanel(c *ui.Context) {
 				fmt.Sprintf("已完成 %d", done), fmt.Sprintf("失败 %d", failed),
 			}
 			parts := ui.SegmentedBase(c.Key("batch-filter"), &s.batch.filter, len(labels))
+			trackRadius, segRadius := innerRadius(c), float32(6)
+			if usesGlass(c) {
+				trackRadius, segRadius = 16, 14
+			}
 			parts.Track.Label("队列筛选").FillWidth().Height(32).Padding(2).Gap(2).
-				AlignItems(ui.Stretch).Radius(8).Background(panelStageBackground(c)).Border(1, controlBorder(c)).
+				AlignItems(ui.Stretch).Radius(trackRadius).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
 				Tooltip("筛选按整个队列计数；搜索在所选状态内查找").
 				Children(func() {
 					for index, label := range labels {
-						segment := parts.Segment(index).Label(label).Width(0).Grow(1).MinWidth(0).Padding(0, 4).Radius(6)
-						if s.batch.filter == index {
+						active := s.batch.filter == index
+						segment := parts.Segment(index).Label(label).Width(0).Grow(1).MinWidth(0).Padding(0, 4).Radius(segRadius)
+						textColor, weight := t.TextMuted, 400
+						if active {
+							textColor, weight = t.Text, 500
 							segment.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 						} else if segment.Pressed() {
+							textColor = t.Text
 							segment.Background(glassControlPressed(c))
 						} else if segment.Hovered() {
+							textColor = t.Text
 							segment.Background(glassControlHover(c))
 						}
 						segment.Children(func() {
-							ui.Text(c, label).FontSize(12).FontFeatures("tnum").TextColor(t.Text).SingleLine()
+							ui.Text(c, label).FontSize(12).FontWeight(weight).FontFeatures("tnum").TextColor(textColor).SingleLine()
 						})
 					}
 				})
@@ -107,7 +116,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 				bannerText = fmt.Sprintf("%d 张无效图片无法处理", invalidCount)
 			}
 			bannerRow := ui.Row(c).MinHeight(36).Padding(4, 12).Gap(8).Radius(innerRadius(c)).
-				Background(panelSurface(c).Mix(t.Danger, 0.08)).Border(1, t.Danger.Alpha(0.24)).AlignItems(ui.Center)
+				Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger)).AlignItems(ui.Center)
 			if compactQueue {
 				bannerRow.Column().Padding(8, 12).AlignItems(ui.Stretch)
 			}
@@ -249,7 +258,7 @@ func (s *application) batchSortControl(c *ui.Context) bool {
 	}, ui.PopoverMenuButtonOptions{
 		At:   ui.AnchorBottomEnd,
 		Self: ui.AnchorTopEnd,
-	}).Label("队列排序").Height(32).Radius(pillRadius(32, c)).Background(glassControlSurface(c)).Border(1, glassBorder(c)).
+	}).Label("队列排序").Height(32).Radius(pillRadius(32, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).
 		Tooltip("排序方式：" + current.menuLabel)
 	return changed
 }
@@ -279,7 +288,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 	item := s.batch.items[itemIndex]
 	statusText, statusColor := batchItemStatus(item, t)
 	detailText, detailColor := batchItemDetail(item, t)
-	background, border := glassControlSurface(c), glassBorder(c)
+	background, border := glassCardSurface(c), glassBorder(c)
 	if r.Selected() {
 		background, border = glassSelectionBackground(c), selectionBorder(c)
 	} else if r.Hovered() {
@@ -297,9 +306,11 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 					badge := ui.Text(c, statusText).FontSize(12).FontWeight(500).
 						FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
 					if item.status == batchDone && !item.unchanged {
-						badge.Padding(2, 8).Radius(pillRadius(20, c)).Background(panelSurface(c).Mix(t.Success, 0.14))
+						badge.Padding(2, 8).Radius(pillRadius(20, c)).
+							Background(statusTintSurface(c, t.Success)).Border(1, statusTintBorder(c, t.Success))
 					} else if item.status == batchFailed {
-						badge.Padding(2, 8).Radius(pillRadius(20, c)).Background(panelSurface(c).Mix(t.Danger, 0.14))
+						badge.Padding(2, 8).Radius(pillRadius(20, c)).
+							Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger))
 					}
 				})
 				meta := strings.ToUpper(item.format)

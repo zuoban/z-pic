@@ -158,8 +158,8 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 	ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).
 		Role(ui.RoleToolbar).Label("图片缩放").Children(func() {
 		ui.Row(c).Height(32).Gap(0).Radius(innerRadius(c)).
-			Background(keycapSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
-			for _, action := range []struct {
+			Background(glassControlSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
+			for index, action := range []struct {
 				key, label string
 				keyCode    ui.Key
 				hintKey    string
@@ -168,10 +168,13 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 				{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
 				{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
 			} {
+				if index > 0 {
+					ui.Box(c).Size(1, 16).Background(glassDivider(c))
+				}
 				disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
 				strokeColor := t.Text
 				if disabled {
-					strokeColor = t.TextMuted.Alpha(0.5)
+					strokeColor = t.TextMuted.Alpha(0.45)
 				}
 				button := quietButton(c, action.key, "", 32, disabled).
 					Background(ui.Transparent).Border(0, ui.Transparent).Label(action.label).
@@ -187,6 +190,7 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 					s.zoomPreviewBy(action.factor)
 				})
 			}
+			ui.Box(c).Size(1, 16).Background(glassDivider(c))
 			ui.Textf(c, "%.0f%%", scale*100).Width(56).FontSize(12).
 				FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted).SingleLine()
 		})
@@ -384,13 +388,16 @@ func (s *application) previewCanvas(c *ui.Context) {
 		canvas.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			centerX := bounds.X + bounds.W*float32(s.comparison.split/100)
 			centerY := bounds.Y + bounds.H/2
-			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 3, ui.RGBA(0, 0, 0, 0.22))
+			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 3, ui.RGBA(0, 0, 0, 0.26))
 			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, ui.Hex("#ffffff"))
 			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
 			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
+			p.Shadow(handle, 16, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.22))
 			glass.Paint(p, handle, 16, glass.Glass{})
 			if c.Preferences().ReduceTransparency {
-				p.Stroke(handle, t.Text.Alpha(0.24), 16, 1)
+				p.Stroke(handle, t.Text.Alpha(0.28), 16, 1)
+			} else {
+				p.Stroke(handle, ui.RGBA(255, 255, 255, 0.65), 16, 1)
 			}
 			p.StrokePolyline([][2]float32{
 				{handleX - 4, centerY - 4}, {handleX - 8, centerY}, {handleX - 4, centerY + 4},

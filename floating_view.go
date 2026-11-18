@@ -222,7 +222,7 @@ func (s *application) floatingView(c *ui.Context) {
 	if over {
 		root.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			p.Stroke(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 2, W: bounds.W - 4, H: bounds.H - 4},
-				theme.Accent, 8, 1.5)
+				accentForeground(theme), 14, 1.5)
 		})
 	}
 	root.Children(func() {
@@ -260,11 +260,13 @@ func (s *application) floatingView(c *ui.Context) {
 			label = "松开加入队列"
 		}
 		ui.Row(c).FillWidth().Center().Children(func() {
-			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 8).Gap(4).
-				Radius(pillRadius(28, c)).Background(glassControlSurface(c)).Border(1, glassBorder(c)).Label(label).
+			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 10).Gap(4).
+				Radius(pillRadius(28, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).
 				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
 				OnClick(func() { s.setFloatingExpanded(true) })
-			if countBtn.Hovered() {
+			if over {
+				countBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+			} else if countBtn.Hovered() {
 				countBtn.Background(glassControlHover(c))
 			}
 			countBtn.Children(func() {
@@ -362,7 +364,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(4).Padding(2).Radius(8).Background(panelStageBackground(c)).Border(1, glassBorder(c)).Children(func() {
+		ui.Row(c).Gap(4).Padding(2).Radius(8).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -465,7 +467,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	item := s.floatingImage(indices[position])
 	bitmap := s.floatingBitmap(item)
 	selected := s.floating.cursor == position
-	background, border := glassControlSurface(c), glassBorder(c)
+	background, border := glassCardSurface(c), glassBorder(c)
 	foreground, secondary := theme.Text, metadataColor(c)
 	if selected {
 		background, border = glassSelectionBackground(c), selectionBorder(c)
@@ -592,16 +594,19 @@ func floatingIconButton(c *ui.Context, key, label, icon string, action func()) u
 		radius = 14
 	}
 	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(radius).
-		Background(glassControlSurface(c)).Border(1, glassBorder(c)).Label(label).Tooltip(label)
+		Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).Tooltip(label)
+	iconColor := theme.TextMuted
 	if button.Pressed() {
+		iconColor = theme.Text
 		button.Background(glassControlPressed(c))
 	} else if button.Hovered() {
+		iconColor = theme.Text
 		button.Background(glassControlHover(c))
 	}
 	if action != nil {
 		button.OnClick(action)
 	}
-	button.Children(func() { floatingIcon(c, icon, 16, theme.TextMuted) })
+	button.Children(func() { floatingIcon(c, icon, 16, iconColor) })
 	return button
 }
 

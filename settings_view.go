@@ -64,8 +64,8 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 			At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
 			Panel: func(panel ui.Element) {
 				panel.MinWidth(max(180, picker.Bounds().W)).MaxWidth(360).
-					Radius(12).Background(t.Surface).
-					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.14))
+					Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
+					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
 			},
 		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip("保存后使用："+presetDisplayName(preset)).
 			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).
@@ -218,7 +218,7 @@ func (s *application) settingsFooter(c *ui.Context) {
 	padding := settingsPagePadding(c)
 	ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 	if editor.confirmDelete {
-		ui.Row(c).Padding(12, padding).Gap(8).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Padding(12, padding).Gap(8).Background(statusTintSurface(c, t.Danger)).AlignItems(ui.Center).Children(func() {
 			name := presetDisplayName(*editor.selectedPreset())
 			short := []rune(name)
 			if len(short) > 16 {
@@ -233,8 +233,8 @@ func (s *application) settingsFooter(c *ui.Context) {
 					editor.focusField = "delete-preset"
 				})
 			s.focusSettingsFieldDuringDelete(keep)
-			settingsButton(c, "confirm-delete", "确认删除", 32, false).TextColor(t.Danger).
-				OnClick(s.deletePreset)
+			destructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 32), false).
+				FontSize(settingsFontSize(c, 13)).OnClick(s.deletePreset)
 		})
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 	}
