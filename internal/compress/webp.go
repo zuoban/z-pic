@@ -89,7 +89,7 @@ func decodeWebPOutput(ctx context.Context, data []byte, input image.Config) (ima
 	if err := ValidateWebP(ctx, data); err != nil {
 		return nil, err
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 WebP 头部：%w", err)
 	}

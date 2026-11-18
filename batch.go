@@ -575,8 +575,8 @@ func canonicalBatchKeyWithParents(path string, resolvedParents map[string]batchP
 
 func sanitizeRelPath(rel, fallback string) string {
 	cleaned := filepath.Clean(rel)
-	if cleaned == "." || cleaned == "" || filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
-		return fallback
+	if cleaned == "." || !filepath.IsLocal(cleaned) {
+		return filepath.Base(fallback)
 	}
 	return cleaned
 }
@@ -1380,8 +1380,11 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 	safeRel := sanitizeRelPath(relPath, filepath.Base(sourcePath))
 	candidate := filepath.Join(rootAbs, safeRel)
 	relCheck, err := filepath.Rel(rootAbs, candidate)
-	if err != nil || relCheck == "." || strings.HasPrefix(relCheck, "..") {
+	if err != nil || relCheck == "." || !filepath.IsLocal(relCheck) {
 		return "", errors.New("输出路径超出目标文件夹范围")
+	}
+	if err := validateOutputDirectory(ctx, rootAbs, filepath.Dir(candidate)); err != nil {
+		return "", err
 	}
 	sourceCanon := canonicalBatchKey(sourceAbs)
 	canUse := func(path string) (bool, error) {

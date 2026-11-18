@@ -56,7 +56,7 @@
 
 设置保存在系统用户配置目录的 `z-pic/settings.json`。macOS 默认为 `~/Library/Application Support/z-pic/settings.json`。外观主题统一在「设置 → 通用」中选择，可即时预览「跟随系统 / 浅色 / 深色」，保存后记住选择；外观主题、预设名称、质量参数、保存选项及当前选择均随配置保留，旧版配置直接兼容。旧版收藏标记读取时忽略，下次保存时移除。首次启动无配置时使用默认预设与跟随系统主题；配置损坏时显示错误并暂用默认预设，不自动覆盖原文件；写入失败时保留旧文件和编辑内容。
 
-输入限制为 64 MiB、3200 万像素。压缩不缩放图片，JPEG 会按 EXIF 方向规范化像素。结果未变小时保留原始数据并禁用覆盖。“另存副本”始终拒绝覆盖源文件或任何已有文件。JPEG 重新编码及 PNG 有损压缩可能改变或移除元数据。
+输入限制为 64 MiB、3200 万像素。压缩不缩放图片，JPEG 会按 EXIF 方向规范化像素。结果未变小时保留原始数据并禁用覆盖。“另存副本”始终拒绝覆盖源文件或任何已有文件。JPEG 重新编码及 PNG 有损压缩可能改变或移除元数据。JPEG/WebP 转为剪贴板 PNG 时，生成的数据同样限制为 64 MiB；超过限制会显示错误，保留现有剪贴板内容。
 
 “覆盖原图”需要单独确认，确认框默认选中“取消”；覆盖后无法通过本工具恢复原文件，不会自动生成备份。保存前会核对源文件与压缩输入是否一致，拒绝覆盖已被外部修改、已删除或指向符号链接的源文件；此时可以重新选图，或另存当前结果。覆盖成功后会更新图片内容快照，保留本次大小对比及另存功能，并禁用同一结果的重复覆盖。
 
@@ -135,11 +135,17 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 批量输出规划记录已预留名称的后继编号，重复名称跳过连续预留的编号，避免从头逐个检查。记录只在单次规划内使用；磁盘已有文件、目录、符号链接与源文件路径的冲突仍重新检查，失败任务不占用名称，输出命名保持任务顺序。实际保存通过独占创建拒绝覆盖已有文件。
 
+输出相对路径按实际路径分量判断是否越界，保留 `..photo.jpg` 和 `.../photo.jpg` 等合法名称。规划阶段解析已有子目录的符号链接，拒绝指向所选目录之外的路径及悬空链接；启用预设子文件夹时也检查这一边界。所选根目录本身可以是别名，目录内的别名也可使用；缺失的普通子目录仍在保存时创建。该检查不锁定目录，无法消除规划结束后其他进程更换目录的并发窗口。
+
 拖放或粘贴的一次导入共用 `dropimport.Resolver`，按顺序处理图片，记录本次成功保存的名称与后继编号，减少同名图片重复尝试硬链接的开销。记录仅在本次导入内使用；其他文件、目录和符号链接仍重新检查，外部占用释放后可再次使用。失败、取消与本地文件路径不预留下载名称，图片仍完整解码校验，实际落盘仍通过硬链接或独占创建拒绝覆盖。下一次导入会重新建立记录，HTTP 连接继续由调用方传入的 transport 复用和管理。
 
 拖放文本解析按需逐行遍历，省去整体 CRLF 替换与临时行切片；文本表示只转换一次，HTML 直接从字节读取，未提供 HTML 时省去分词器与基准地址查找。只有 `file:` 开头的行进入文件 URL 解析，其余行直接按本地路径检查；大小写、转义、空白与注释规则、表示优先级、provider 读取顺序和资源限制保持原有行为。
 
 压缩、缩略图和单图预览共用 `internal/imageinput` 读取文件内容，按已打开文件的大小预分配缓冲区，减少逐步扩容带来的分配和复制。读取期间文件增长或截短时以实际读取内容为准，增长后仍按实际字节数执行 64 MiB 上限，并检查取消。
+
+文件增长时，读取器只扩展同一份内容缓冲，先探测 EOF 再扩容，避免额外保留完整尾部副本，扩容大小最多为 64 MiB 加一个超限探测字节。无需缩小的缩略图直接采样一次，保持预乘 Alpha、16 位转 8 位的舍入、方向和独立存储。未减小结果的覆盖快照复用输入哈希，仍记录输入和输出的各自长度；较小输出仍独立计算哈希。
+
+压缩与剪贴板转换的图片头读取、JPEG 像素解码会逐次检查取消；剪贴板 PNG 编码在每次输出写入时检查取消和大小上限，失败数据不会写入系统剪贴板。下载使用有界空闲连接池和连接、TLS、响应头超时，继续复用连接；响应前缀不属于 JPEG/PNG/WebP 时，直接中止接收并避免创建临时文件，合法图片仍经过完整容器与像素校验，不信任服务器声明的 MIME 类型。
 
 PNG 工具输出先与输入逐段比较，相同前缀复用原数据，首次不同后才分配候选缓冲；输出达到输入长度时释放候选缓冲，继续排空并统计后续输出。64 MiB 上限按实际接收字节数检查，工具失败、超时、取消和超限仍按原有规则处理。
 
@@ -164,6 +170,7 @@ go test ./internal/pngtools -run '^$' -bench 'BenchmarkPNGOutputBuffer|Benchmark
 go test ./internal/webptools -run '^$' -bench 'BenchmarkWebPOutputBuffer|BenchmarkCommandLargerOutput24MiB' -benchmem -benchtime=10x -count=3
 go test ./internal/dropimport -run '^$' -bench '^BenchmarkResolve1000Images$' -benchmem -benchtime=1x -count=3
 go test ./internal/dropimport -run '^$' -bench '^BenchmarkParse2000Images$' -benchmem -benchtime=500x -count=3
+go test ./internal/imageinput ./internal/compress -run '^$' -bench 'BenchmarkReadSizedGrowing6MiB|BenchmarkThumbnailUnscaled|BenchmarkUnchangedSnapshot6MiB|BenchmarkThumbnailScaledControl' -benchmem -benchtime=30x -count=3
 ```
 
 `BenchmarkReadInputJPEG12MP` 单独测量文件读取，`BenchmarkThumbnailFileJPEG12MP` 覆盖完整文件读取、JPEG 解码和缩略图生成；当前解码器仍会解码全尺寸图片。Go benchmark 的内存分配统计不包含原生子进程或 GPU 资源，不能作为应用峰值内存。

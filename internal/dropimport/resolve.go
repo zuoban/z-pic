@@ -1,11 +1,13 @@
 package dropimport
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,7 +28,17 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 }
 
 func NewTransport() *http.Transport {
-	return &http.Transport{Proxy: http.ProxyFromEnvironment, DisableCompression: true}
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DisableCompression:    true,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   2,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	}
 }
 
 func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTransport *http.Transport) (path string, downloaded bool, err error) {
@@ -106,6 +118,19 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	if dir == "" {
 		return "", false, fmt.Errorf("图片保存目录不能为空")
 	}
+	// Reject login/error pages before downloading the whole response or
+	// creating a temporary file. The complete validation below remains required.
+	buffered := bufio.NewReaderSize(cancelReader{ctx, reader}, 512)
+	header, err := buffered.Peek(12)
+	if err != nil && err != io.EOF {
+		return "", false, err
+	}
+	if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
+		!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
+		!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
+		return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+	}
+	reader = buffered
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", false, fmt.Errorf("无法创建图片目录：%w", err)
 	}

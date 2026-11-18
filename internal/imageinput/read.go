@@ -55,22 +55,35 @@ func readSized(ctx context.Context, source io.Reader, size int64) ([]byte, error
 	reader := io.LimitReader(contextReader{ctx: ctx, reader: source}, MaxSize+1)
 	data := make([]byte, int(size)+1)
 	count, err := io.ReadFull(reader, data)
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return nil, err
-	}
 	data = data[:count]
-	if len(data) > MaxSize {
-		return nil, errTooLarge
-	}
-	if err == nil {
-		extra, err := io.ReadAll(reader)
+	var probe [1]byte
+	for {
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return nil, err
+		}
+		if len(data) > MaxSize {
+			return nil, errTooLarge
+		}
+		if err != nil {
+			break
+		}
+		// Probe EOF before growing, especially when the buffer is already at
+		// the limit. Accumulate growth in one slice, capped at MaxSize+1.
+		_, err = io.ReadFull(reader, probe[:])
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
-		if len(extra) > MaxSize-len(data) {
+		if len(data) == MaxSize {
 			return nil, errTooLarge
 		}
-		data = append(data, extra...)
+		grown := make([]byte, min(MaxSize+1, max(32<<10, 2*len(data))))
+		copy(grown, data)
+		grown[len(data)] = probe[0]
+		count, err = io.ReadFull(reader, grown[len(data)+1:])
+		data = grown[:len(data)+1+count]
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

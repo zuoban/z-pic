@@ -20,8 +20,13 @@ type overwriteSnapshot struct {
 }
 
 func captureOverwriteSnapshot(input, output []byte) *overwriteSnapshot {
+	inputHash := sha256.Sum256(input)
+	outputHash := inputHash
+	if !sameBytesBacking(input, output) {
+		outputHash = sha256.Sum256(output)
+	}
 	return &overwriteSnapshot{
-		inputHash: sha256.Sum256(input), outputHash: sha256.Sum256(output),
+		inputHash: inputHash, outputHash: outputHash,
 		inputSize: int64(len(input)), outputSize: int64(len(output)),
 	}
 }

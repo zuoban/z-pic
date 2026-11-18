@@ -82,6 +82,12 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 		height = max(1, int(int64(height)*int64(maxEdge)/int64(longest)))
 	}
 	output := image.NewRGBA(image.Rect(0, 0, width, height))
+	if width == bounds.Dx() && height == bounds.Dy() {
+		if err := copyThumbnailRaster(ctx, output, source); err != nil {
+			return nil, err
+		}
+		return output, nil
+	}
 	scaleX := float64(bounds.Dx()) / float64(width)
 	scaleY := float64(bounds.Dy()) / float64(height)
 	samplesX := make([]thumbnailSampleX, width)
@@ -148,6 +154,36 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 		return nil, err
 	}
 	return output, nil
+}
+
+// An unscaled thumbnail only needs one sample per pixel. Keep the same
+// premultiplied, nearest-8-bit rounding as the bilinear path, including for
+// 16-bit sources, and never retain the decoder's backing pixel buffer.
+func copyThumbnailRaster(ctx context.Context, output *image.RGBA, source image.Image) error {
+	bounds := source.Bounds()
+	rgba64Source, hasRGBA64 := source.(image.RGBA64Image)
+	for row := 0; row < bounds.Dy(); row++ {
+		for column := 0; column < bounds.Dx(); column++ {
+			if column%256 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			var red, green, blue, alpha uint32
+			if hasRGBA64 {
+				pixel := rgba64Source.RGBA64At(bounds.Min.X+column, bounds.Min.Y+row)
+				red, green, blue, alpha = uint32(pixel.R), uint32(pixel.G), uint32(pixel.B), uint32(pixel.A)
+			} else {
+				red, green, blue, alpha = source.At(bounds.Min.X+column, bounds.Min.Y+row).RGBA()
+			}
+			offset := row*output.Stride + column*4
+			output.Pix[offset] = uint8((red + 128) / 257)
+			output.Pix[offset+1] = uint8((green + 128) / 257)
+			output.Pix[offset+2] = uint8((blue + 128) / 257)
+			output.Pix[offset+3] = uint8((alpha + 128) / 257)
+		}
+	}
+	return ctx.Err()
 }
 
 func thumbnailChannel(topLeft, topRight, bottomLeft, bottomRight uint32, fractionX, fractionY float64) uint8 {

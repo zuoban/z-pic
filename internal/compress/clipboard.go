@@ -3,6 +3,7 @@ package compress
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -15,7 +16,7 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	if err != nil {
 		return nil, fmt.Errorf("无法读取图片：%w", err)
 	}
@@ -48,7 +49,14 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if format == "jpeg" {
 		decoded = normalizeOrientation(decoded, jpegOrientation(data))
 	}
-	var output bytes.Buffer
+	return encodeClipboardPNG(ctx, decoded, maxInputSize)
+}
+
+func encodeClipboardPNG(ctx context.Context, decoded image.Image, limit int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	output := clipboardPNGWriter{ctx: ctx, limit: limit}
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
 	if err := encoder.Encode(&output, decoded); err != nil {
 		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
@@ -56,5 +64,27 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return output.Bytes(), nil
+	return output.buffer.Bytes(), nil
+}
+
+var errClipboardLimit = errors.New("剪贴板 PNG 图片超过 64 MiB 限制")
+
+// Check each encoder write so cancellation and expansion limits apply during
+// encoding, including when a small JPEG expands into a much larger PNG.
+type clipboardPNGWriter struct {
+	ctx    context.Context
+	limit  int
+	buffer bytes.Buffer
+}
+
+func (w *clipboardPNGWriter) Write(data []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		w.buffer = bytes.Buffer{}
+		return 0, err
+	}
+	if len(data) > w.limit-w.buffer.Len() {
+		w.buffer = bytes.Buffer{}
+		return 0, errClipboardLimit
+	}
+	return w.buffer.Write(data)
 }

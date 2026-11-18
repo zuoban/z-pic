@@ -58,8 +58,9 @@ type Result struct {
 
 // File reads and compresses an image. Quality must be in [1, 100], including
 // for PNG inputs. PNG's zero value uses the balanced quantization defaults.
-// JPEG encoding cannot be interrupted; cancellation is checked before and after
-// encoding. Native PNG processes are canceled with ctx.
+// Decoding checks cancellation while reading. JPEG encoding cannot be
+// interrupted; cancellation is checked before and after encoding.
+// Native PNG/WebP processes are canceled with ctx.
 func File(ctx context.Context, path string, options Options) (*Result, error) {
 	sourcePath, err := validateRequest(ctx, path, options)
 	if err != nil {
@@ -114,7 +115,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片文件超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	if err != nil {
 		return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP：%w", err)
 	}
@@ -142,7 +143,10 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	width, height := config.Width, config.Height
 	var encoded []byte
 	if format == "jpeg" {
-		img, _, err := image.Decode(bytes.NewReader(data))
+		img, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 		}
@@ -259,7 +263,7 @@ func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (imag
 	if len(data) == 0 || len(data) > maxInputSize {
 		return nil, fmt.Errorf("输出为空或超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PNG 头部：%w", err)
 	}

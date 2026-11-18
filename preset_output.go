@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -126,7 +127,15 @@ func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner
 		if name == "" {
 			name = defaultSubfolderName
 		}
-		root = filepath.Join(root, name)
+		subfolder := filepath.Join(root, name)
+		ctx := planner.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := validateOutputDirectory(ctx, root, subfolder); err != nil {
+			return "", err
+		}
+		root = subfolder
 	}
 	rel = sanitizeRelPath(rel, filepath.Base(source))
 	if o.UseSuffix {
