@@ -129,7 +129,7 @@ func runCommandWithFallback(ctx context.Context, path string, args []string, dat
 }
 
 type limitedOutput struct {
-	buf       bytes.Buffer
+	buf       toolio.BoundedBuffer
 	fallback  []byte
 	size      int
 	limit     int
@@ -142,11 +142,15 @@ func (w *limitedOutput) Write(data []byte) (int, error) {
 	size := min(len(data), w.limit-w.size)
 	w.size += size
 	if !w.discarded && w.fallback != nil && w.size >= len(w.fallback) {
-		w.buf = bytes.Buffer{}
+		w.buf.Reset()
 		w.discarded = true
 	}
-	if !w.discarded {
-		_, _ = w.buf.Write(data[:size])
+	if !w.discarded && size > 0 {
+		maxCap := w.limit
+		if w.fallback != nil {
+			maxCap = min(maxCap, len(w.fallback)-1)
+		}
+		w.buf.AppendBounded(nil, data[:size], maxCap)
 	}
 	if size < len(data) {
 		w.overflow = true

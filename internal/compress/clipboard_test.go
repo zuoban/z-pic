@@ -94,3 +94,76 @@ func TestClipboardPNGRejectsAnimatedContainers(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches16BitModelAndHonorsCancel(t *testing.T) {
+	for _, ratio := range []image.YCbCrSubsampleRatio{
+		image.YCbCrSubsampleRatio420,
+		image.YCbCrSubsampleRatio422,
+		image.YCbCrSubsampleRatio444,
+	} {
+		for _, bounds := range []image.Rectangle{
+			image.Rect(0, 0, 17, 13),
+			image.Rect(3, 5, 20, 18),
+		} {
+			ycbcr := image.NewYCbCr(bounds, ratio)
+			for i := range ycbcr.Y {
+				ycbcr.Y[i] = uint8(i*37 + 19)
+			}
+			for i := range ycbcr.Cb {
+				ycbcr.Cb[i] = uint8(i*53 + 80)
+				ycbcr.Cr[i] = uint8(i*29 + 110)
+			}
+			encoded, err := encodeClipboardPNG(context.Background(), ycbcr, maxInputSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := png.Decode(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for y := 0; y < bounds.Dy(); y++ {
+				for x := 0; x < bounds.Dx(); x++ {
+					wantC := color.NRGBA64Model.Convert(ycbcr.At(bounds.Min.X+x, bounds.Min.Y+y))
+					gotC := color.NRGBA64Model.Convert(got.At(x, y))
+					if wantC != gotC {
+						t.Fatalf("YCbCr (%v, %v) mismatch at (%d,%d): got %v, want %v", ratio, bounds, x, y, gotC, wantC)
+					}
+				}
+			}
+		}
+	}
+
+	ny := image.NewNYCbCrA(image.Rect(2, 3, 11, 9), image.YCbCrSubsampleRatio420)
+	for i := range ny.Y {
+		ny.Y[i] = uint8(i*41 + 30)
+		ny.A[i] = []uint8{0, 1, 73, 180, 255}[i%5]
+	}
+	for i := range ny.Cb {
+		ny.Cb[i] = uint8(i*23 + 90)
+		ny.Cr[i] = uint8(i*61 + 40)
+	}
+	encodedNY, err := encodeClipboardPNG(context.Background(), ny, maxInputSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNY, err := png.Decode(bytes.NewReader(encodedNY))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for y := 0; y < ny.Bounds().Dy(); y++ {
+		for x := 0; x < ny.Bounds().Dx(); x++ {
+			want := color.NRGBA64Model.Convert(ny.At(ny.Bounds().Min.X+x, ny.Bounds().Min.Y+y))
+			got := color.NRGBA64Model.Convert(gotNY.At(x, y))
+			if want != got {
+				t.Fatalf("NYCbCrA mismatch at (%d,%d): got %v, want %v", x, y, got, want)
+			}
+		}
+	}
+
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cCtx := &cancelAtCheckpoint{Context: base, cancel: cancel, limit: 4}
+	if _, err := encodeClipboardPNG(cCtx, image.NewYCbCr(image.Rect(0, 0, 16, 16), image.YCbCrSubsampleRatio420), maxInputSize); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected row cancellation, got %v", err)
+	}
+}

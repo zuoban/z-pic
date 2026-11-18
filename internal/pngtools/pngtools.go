@@ -214,7 +214,7 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 
 type limitedOutput struct {
 	input    []byte
-	buf      bytes.Buffer
+	buf      toolio.BoundedBuffer
 	size     int
 	limit    int
 	overflow bool
@@ -226,13 +226,13 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 	start := w.size
 	w.size += n
 	if w.size >= len(w.input) {
-		w.buf = bytes.Buffer{}
+		w.buf.Reset()
 	} else if w.buf.Len() != 0 || !bytes.Equal(p[:n], w.input[start:w.size]) {
+		var prefix []byte
 		if w.buf.Len() == 0 {
-			w.buf.Grow(w.size)
-			_, _ = w.buf.Write(w.input[:start])
+			prefix = w.input[:start]
 		}
-		_, _ = w.buf.Write(p[:n])
+		w.buf.AppendBounded(prefix, p[:n], min(w.limit, len(w.input)-1))
 	}
 	if n < len(p) || w.size == w.limit {
 		w.overflow = true

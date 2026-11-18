@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -80,15 +81,61 @@ func ResolveWithTransport(ctx context.Context, item Item, dir string, sharedTran
 	return NewResolver(dir, sharedTransport).Resolve(ctx, item)
 }
 
+var (
+	resolveCopyBufPool = sync.Pool{
+		New: func() any {
+			return new([32 << 10]byte)
+		},
+	}
+	resolvePeekPool = sync.Pool{
+		New: func() any {
+			return bufio.NewReaderSize(nil, 512)
+		},
+	}
+)
+
 type Resolver struct {
 	dir       string
 	transport *http.Transport
+	client    *http.Client
 	saved     map[string]bool
 	sequences map[string]filenameSequence
 }
 
 func NewResolver(dir string, sharedTransport *http.Transport) *Resolver {
 	return &Resolver{dir: dir, transport: sharedTransport}
+}
+
+func checkImageRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("图片下载重定向次数过多")
+	}
+	target, err := httpURL(req.URL.String())
+	if err != nil {
+		return err
+	}
+	if len(via) > 0 && !isLocalOrPrivateHost(via[0].URL.Hostname()) && isLocalOrPrivateHost(target.Hostname()) {
+		return fmt.Errorf("拒绝从公网地址重定向到本地或内网地址")
+	}
+	return nil
+}
+
+func (resolver *Resolver) httpClient(transport *http.Transport) *http.Client {
+	if resolver.transport != nil && resolver.transport == transport {
+		if resolver.client == nil {
+			resolver.client = &http.Client{
+				Transport:     transport,
+				Timeout:       30 * time.Second,
+				CheckRedirect: checkImageRedirect,
+			}
+		}
+		return resolver.client
+	}
+	return &http.Client{
+		Transport:     transport,
+		Timeout:       30 * time.Second,
+		CheckRedirect: checkImageRedirect,
+	}
 }
 
 type filenameSequence = nameseq.Sequence
@@ -106,6 +153,13 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	}
 	var reader io.Reader
 	var prevalidatedFormat string
+	var pooledReader *bufio.Reader
+	defer func() {
+		if pooledReader != nil {
+			pooledReader.Reset(nil)
+			resolvePeekPool.Put(pooledReader)
+		}
+	}()
 	name := "image"
 	if item.URL != "" {
 		parsed, err := httpURL(item.URL)
@@ -118,27 +172,15 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			transport = NewTransport()
 			defer transport.CloseIdleConnections()
 		}
-		client := &http.Client{
-			Transport: transport,
-			Timeout:   30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("图片下载重定向次数过多")
-				}
-				target, err := httpURL(req.URL.String())
-				if err != nil {
-					return err
-				}
-				if len(via) > 0 && !isLocalOrPrivateHost(via[0].URL.Hostname()) && isLocalOrPrivateHost(target.Hostname()) {
-					return fmt.Errorf("拒绝从公网地址重定向到本地或内网地址")
-				}
-				return nil
-			},
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-		if err != nil {
-			return "", false, err
-		}
+		client := resolver.httpClient(transport)
+		request := (&http.Request{
+			Method:     http.MethodGet,
+			URL:        parsed,
+			Proto:      "HTTP/1.1",
+			ProtoMajor: 1,
+			ProtoMinor: 1,
+			Host:       parsed.Host,
+		}).WithContext(ctx)
 		response, err := client.Do(request)
 		if err != nil {
 			return "", false, fmt.Errorf("图片下载失败：%w", err)
@@ -152,7 +194,9 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		}
 		// Reject login/error pages before downloading the whole response or
 		// creating a temporary file. The complete validation below remains required.
-		buffered := bufio.NewReaderSize(contextio.NewReader(ctx, response.Body), 512)
+		buffered := resolvePeekPool.Get().(*bufio.Reader)
+		buffered.Reset(contextio.NewReader(ctx, response.Body))
+		pooledReader = buffered
 		header, err := buffered.Peek(12)
 		if err != nil && err != io.EOF {
 			return "", false, err
@@ -176,7 +220,6 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
 			return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
 		}
-		reader = bytes.NewReader(item.Data)
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", false, fmt.Errorf("无法创建图片目录：%w", err)
@@ -199,7 +242,15 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		}
 		_ = os.Remove(tempName)
 	}()
-	size, err := io.Copy(temp, io.LimitReader(contextio.NewReader(ctx, reader), maxImage+1))
+	var size int64
+	if reader == nil {
+		written, writeErr := temp.Write(item.Data)
+		size, err = int64(written), writeErr
+	} else {
+		copyBuf := resolveCopyBufPool.Get().(*[32 << 10]byte)
+		size, err = io.CopyBuffer(struct{ io.Writer }{temp}, io.LimitReader(contextio.NewReader(ctx, reader), maxImage+1), copyBuf[:])
+		resolveCopyBufPool.Put(copyBuf)
+	}
 	if err != nil {
 		return "", false, err
 	}
@@ -208,7 +259,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	}
 	format := prevalidatedFormat
 	if format == "" {
-		info, err := compress.Inspect(ctx, tempName)
+		info, err := compress.InspectReader(ctx, temp, size)
 		if err != nil {
 			return "", false, err
 		}

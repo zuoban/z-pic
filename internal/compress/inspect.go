@@ -39,6 +39,36 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 	return info, nil
 }
 
+// InspectReader validates static JPEG/PNG/WebP headers on an already-open
+// seekable stream of known byte length without reopening the path.
+func InspectReader(ctx context.Context, r io.ReadSeeker, size int64) (ImageInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return ImageInfo{}, fmt.Errorf("读取图片已取消：%w", err)
+	}
+	if size < 0 || size > maxInputSize {
+		return ImageInfo{}, fmt.Errorf("图片超过 64 MiB 限制")
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return ImageInfo{}, fmt.Errorf("无法读取图片头部：%w", err)
+	}
+	format, width, height, err := inspectStream(ctx, r, size)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ImageInfo{}, fmt.Errorf("读取图片已取消：%w", ctxErr)
+		}
+		return ImageInfo{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ImageInfo{}, fmt.Errorf("读取图片已取消：%w", err)
+	}
+	return ImageInfo{
+		Format: format,
+		Width:  width,
+		Height: height,
+		Size:   size,
+	}, nil
+}
+
 func openAndInspect(ctx context.Context, path string) (*os.File, ImageInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ImageInfo{}, fmt.Errorf("读取图片已取消：%w", err)

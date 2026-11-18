@@ -175,16 +175,18 @@ func parseItem(ctx context.Context, source transfer.Item, budget *int) (items []
 			if tokenType != html.StartTagToken && tokenType != html.SelfClosingTagToken {
 				continue
 			}
-			token := tokenizer.Token()
-			if token.Data != "img" {
+			tagName, hasAttr := tokenizer.TagName()
+			if !bytes.Equal(tagName, []byte("img")) {
 				continue
 			}
 			hadImage = true
-			for _, attr := range token.Attr {
-				if attr.Key != "src" {
+			for hasAttr {
+				var key, val []byte
+				key, val, hasAttr = tokenizer.TagAttr()
+				if !bytes.Equal(key, []byte("src")) {
 					continue
 				}
-				raw := strings.TrimSpace(attr.Val)
+				raw := strings.TrimSpace(string(val))
 				if parsed, err := url.Parse(raw); err == nil && base != nil && raw != "" {
 					raw = base.ResolveReference(parsed).String()
 				}

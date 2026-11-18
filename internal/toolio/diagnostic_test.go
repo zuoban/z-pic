@@ -28,3 +28,21 @@ func TestDiagnosticBoundsRetainedPrefixAndDrainsStream(t *testing.T) {
 		t.Fatalf("zero-limit copy = (%d, %v, %q)", copied, err, zeroLimit.String())
 	}
 }
+
+func TestBoundedBufferClampsCapacityAtMaxCap(t *testing.T) {
+	var buf BoundedBuffer
+	maxCap := 5000
+	chunk := bytes.Repeat([]byte("a"), 2000)
+	buf.AppendBounded([]byte("pre:"), chunk, maxCap)
+	buf.AppendBounded(nil, chunk, maxCap)
+	if buf.Len() != 4004 || buf.Cap() > maxCap {
+		t.Fatalf("Len=%d Cap=%d exceeded maxCap=%d", buf.Len(), buf.Cap(), maxCap)
+	}
+	if !bytes.HasPrefix(buf.Bytes(), []byte("pre:aaaa")) || len(buf.String()) != 4004 {
+		t.Fatal("BoundedBuffer corrupted retained bytes")
+	}
+	buf.Reset()
+	if buf.Len() != 0 || buf.Cap() != 0 {
+		t.Fatalf("Reset kept storage: Len=%d Cap=%d", buf.Len(), buf.Cap())
+	}
+}
