@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+
+	"zpic/internal/contextio"
 )
 
 func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
@@ -16,7 +18,7 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法读取图片：%w", err)
 	}
@@ -36,7 +38,7 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法解码图片：%w", err)
 	}

@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"image"
+
+	"zpic/internal/contextio"
 )
 
 // BytesWithPreview follows Bytes's contract and also returns decoded output
@@ -21,7 +23,7 @@ func BytesWithPreview(ctx context.Context, data []byte, sourcePath string, optio
 		return nil, nil, err
 	}
 	if !result.Unchanged && preview == nil {
-		preview, _, err = image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(result.Data)})
+		preview, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(result.Data)))
 		if err != nil {
 			return nil, nil, fmt.Errorf("无法生成预览：%w", err)
 		}

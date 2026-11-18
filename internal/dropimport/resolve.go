@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"zpic/internal/compress"
+	"zpic/internal/contextio"
 	"zpic/internal/nameseq"
 )
 
@@ -121,7 +122,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	}
 	// Reject login/error pages before downloading the whole response or
 	// creating a temporary file. The complete validation below remains required.
-	buffered := bufio.NewReaderSize(cancelReader{ctx, reader}, 512)
+	buffered := bufio.NewReaderSize(contextio.NewReader(ctx, reader), 512)
 	header, err := buffered.Peek(12)
 	if err != nil && err != io.EOF {
 		return "", false, err
@@ -147,7 +148,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		}
 		_ = os.Remove(tempName)
 	}()
-	size, err := io.Copy(temp, io.LimitReader(cancelReader{ctx, reader}, maxImage+1))
+	size, err := io.Copy(temp, io.LimitReader(contextio.NewReader(ctx, reader), maxImage+1))
 	if err != nil {
 		return "", false, err
 	}
@@ -161,7 +162,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
 		return "", false, err
 	}
-	if _, _, err := image.Decode(cancelReader{ctx, temp}); err != nil {
+	if _, _, err := image.Decode(contextio.NewReader(ctx, temp)); err != nil {
 		return "", false, fmt.Errorf("图片数据损坏：%w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -232,7 +233,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			_ = os.Remove(target)
 			return "", false, openErr
 		}
-		_, err = io.Copy(output, cancelReader{ctx, sourceFile})
+		_, err = io.Copy(output, contextio.NewReader(ctx, sourceFile))
 		sourceCloseErr := sourceFile.Close()
 		if err == nil {
 			err = sourceCloseErr
@@ -270,16 +271,4 @@ func filename(parsed *url.URL) string {
 		return "image"
 	}
 	return safe.String()
-}
-
-type cancelReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (reader cancelReader) Read(buffer []byte) (int, error) {
-	if err := reader.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return reader.reader.Read(buffer)
 }

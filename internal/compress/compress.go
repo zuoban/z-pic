@@ -16,6 +16,7 @@ import (
 
 	_ "golang.org/x/image/webp"
 
+	"zpic/internal/contextio"
 	"zpic/internal/imageinput"
 	"zpic/internal/pngtools"
 	"zpic/internal/webptools"
@@ -115,7 +116,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片文件超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP：%w", err)
 	}
@@ -143,7 +144,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	width, height := config.Width, config.Height
 	var encoded []byte
 	if format == "jpeg" {
-		img, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+		img, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 		if cancelErr := ctx.Err(); cancelErr != nil {
 			return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
 		}
@@ -167,7 +168,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		}
 	} else if format == "webp" {
 		if config.Width > 16383 || config.Height > 16383 {
-			if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+			if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 			}
 			encoded = data
@@ -180,7 +181,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 					if err == nil && preview != nil {
 						*preview = decoded
 					}
-				} else if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+				} else if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 					return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 				}
 			}
@@ -232,7 +233,7 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 		candidate = optimized
 	}
 	if sameBytesBacking(candidate, data) {
-		if _, _, decodeErr := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)}); decodeErr != nil {
+		if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 		}
 		return candidate, nil
@@ -266,7 +267,7 @@ func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (imag
 	if len(data) == 0 || len(data) > maxInputSize {
 		return nil, fmt.Errorf("输出为空或超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 PNG 头部：%w", err)
 	}
@@ -276,7 +277,7 @@ func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (imag
 	if err := ValidatePNG(ctx, data); err != nil {
 		return nil, err
 	}
-	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("PNG 数据损坏：%w", err)
 	}
@@ -290,18 +291,6 @@ func decodePNGOutput(ctx context.Context, data []byte, input image.Config) (imag
 // after Stat. It also closes the input on every exit path.
 func readInput(ctx context.Context, path string) ([]byte, error) {
 	return imageinput.Read(ctx, path)
-}
-
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.reader.Read(p)
 }
 
 // Save creates a new file and never overwrites an existing path. Failed writes

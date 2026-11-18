@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"zpic/internal/contextio"
 )
 
 func writeFixture(t *testing.T, name string, data []byte) string {
@@ -219,7 +221,7 @@ func TestCanceledContext(t *testing.T) {
 			t.Fatalf("%s: expected cancellation, got %v", method.name, err)
 		}
 	}
-	reader := contextReader{ctx: ctx, reader: strings.NewReader("data")}
+	reader := contextio.NewReader(ctx, strings.NewReader("data"))
 	if _, err := reader.Read(make([]byte, 4)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("read cancellation: %v", err)
 	}
@@ -424,7 +426,7 @@ func TestPNGChunkScanUsesBoundaries(t *testing.T) {
 }
 
 func TestContextReaderPropagatesReadErrors(t *testing.T) {
-	reader := contextReader{ctx: context.Background(), reader: strings.NewReader("")}
+	reader := contextio.NewReader(context.Background(), strings.NewReader(""))
 	if _, err := reader.Read(make([]byte, 1)); err != io.EOF {
 		t.Fatalf("expected EOF, got %v", err)
 	}

@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/image/vp8"
 	"golang.org/x/image/vp8l"
+
+	"zpic/internal/contextio"
 )
 
 func ValidateWebP(ctx context.Context, data []byte) error {
@@ -119,14 +121,14 @@ func decodeWebPOutput(ctx context.Context, data []byte, input image.Config) (ima
 	if err := ValidateWebP(ctx, data); err != nil {
 		return nil, err
 	}
-	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 WebP 头部：%w", err)
 	}
 	if format != "webp" || config.Width != input.Width || config.Height != input.Height {
 		return nil, fmt.Errorf("输出格式或图片尺寸发生了变化")
 	}
-	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("WebP 数据损坏：%w", err)
 	}

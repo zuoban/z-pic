@@ -6,6 +6,8 @@ import (
 	"image"
 	"io"
 	"os"
+
+	"zpic/internal/contextio"
 )
 
 // ImageInfo describes validated static JPEG, PNG or WebP metadata read from headers.
@@ -48,7 +50,7 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 	if opened.Size() > maxInputSize {
 		return ImageInfo{}, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(io.LimitReader(contextReader{ctx: ctx, reader: f}, maxInputSize))
+	config, format, err := image.DecodeConfig(io.LimitReader(contextio.NewReader(ctx, f), maxInputSize))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ImageInfo{}, fmt.Errorf("读取图片已取消：%w", ctxErr)

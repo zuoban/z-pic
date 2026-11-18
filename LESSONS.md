@@ -243,3 +243,10 @@
 - 修改：在路径解析和创建文件之前拒绝空输出，和 nil 结果采用相同错误处理。
 - 防复发：非 nil 对象不代表有可交付内容；成功状态必须对应实际有效载荷，失败应不留下输出占位文件。
 - 验证与 review：`go test ./internal/compress -run 'TestSave|TestFile|TestBytes' -count=1`；覆盖 nil/零值/空切片、已有文件保护及正常保存。
+
+### 第 7 轮：共用可取消读取适配器
+
+- 确认问题：文件读取、图片解码和下载复制维护三份相同的 context reader，安全边界的实现和说明容易漂移。
+- 修改：统一为 `internal/contextio.NewReader`，删除三份重复类型；所有原有入口及取消回归使用同一实现。
+- 防复发：适配器不要嵌入底层 reader，否则 `WriterTo` 等快路径可能被提升，`io.Copy` 会绕过取消检查；此适配器仍不能中断已阻塞的底层同步读取。
+- 验证与 review：`go test ./internal/contextio ./internal/imageinput ./internal/dropimport ./internal/compress -count=1`；额外使用实现 `WriterTo` 的 `strings.Reader` 验证取消时 `io.Copy` 写入零字节。

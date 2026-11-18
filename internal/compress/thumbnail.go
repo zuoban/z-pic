@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"image"
 	"math"
+
+	"zpic/internal/contextio"
 )
 
 // Thumbnail decodes a static JPEG, PNG or WebP into an independent raster, fitting
@@ -24,7 +26,7 @@ func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, erro
 	if err != nil {
 		return nil, err
 	}
-	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
 		return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 	}
@@ -48,7 +50,7 @@ func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	decoded, _, err := image.Decode(contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return nil, cancelErr
 	}

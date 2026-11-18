@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"zpic/internal/contextio"
 )
 
 const MaxSize = 64 << 20
@@ -52,7 +54,7 @@ func readSized(ctx context.Context, source io.Reader, size int64) ([]byte, error
 	if size < 0 {
 		return nil, errors.New("图片文件大小无效")
 	}
-	reader := io.LimitReader(contextReader{ctx: ctx, reader: source}, MaxSize+1)
+	reader := io.LimitReader(contextio.NewReader(ctx, source), MaxSize+1)
 	data := make([]byte, int(size)+1)
 	count, err := io.ReadFull(reader, data)
 	data = data[:count]
@@ -89,16 +91,4 @@ func readSized(ctx context.Context, source io.Reader, size int64) ([]byte, error
 		return nil, err
 	}
 	return data[:len(data):len(data)], nil
-}
-
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (reader contextReader) Read(buffer []byte) (int, error) {
-	if err := reader.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return reader.reader.Read(buffer)
 }
