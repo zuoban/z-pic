@@ -9,10 +9,33 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestDownloadResponseHeadersAreBounded(t *testing.T) {
+	payload := imageBytes(t, "png")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		size := 4096
+		if r.URL.Path == "/oversized" {
+			size = (1 << 20) + 1024
+		}
+		w.Header().Set("X-Padding", strings.Repeat("a", size))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	path, saved, err := Resolve(context.Background(), Item{URL: server.URL + "/oversized"}, dir)
+	if err == nil || saved || path != "" {
+		t.Fatalf("oversized response headers accepted: %q, %v, %v", path, saved, err)
+	}
+	assertFileCount(t, dir, 0)
+	if _, saved, err := Resolve(context.Background(), Item{URL: server.URL + "/normal"}, dir); err != nil || !saved {
+		t.Fatalf("ordinary response rejected: saved=%v, err=%v", saved, err)
+	}
+}
 
 func TestResolveRejectsNonImageBeforeReadingResponseTail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
