@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -188,8 +189,8 @@ func TestCommandExecution(t *testing.T) {
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
-		out, err := runCommand(context.Background(), "oxipng", t.TempDir()+"/absent", nil, input, 1024)
-		if out != nil || !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "捆绑工具") {
+		out, err := runCommand(context.Background(), "oxipng", filepath.Join(t.TempDir(), "absent"), nil, input, 1024)
+		if out != nil || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound)) || !strings.Contains(err.Error(), "捆绑工具") {
 			t.Fatalf("output=%q err=%v", out, err)
 		}
 	})

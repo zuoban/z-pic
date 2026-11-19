@@ -17,6 +17,13 @@ import (
 	"zpic/internal/pngtools"
 )
 
+func requireNativePNGTools(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("bundled native PNG tools currently ship only for darwin/arm64")
+	}
+}
+
 func assertPNGTransparency(t *testing.T, data []byte) {
 	t.Helper()
 	img, err := png.Decode(bytes.NewReader(data))
@@ -183,6 +190,7 @@ func pngColorCount(t *testing.T, data []byte) int {
 }
 
 func TestPNGSupportsPaletteTransparency(t *testing.T) {
+	requireNativePNGTools(t)
 	palette := color.Palette{
 		color.NRGBA{R: 233, G: 17, B: 91, A: 0},
 		color.NRGBA{R: 13, G: 129, B: 241, A: 1},
@@ -243,6 +251,7 @@ func pngScreenshotFixture(t *testing.T) []byte {
 }
 
 func TestPNGDefaultQuantizesColorsPreservesDimensionsAndSource(t *testing.T) {
+	requireNativePNGTools(t)
 	data := pngScreenshotFixture(t)
 	before := append([]byte(nil), data...)
 	original, err := png.Decode(bytes.NewReader(data))
@@ -303,6 +312,7 @@ func TestPNGDefaultQuantizesColorsPreservesDimensionsAndSource(t *testing.T) {
 }
 
 func TestPNGQualityGateRefusalRemainsUsable(t *testing.T) {
+	requireNativePNGTools(t)
 	// Independent random RGB samples cannot meet the fixed quantization
 	// quality gate with only 256 colors.
 	img := image.NewNRGBA(image.Rect(0, 0, 96, 64))
@@ -355,6 +365,7 @@ func pngHasChunk(data []byte, target string) bool {
 }
 
 func TestPNGCompressesWithCaBXAndIDOT(t *testing.T) {
+	requireNativePNGTools(t)
 	base := pngScreenshotFixture(t)
 	for _, chunkName := range []string{"caBX", "iDOT"} {
 		t.Run(chunkName, func(t *testing.T) {
@@ -392,6 +403,7 @@ func TestPNGCompressesWithCaBXAndIDOT(t *testing.T) {
 }
 
 func TestPNGNoSavingsReturnsOptimizedOriginal(t *testing.T) {
+	requireNativePNGTools(t)
 	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
 	img.SetNRGBA(0, 0, color.NRGBA{R: 17, G: 29, B: 71, A: 128})
 	raw := pngFixture(t, img, png.BestCompression)
@@ -418,6 +430,7 @@ func TestPNGNoSavingsReturnsOptimizedOriginal(t *testing.T) {
 }
 
 func TestPNGBytesUsesSnapshotAfterReplacementAndDeletion(t *testing.T) {
+	requireNativePNGTools(t)
 	data := pngScreenshotFixture(t)
 	source := writeFixture(t, "source.png", data)
 	options := Options{Quality: 80}

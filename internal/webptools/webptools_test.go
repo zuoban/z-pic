@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -119,8 +120,8 @@ func TestCommandExecution(t *testing.T) {
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
-		output, err := runCommand(context.Background(), t.TempDir()+"/absent", nil, nil, 1024)
-		if output != nil || !errors.Is(err, os.ErrNotExist) {
+		output, err := runCommand(context.Background(), filepath.Join(t.TempDir(), "absent"), nil, nil, 1024)
+		if output != nil || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound)) {
 			t.Fatalf("output=%q err=%v", output, err)
 		}
 	})

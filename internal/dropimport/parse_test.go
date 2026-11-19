@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,6 +16,20 @@ import (
 
 func representation(format transfer.Format, text string) transfer.Representation {
 	return transfer.Bytes(format, []byte(text))
+}
+
+func testPath(name string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\tmp\` + strings.ReplaceAll(name, "/", `\`)
+	}
+	return "/tmp/" + name
+}
+
+func testFileURI(prefix, name string) string {
+	if runtime.GOOS == "windows" {
+		return prefix + "/C:/tmp/" + name
+	}
+	return prefix + "/tmp/" + name
 }
 
 func TestLinesWhitespaceAndComments(test *testing.T) {
@@ -66,19 +81,19 @@ func TestParseFileListSchemeBoundaries(test *testing.T) {
 		text string
 		path string
 	}{
-		{"native punctuation", "/tmp/a?b#c%oops.png", "/tmp/a?b#c%oops.png"},
-		{"native colon", "/tmp/album:photo.png", "/tmp/album:photo.png"},
-		{"mixed case file scheme", "FiLe://localhost/tmp/a%20b.png", "/tmp/a b.png"},
-		{"short file URI", "file:/tmp/a.png", "/tmp/a.png"},
-		{"escaped punctuation", "file:///tmp/a%3Fb%23c.png", "/tmp/a?b#c.png"},
+		{"native punctuation", testPath("a?b#c%oops.png"), testPath("a?b#c%oops.png")},
+		{"native colon", testPath("album:photo.png"), testPath("album:photo.png")},
+		{"mixed case file scheme", testFileURI("FiLe://localhost", "a%20b.png"), testPath("a b.png")},
+		{"short file URI", testFileURI("file:", "a.png"), testPath("a.png")},
+		{"escaped punctuation", testFileURI("file://", "a%3Fb%23c.png"), testPath("a?b#c.png")},
 		{"remote host", "file://remote/tmp/a.png", ""},
-		{"host case", "file://LOCALHOST/tmp/a.png", ""},
-		{"credentials", "file://user@localhost/tmp/a.png", ""},
-		{"query", "file:///tmp/a.png?q=1", ""},
-		{"fragment", "file:///tmp/a.png#fragment", ""},
-		{"invalid escape", "file:///tmp/a%GG.png", ""},
-		{"escaped null", "file:///tmp/a%00b.png", ""},
-		{"native null", "/tmp/a\x00b.png", ""},
+		{"host case", testFileURI("file://LOCALHOST", "a.png"), ""},
+		{"credentials", testFileURI("file://user@localhost", "a.png"), ""},
+		{"query", testFileURI("file://", "a.png?q=1"), ""},
+		{"fragment", testFileURI("file://", "a.png#fragment"), ""},
+		{"invalid escape", testFileURI("file://", "a%GG.png"), ""},
+		{"escaped null", testFileURI("file://", "a%00b.png"), ""},
+		{"native null", testPath("a\x00b.png"), ""},
 		{"relative path", "relative/a.png", ""},
 		{"HTTP in file list", "https://example.test/a.png", ""},
 	} {
@@ -130,8 +145,8 @@ func TestParseHTMLKeepsProviderOrderAndFallbacks(test *testing.T) {
 		want      []Item
 		textReads int
 	}{
-		{"empty HTML", "", []Item{{Path: "/tmp/text.png"}}, 1},
-		{"non-image HTML", "<p>description</p>", []Item{{Path: "/tmp/text.png"}}, 1},
+		{"empty HTML", "", []Item{{Path: testPath("text.png")}}, 1},
+		{"non-image HTML", "<p>description</p>", []Item{{Path: testPath("text.png")}}, 1},
 		{"relative image", `<img src="../photo.png#fragment">`, []Item{{URL: "https://example.test/photo.png"}}, 0},
 		{"unreadable image", `<img src="blob:https://example.test/image">`, []Item{{Data: fallback}}, 0},
 	} {
@@ -145,7 +160,7 @@ func TestParseHTMLKeepsProviderOrderAndFallbacks(test *testing.T) {
 				}),
 				transfer.Lazy(transfer.Text, func() ([]byte, error) {
 					textReads++
-					return []byte("/tmp/text.png"), nil
+					return []byte(testPath("text.png")), nil
 				}),
 				transfer.Bytes(transfer.PNG, fallback),
 			))
@@ -185,12 +200,12 @@ func TestParsePrecedence(t *testing.T) {
 		{"local alternatives", []transfer.Representation{
 			representation(transfer.HTML, `<img src="https://example.test/preview">`),
 			representation(transfer.URIList, "https://example.test/page"),
-			representation(transfer.FileList, "file:///tmp/a%20b.png\r\nfile://localhost/tmp/c.jpg"),
-		}, []Item{{Path: "/tmp/a b.png"}, {Path: "/tmp/c.jpg"}}},
+			representation(transfer.FileList, testFileURI("file://", "a%20b.png")+"\r\n"+testFileURI("file://localhost", "c.jpg")),
+		}, []Item{{Path: testPath("a b.png")}, {Path: testPath("c.jpg")}}},
 		{"uri local precedence", []transfer.Representation{
-			representation(transfer.URIList, "# comment\r\nhttps://example.test/page\r\nfile:///tmp/a.png"),
+			representation(transfer.URIList, "# comment\r\nhttps://example.test/page\r\n"+testFileURI("file://", "a.png")),
 			representation(transfer.HTML, `<img src="https://example.test/preview">`),
-		}, []Item{{Path: "/tmp/a.png"}}},
+		}, []Item{{Path: testPath("a.png")}}},
 		{"browser anchor", []transfer.Representation{
 			representation(transfer.URIList, "https://example.test/page"),
 			representation(transfer.Text, "https://example.test/page"),
@@ -209,8 +224,8 @@ func TestParsePrecedence(t *testing.T) {
 			representation(transfer.Text, "https://example.test/a\nhttp://example.test/b"),
 		}, []Item{{URL: "https://example.test/a"}, {URL: "http://example.test/b"}}},
 		{"plain file uri", []transfer.Representation{
-			representation(transfer.Text, "file:///tmp/a.png"),
-		}, []Item{{Path: "/tmp/a.png"}}},
+			representation(transfer.Text, testFileURI("file://", "a.png")),
+		}, []Item{{Path: testPath("a.png")}}},
 		{"blob fallback", []transfer.Representation{
 			representation(transfer.HTML, `<img src="blob:https://example.test/id">`),
 			representation(transfer.URIList, "https://example.test/page"),
@@ -246,13 +261,13 @@ func TestParsePrecedence(t *testing.T) {
 
 func TestParseMultipleItemsAndLazyAlternatives(t *testing.T) {
 	data := transfer.New(
-		transfer.NewItem(representation(transfer.FileList, "file:///tmp/a.png\nfile:///tmp/./a.png"),
+		transfer.NewItem(representation(transfer.FileList, testFileURI("file://", "a.png")+"\n"+testFileURI("file://", "./a.png")),
 			transfer.Lazy(transfer.PNG, func() ([]byte, error) { t.Fatal("read unnecessary preview"); return nil, nil })),
 		transfer.NewItem(representation(transfer.URIList, "https://example.test/a")),
 		transfer.NewItem(representation(transfer.Text, "https://example.test/a\nhttps://example.test/b")),
 	)
 	got, err := Parse(data)
-	want := []Item{{Path: "/tmp/a.png"}, {URL: "https://example.test/a"}, {URL: "https://example.test/b"}}
+	want := []Item{{Path: testPath("a.png")}, {URL: "https://example.test/a"}, {URL: "https://example.test/b"}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Parse = %#v, %v", got, err)
 	}
@@ -263,7 +278,7 @@ func TestParseCountsReferencesAcrossNativeItemsBeforeDeduplication(t *testing.T)
 		format transfer.Format
 		entry  string
 	}{
-		{transfer.FileList, "/tmp/repeated.png\n"},
+		{transfer.FileList, testPath("repeated.png") + "\n"},
 		{transfer.URIList, "https://example.test/repeated.png\n"},
 		{transfer.HTML, `<img src="https://example.test/repeated.png">`},
 	} {
@@ -300,16 +315,16 @@ func TestParseMixedDropPreservesValidItems(t *testing.T) {
 	firstFailure := errors.New("first provider failed")
 	secondFailure := errors.New("second provider failed")
 	data := transfer.New(
-		transfer.NewItem(representation(transfer.FileList, "file:///tmp/a.png")),
+		transfer.NewItem(representation(transfer.FileList, testFileURI("file://", "a.png"))),
 		transfer.NewItem(representation(transfer.Text, "unsupported text")),
 		transfer.NewItem(transfer.Lazy(transfer.HTML, func() ([]byte, error) { return nil, firstFailure })),
 		transfer.NewItem(representation(transfer.URIList, "https://example.test/a")),
 		transfer.NewItem(transfer.Lazy(transfer.PNG, func() ([]byte, error) { return nil, secondFailure })),
-		transfer.NewItem(representation(transfer.FileList, "file:///tmp/./a.png")),
+		transfer.NewItem(representation(transfer.FileList, testFileURI("file://", "./a.png"))),
 		transfer.NewItem(representation(transfer.Text, "https://example.test/b")),
 	)
 	got, err := Parse(data)
-	want := []Item{{Path: "/tmp/a.png"}, {URL: "https://example.test/a"}, {URL: "https://example.test/b"}}
+	want := []Item{{Path: testPath("a.png")}, {URL: "https://example.test/a"}, {URL: "https://example.test/b"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Parse = %#v; want %#v", got, want)
 	}
@@ -329,7 +344,7 @@ func TestParseHardLimitsRejectWholeDrop(t *testing.T) {
 		strings.TrimSuffix(urls.String(), fmt.Sprintf("https://example.test/%d\n", maxItems)),
 	} {
 		data := transfer.New(
-			transfer.NewItem(representation(transfer.FileList, "file:///tmp/valid.png")),
+			transfer.NewItem(representation(transfer.FileList, testFileURI("file://", "valid.png"))),
 			transfer.NewItem(representation(transfer.Text, text),
 				transfer.Lazy(transfer.PNG, func() ([]byte, error) {
 					t.Error("read fallback after resource limit")
@@ -375,7 +390,7 @@ func TestParseContextStopsProvidersAndRejectsPartialItems(t *testing.T) {
 				transfer.Lazy(transfer.FileList, func() ([]byte, error) {
 					reads++
 					cancel()
-					return []byte("/tmp/second.png"), nil
+					return []byte(testPath("second.png")), nil
 				}),
 				transfer.Lazy(transfer.Text, func() ([]byte, error) {
 					t.Fatal("provider read after cancellation")
@@ -383,7 +398,7 @@ func TestParseContextStopsProvidersAndRejectsPartialItems(t *testing.T) {
 				}),
 			)
 			data := transfer.New(
-				transfer.NewItem(representation(transfer.FileList, "/tmp/first.png")),
+				transfer.NewItem(representation(transfer.FileList, testPath("first.png"))),
 				source, source,
 			)
 			items, err := ParseContext(ctx, data)
@@ -401,14 +416,15 @@ func TestParseContextStopsProvidersAndRejectsPartialItems(t *testing.T) {
 func TestParseLocalItemLimitStopsProviders(t *testing.T) {
 	for _, format := range []transfer.Format{transfer.FileList, transfer.URIList, transfer.Text} {
 		t.Run(string(format), func(t *testing.T) {
-			value := strings.Repeat("file:///tmp/repeated.png\n", maxItems)
+			uri := testFileURI("file://", "repeated.png")
+			value := strings.Repeat(uri+"\n", maxItems)
 			items, err := Parse(transfer.New(transfer.NewItem(representation(format, value))))
 			if err != nil || len(items) != 1 {
 				t.Fatalf("at limit = %v, %v", items, err)
 			}
 			data := transfer.New(
 				transfer.NewItem(
-					representation(format, value+"file:///tmp/repeated.png"),
+					representation(format, value+uri),
 					transfer.Lazy(transfer.PNG, func() ([]byte, error) {
 						t.Fatal("read fallback after local item limit")
 						return nil, nil

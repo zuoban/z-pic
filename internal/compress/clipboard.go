@@ -61,9 +61,10 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
 	}
 	if format == "png" {
-		if err := ValidatePNG(ctx, data); err != nil {
+		if err := validatePNGStructureAndCRCs(ctx, data, config); err != nil {
 			return nil, err
 		}
+		return data, nil
 	}
 	if format == "webp" {
 		if err := ValidateWebP(ctx, data); err != nil {
@@ -76,9 +77,6 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if format == "png" {
-		return data, nil
 	}
 	switch format {
 	case "jpeg":

@@ -288,14 +288,8 @@ func TestBytesUsesSnapshotAfterSourceReplacement(t *testing.T) {
 	}
 	// Use a relative source path to verify that Bytes captures an absolute
 	// identity for Save while retaining the caller's SourcePath value.
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative, err := filepath.Rel(cwd, source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(filepath.Dir(source))
+	relative := filepath.Base(source)
 	result, err := Bytes(context.Background(), snapshot, relative, Options{Quality: 35})
 	if err != nil {
 		t.Fatal(err)

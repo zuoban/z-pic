@@ -287,7 +287,7 @@ func fileURIPath(uriPath, goos string) string {
 		}
 		return strings.ReplaceAll(uriPath, "/", `\`)
 	}
-	return filepath.FromSlash(uriPath)
+	return uriPath
 }
 
 func isASCIIAlpha(b byte) bool {

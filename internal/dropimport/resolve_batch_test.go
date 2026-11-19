@@ -197,8 +197,17 @@ func TestResolverFilenameLimitAndCleanup(test *testing.T) {
 	if err := os.WriteFile(first, payload, 0o600); err != nil {
 		test.Fatal(err)
 	}
+	linkBase := first
 	for suffix := 1; suffix < 10000; suffix++ {
-		if err := os.Link(first, filepath.Join(dir, fmt.Sprintf("image-%d.png", suffix))); err != nil {
+		target := filepath.Join(dir, fmt.Sprintf("image-%d.png", suffix))
+		if suffix%500 == 0 {
+			if err := os.WriteFile(target, payload, 0o600); err != nil {
+				test.Fatal(err)
+			}
+			linkBase = target
+			continue
+		}
+		if err := os.Link(linkBase, target); err != nil {
 			test.Fatal(err)
 		}
 	}

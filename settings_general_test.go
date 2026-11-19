@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"runtime"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -283,7 +284,7 @@ func TestSettingsGlassTextContrast(t *testing.T) {
 					if ratio := themeContrast(foreground, ui.RGB(background.R, background.G, background.B)); ratio < 4.5 {
 						t.Errorf("save label contrast %.2f in active=%t window, want 4.5", ratio, active)
 					}
-					if preference.name == "glass" {
+					if preference.name == "glass" && runtime.GOOS == "darwin" {
 						// The inactive window's native default button uses a dark
 						// label. A blue glass action must explicitly keep white text.
 						whitePixels := 0
