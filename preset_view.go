@@ -237,16 +237,19 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 			activeIndex := int(math.Round(value))
 			for tick := range len(imageQualityLevels) {
 				x := track.X + track.W*float32(tick)/float32(len(imageQualityLevels)-1)
-				tickColor := meterTrackColor(c)
+				pip := ui.Rect{X: x - 3, Y: centerY - 3, W: 6, H: 6}
+				pipColor := meterTrackColor(c)
 				if tick <= activeIndex {
-					tickColor = accentForeground(t).Alpha(0.6)
+					pipColor = t.Accent
 				}
-				p.Line(x, centerY+8, x, centerY+12, 1.5, tickColor)
+				p.Fill(pip, pipColor, 3)
 			}
-			thumb := ui.Rect{X: track.X + track.W*at - 10, Y: centerY - 10, W: 20, H: 20}
-			p.Shadow(thumb, 10, 0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.20))
+			thumbX := track.X + track.W*at
+			thumb := ui.Rect{X: thumbX - 10, Y: centerY - 10, W: 20, H: 20}
+			p.Shadow(thumb, 10, 0, 2, 5, 0, ui.RGBA(0, 0, 0, 0.22))
 			p.Fill(thumb, ui.Hex("#ffffff"), 10)
 			p.Stroke(thumb, selectionBorder(c), 10, 1.25)
+			p.Fill(ui.Rect{X: thumbX - 3, Y: centerY - 3, W: 6, H: 6}, t.Accent, 3)
 		})
 		if slider.Changed() {
 			s.editQualityLevel(int(math.Round(value)))

@@ -30,8 +30,8 @@ func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 	button := ui.PrimaryButton(c.Key(key), label).Radius(pillRadius(36, c)).Disabled(disabled)
 	if disabled {
-		button.Background(keycapSurface(c)).Border(1, controlBorder(c)).
-			TextColor(c.Theme().TextMuted).DimDisabled(false)
+		button.Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+			TextColor(metadataColor(c)).DimDisabled(false)
 	}
 	return button
 }
@@ -272,31 +272,51 @@ func (s *application) previewPanel(c *ui.Context) {
 		if s.preview != nil {
 			s.previewZoomToolbar(c)
 		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
-			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
+		stageBg := panelStageBackground(c)
+		if s.preview == nil {
+			stageBg = panelEmptyStageBackground(c)
+		}
+		stage := ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
+			Background(stageBg).Border(1, glassBorder(c)).Clip()
+		if s.preview == nil {
+			stage.Draw(func(p *ui.Painter, bounds ui.Rect) {
+				if bounds.W < 120 || bounds.H < 120 {
+					return
+				}
+				inset, arm := float32(16), float32(12)
+				mark := controlBorder(c)
+				x0, y0 := bounds.X+inset, bounds.Y+inset
+				x1, y1 := bounds.X+bounds.W-inset, bounds.Y+bounds.H-inset
+				p.StrokePolyline([][2]float32{{x0, y0 + arm}, {x0, y0}, {x0 + arm, y0}}, 1, mark)
+				p.StrokePolyline([][2]float32{{x1 - arm, y0}, {x1, y0}, {x1, y0 + arm}}, 1, mark)
+				p.StrokePolyline([][2]float32{{x0, y1 - arm}, {x0, y1}, {x0 + arm, y1}}, 1, mark)
+				p.StrokePolyline([][2]float32{{x1 - arm, y1}, {x1, y1}, {x1, y1 - arm}}, 1, mark)
+			})
+		}
+		stage.Children(func() {
 			if s.preview == nil {
 				ui.Column(c).Fill().Center().Gap(20).Padding(24).Children(func() {
-					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
-						back := ui.Rect{X: bounds.X + 10, Y: bounds.Y + 5, W: 40, H: 36}
-						p.Fill(back, panelSubtleSurface(c), 8)
-						p.Stroke(back, glassBorder(c), 8, 1)
-						card := ui.Rect{X: bounds.X + 5, Y: bounds.Y + 10, W: 44, H: 40}
-						p.Shadow(card, 8, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.08))
-						p.Fill(card, glassCardSurface(c), 8)
-						p.Stroke(card, controlBorder(c), 8, 1)
+					ui.Box(c).Size(60, 60).Draw(func(p *ui.Painter, bounds ui.Rect) {
+						back := ui.Rect{X: bounds.X + 12, Y: bounds.Y + 6, W: 40, H: 36}
+						p.Fill(back, statusTintSurface(c, t.Accent), 9)
+						p.Stroke(back, statusTintBorder(c, accentForeground(t)), 9, 1)
+						card := ui.Rect{X: bounds.X + 6, Y: bounds.Y + 12, W: 44, H: 40}
+						p.Shadow(card, 10, 0, 3, 10, 0, ui.RGBA(0, 0, 0, 0.10))
+						p.Fill(card, glassCardSurface(c), 10)
+						p.Stroke(card, controlBorder(c), 10, 1)
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 11, bounds.Y + 22}, {bounds.X + 11, bounds.Y + 16}, {bounds.X + 17, bounds.Y + 16},
+							{bounds.X + 12, bounds.Y + 24}, {bounds.X + 12, bounds.Y + 18}, {bounds.X + 18, bounds.Y + 18},
 						}, 1.5, accentForeground(t))
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 37, bounds.Y + 44}, {bounds.X + 43, bounds.Y + 44}, {bounds.X + 43, bounds.Y + 38},
+							{bounds.X + 38, bounds.Y + 46}, {bounds.X + 44, bounds.Y + 46}, {bounds.X + 44, bounds.Y + 40},
 						}, 1.5, accentForeground(t))
-						p.Stroke(ui.Rect{X: bounds.X + 32, Y: bounds.Y + 19, W: 5, H: 5}, t.TextMuted, 2.5, 1.5)
+						p.Stroke(ui.Rect{X: bounds.X + 33, Y: bounds.Y + 21, W: 5, H: 5}, t.TextMuted, 2.5, 1.5)
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 13, bounds.Y + 40},
-							{bounds.X + 23, bounds.Y + 29},
-							{bounds.X + 30, bounds.Y + 36},
-							{bounds.X + 35, bounds.Y + 32},
-							{bounds.X + 41, bounds.Y + 40},
+							{bounds.X + 14, bounds.Y + 42},
+							{bounds.X + 24, bounds.Y + 31},
+							{bounds.X + 31, bounds.Y + 38},
+							{bounds.X + 36, bounds.Y + 34},
+							{bounds.X + 42, bounds.Y + 42},
 						}, 1.5, t.TextMuted)
 					})
 					ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -530,16 +550,23 @@ func (s *application) presetOverview(c *ui.Context) {
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
 			badge := "等待图片"
+			badgeColor, badgeBg, badgeBorder := metadataColor(c), panelSubtleSurface(c), glassBorder(c)
 			if s.batch != nil {
 				badge = fmt.Sprintf("%d 张图片", len(s.batch.items))
 				if s.batch.previewOpen {
 					badge = "单张预览"
 				}
+				badgeColor = accentForeground(c.Theme())
+				badgeBg = glassSelectionBackground(c)
+				badgeBorder = selectionBorder(c)
 			} else if s.file != nil {
 				badge = "单张图片"
+				badgeColor = accentForeground(c.Theme())
+				badgeBg = glassSelectionBackground(c)
+				badgeBorder = selectionBorder(c)
 			}
-			ui.Text(c, badge).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
-				Padding(2, 8).Shrink(0).Radius(pillRadius(20, c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c))
+			ui.Text(c, badge).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(badgeColor).
+				Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).Background(badgeBg).Border(1, badgeBorder)
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
@@ -676,7 +703,9 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 				{firstLabel, firstValue}, {secondLabel, secondValue},
 			} {
 				if index == 1 {
-					ui.Text(c, "→").Width(16).Height(28).FontSize(15).TextAlign(ui.Center).TextColor(metadataColor(c))
+					ui.Row(c).Width(16).Height(28).Center().Children(func() {
+						ui.Text(c, "→").FontSize(14).TextColor(metadataColor(c)).SingleLine()
+					})
 				}
 				grow := float32(1)
 				if index == 1 {
@@ -698,8 +727,10 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 							size = 20
 						}
 					}
-					ui.Text(c, row.value).FontSize(size).FontWeight(weight).FontFeatures("tnum").
-						TextColor(valColor).SingleLine().Height(28).Tooltip(row.value)
+					ui.Row(c).Height(28).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, row.value).FontSize(size).FontWeight(weight).FontFeatures("tnum").
+							TextColor(valColor).SingleLine().Tooltip(row.value)
+					})
 				})
 			}
 		})
@@ -708,15 +739,24 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 			if ratio >= 1 {
 				barColor = t.TextMuted.Alpha(0.45)
 			}
-			ui.Box(c).FillWidth().Height(4).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
+			ui.Box(c).FillWidth().Height(5).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
 				Draw(func(p *ui.Painter, r ui.Rect) {
-					p.Fill(r, meterTrackColor(c), 2)
-					fillW := max(4, r.W*float32(min(1, ratio)))
-					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
+					p.Fill(r, meterTrackColor(c), 2.5)
+					fillW := max(5, r.W*float32(min(1, ratio)))
+					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
 				})
 		}
-		ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
-			TextColor(statusColor).MaxLines(2).Tooltip(status)
+		if statusColor == t.Success {
+			ui.Row(c).Children(func() {
+				ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
+					TextColor(statusColor).Padding(2, 8).Radius(badgeRadius(20)).
+					Background(statusTintSurface(c, t.Success)).Border(1, statusTintBorder(c, t.Success)).
+					MaxLines(2).Tooltip(status)
+			})
+		} else {
+			ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
+				TextColor(statusColor).MaxLines(2).Tooltip(status)
+		}
 		if note != "" {
 			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
 				MaxLines(2).Tooltip(note)

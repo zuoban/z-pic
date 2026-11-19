@@ -39,12 +39,12 @@ func TestThemeTextContrast(t *testing.T) {
 				theme := c.Theme()
 				backgrounds := map[string]ui.Color{
 					"window": theme.Background, "panel": theme.Surface,
-					"stage": stageBackground(c), "subtle": subtleSurface(c),
-					"control": controlSurface(c), "field": fieldSurface(c),
-					"card": cardSurface(c), "hover": theme.SurfaceHover,
-					"pressed":   theme.SurfacePressed,
-					"selection": selectionBackground(c),
-					"keycap":    keycapSurface(c),
+					"stage": stageBackground(c), "empty-stage": emptyStageBackground(c),
+					"subtle": subtleSurface(c), "control": controlSurface(c),
+					"field": fieldSurface(c), "card": cardSurface(c),
+					"seg-thumb": segmentedThumbSurface(c),
+					"hover":     theme.SurfaceHover, "pressed": theme.SurfacePressed,
+					"selection": selectionBackground(c), "keycap": keycapSurface(c),
 				}
 				foregrounds := map[string]ui.Color{
 					"body": theme.Text, "secondary": theme.TextMuted, "metadata": metadataColor(c),
@@ -173,8 +173,8 @@ func TestThemeSelectionIsAvailableOnlyInSettings(t *testing.T) {
 }
 
 func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
-	lightBg := color.RGBA{R: 0xee, G: 0xf1, B: 0xf6, A: 0xff}
-	darkBg := color.RGBA{R: 0x12, G: 0x15, B: 0x1c, A: 0xff}
+	lightBg := color.RGBA{R: 0xf4, G: 0xf5, B: 0xf7, A: 0xff}
+	darkBg := color.RGBA{R: 0x0e, G: 0x10, B: 0x14, A: 0xff}
 
 	s := floatingTestApplication()
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
@@ -416,8 +416,8 @@ func TestResponsiveMobileViewportFitsControlsWithoutHorizontalOverflow(t *testin
 }
 
 func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
-	lightBg := color.RGBA{R: 0xee, G: 0xf1, B: 0xf6, A: 0xff}
-	darkBg := color.RGBA{R: 0x12, G: 0x15, B: 0x1c, A: 0xff}
+	lightBg := color.RGBA{R: 0xf4, G: 0xf5, B: 0xf7, A: 0xff}
+	darkBg := color.RGBA{R: 0x0e, G: 0x10, B: 0x14, A: 0xff}
 
 	s := testSelectedApplication()
 	s.result = &compress.Result{OriginalSize: 4096, OutputSize: 2048}

@@ -91,9 +91,9 @@ func TestSettingsReviewRenders(t *testing.T) {
 				if strings.HasSuffix(scene, "-bottom") {
 					tester.Scroll(float32(size[0])/2, float32(size[1])/2, 0, 2000)
 				}
-				background := color.RGBA{0xee, 0xf1, 0xf6, 0xff}
+				background := color.RGBA{0xf4, 0xf5, 0xf7, 0xff}
 				if mode == themeDark {
-					background = color.RGBA{0x12, 0x15, 0x1c, 0xff}
+					background = color.RGBA{0x0e, 0x10, 0x14, 0xff}
 				}
 				frame := image.NewRGBA(image.Rect(0, 0, size[0], size[1]))
 				draw.Draw(frame, frame.Bounds(), image.NewUniform(background), image.Point{}, draw.Src)

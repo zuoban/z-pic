@@ -144,9 +144,8 @@ func (s *application) previewModeControl(c *ui.Context) {
 	if s.result == nil || s.overwritten {
 		return
 	}
-	seg := ui.Segmented(c.Key("preview-mode"), &s.comparison.mode, "对比", "原图", "结果").
-		Label("预览模式").FillEqually().Width(168).Height(32).Disabled(s.previewLocked())
-	styleGlassSegmented(seg, c, 32)
+	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 32, s.previewLocked(), "对比", "原图", "结果").
+		FillEqually().Width(168)
 }
 
 func (s *application) previewZoomToolbar(c *ui.Context) {
@@ -366,21 +365,15 @@ func (s *application) previewCanvas(c *ui.Context) {
 		}
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
-				badge := ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(5, 12).Radius(14).Material(glass.Glass{}).TextColor(t.Text).
-					SingleLine()
-				if c.Preferences().ReduceTransparency {
-					badge.Border(1, t.Border)
-				}
+				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(5, 12).Radius(badgeRadius(28)).Material(glass.Glass{}).
+					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				badge := ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(5, 12).Radius(14).Material(glass.Glass{}).TextColor(t.Text).
-					SingleLine()
-				if c.Preferences().ReduceTransparency {
-					badge.Border(1, t.Border)
-				}
+				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
+					Padding(5, 12).Radius(badgeRadius(28)).Material(glass.Glass{}).
+					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
 			}
 		})
 	})

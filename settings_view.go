@@ -30,6 +30,7 @@ func (s *application) settingsView(c *ui.Context) {
 	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("应用设置").Children(func() {
 		ui.Column(c).FillWidth().Background(panelSurface(c)).Children(func() {
 			s.settingsNavigation(c)
+			ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 			s.settingsPresetSelection(c)
 		})
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
@@ -45,7 +46,7 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 56)).Padding(0, settingsPagePadding(c)).Gap(12).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 52)).Padding(0, settingsPagePadding(c)).Gap(12).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
@@ -95,7 +96,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 }
 
 func (s *application) settingsNavigation(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 56)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 52)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
 		section := int(s.editor.section)
 		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设").
@@ -108,16 +109,21 @@ func (s *application) settingsNavigation(c *ui.Context) {
 func settingsSegments(c *ui.Context, key, label string, selected *int, disabled bool, options ...string) ui.Element {
 	t := c.Theme()
 	parts := ui.SegmentedBase(c.Key(key), selected, len(options))
-	parts.Track.Label(label).Height(settingsControlHeight(c, 36)).Padding(4).Radius(innerRadius(c)).
+	trackH := settingsControlHeight(c, 36)
+	trackRadius, segRadius := innerRadius(c), float32(6)
+	if usesGlass(c) {
+		trackRadius, segRadius = trackH/2, max(6, (trackH-6)/2)
+	}
+	parts.Track.Label(label).Height(trackH).Padding(3).Gap(2).Radius(trackRadius).
 		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
 		AlignItems(ui.Stretch).Disabled(disabled).Children(func() {
 		for index, option := range options {
-			segment := parts.Segment(index).Label(option).Radius(8).Center().
+			segment := parts.Segment(index).Label(option).Radius(segRadius).Center().
 				Border(1, ui.Transparent).TextColor(t.TextMuted)
 			weight := 400
 			if *selected == index {
-				segment.Background(glassControlSurface(c)).Border(1, controlBorder(c)).TextColor(t.Text)
-				settingsGlassControl(segment, c, 28, disabled, ui.Transparent)
+				segment.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c)).TextColor(t.Text)
+				settingsGlassControl(segment, c, 30, disabled, ui.Transparent)
 				weight = 500
 			} else if !disabled {
 				if segment.Pressed() {
@@ -129,9 +135,6 @@ func settingsSegments(c *ui.Context, key, label string, selected *int, disabled 
 			segment.Children(func() { ui.Text(c, option).FontSize(settingsFontSize(c, 13)).FontWeight(weight).SingleLine() })
 		}
 	})
-	if usesGlass(c) {
-		parts.Track.Radius(settingsControlHeight(c, 36) / 2)
-	}
 	return parts.Track.FillEqually()
 }
 
@@ -181,7 +184,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
 					Radius(innerRadius(c)).Padding(8).
-					Background(glassControlSurface(c)).Border(1, controlBorder(c))
+					Background(glassCardSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
@@ -190,9 +193,9 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
-						segment.Background(glassControlPressed(c))
+						segment.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 					} else if segment.Hovered() {
-						segment.Background(glassControlHover(c))
+						segment.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 					}
 				}
 				segment.Children(func() {

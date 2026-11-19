@@ -260,14 +260,14 @@ func (s *application) floatingView(c *ui.Context) {
 			label = "松开加入队列"
 		}
 		ui.Row(c).FillWidth().Center().Children(func() {
-			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 10).Gap(4).
-				Radius(pillRadius(28, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).
+			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 12).Gap(4).
+				Radius(badgeRadius(28)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).
 				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
 				OnClick(func() { s.setFloatingExpanded(true) })
 			if over {
 				countBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 			} else if countBtn.Hovered() {
-				countBtn.Background(glassControlHover(c))
+				countBtn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 			}
 			countBtn.Children(func() {
 				ui.Text(c, label).FontSize(12).FontWeight(500).FontFeatures("tnum")
@@ -364,7 +364,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 					}
 				}
 			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-		ui.Row(c).Gap(4).Padding(2).Radius(8).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
+		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -372,9 +372,11 @@ func (s *application) floatingHeader(c *ui.Context) {
 			}{{false, "网格视图", "grid"}, {true, "列表视图", "list"}} {
 				button := floatingIconButton(c, "floating-"+mode.icon, mode.name, mode.icon,
 					func() { s.floating.listView = mode.list })
-				button.Selected(s.floating.listView == mode.list)
+				button.Radius(6).Selected(s.floating.listView == mode.list)
 				if s.floating.listView == mode.list {
-					button.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+					button.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c))
+				} else if button.Hovered() {
+					button.Background(glassControlHover(c)).Border(1, ui.Transparent)
 				} else {
 					button.Background(ui.Transparent).Border(1, ui.Transparent)
 				}
@@ -475,7 +477,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(innerRadius(c)).Background(background).
 		Border(1, border).Tooltip(item.path)
 	if tile.Hovered() && !selected {
-		tile.Background(glassControlHover(c))
+		tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 	}
 	if list {
 		tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
