@@ -15,7 +15,7 @@
 - 「管理预设」进入「预设」并编辑当前选择，布局沿用预设标签和分组卡片：
 
 - 顶部标签选择编辑对象，「＋」新增预设；在「预设名称」输入框中可直接修改名称。所有预设均可编辑、复制或删除，至少保留一个。
-- 「图片质量」提供六档有损质量（默认第 3 档「均衡质量」）以及「无损」开关。无损模式下 PNG 仅执行 Oxipng 像素无损优化，WebP 使用 `cwebp -lossless` 编码，JPEG 在未缩放且保持原格式时不二次压缩；旧配置的自定义数值在调整档位前保持不变。
+- 「图片质量」提供六档有损质量（默认第 3 档「均衡质量」）以及「无损」开关。无损模式下 PNG 仅执行 Oxipng 像素无损优化，WebP 使用 `cwebp -lossless` 编码，JPEG 使用 MozJPEG `jpegtran` 无损优化霍夫曼表与渐进扫描（未捆绑 MozJPEG 的平台保持原图）；旧配置的自定义数值在调整档位前保持不变。
 - 「保存到」提供「原文件夹 / 每次询问 / 固定输出目录」；选择「原文件夹」或「固定输出目录」时均可勾选「保存到子文件夹」，默认名称为 `zpic`。选择「每次询问」时该设置隐藏且不生效，切回后恢复勾选状态和名称。「添加后缀」在所有保存方式下均可设置，默认 `-zpic`，文件名示例随目标格式实时更新。
 - 选择「原文件夹」且未启用子文件夹或后缀时，将替换同格式原图（转为 WebP 时 JPEG / PNG 会在原文件夹另存为 `.webp`，不覆盖源文件）；单图保存和批量开始均需确认，未减小的结果保留原图。其他输出自动避开已有文件，不覆盖同名文件。
 - 「格式与优化」支持按预设配置：
@@ -129,7 +129,7 @@ z-pic compress --no-recursive ./images
 
 Go 模块要求 **Go 1.27.3 或更高版本**，MyGo 固定为 v0.9.0。支持自动工具链管理的 Go 安装会按需下载所需版本。
 
-当前仓库内置 macOS ARM64 的 Oxipng **10.2.1**、pngquant **3.0.3** 与 cwebp **1.6.0**。该平台直接运行或打包即可，用户无需安装 Rust、Homebrew 或命令行优化器；运行过程中不下载工具。其他平台需要先准备对应系统与架构的原生工具，不能直接使用 macOS 二进制。
+当前仓库内置 macOS ARM64 的 Oxipng **10.2.1**、pngquant **3.0.3**、cwebp **1.6.0** 与 MozJPEG **4.1.5**（`cjpeg` / `jpegtran`）。该平台直接运行或打包即可，用户无需安装 Rust、Homebrew 或命令行优化器；运行过程中不下载工具。其他平台需要先准备对应系统与架构的原生工具，不能直接使用 macOS 二进制（未捆绑 MozJPEG 时 JPEG 自动回退至 Go 标准库编码）。
 
 ```sh
 go mod download
@@ -153,6 +153,8 @@ PNG 工具的固定版本、来源、许可证和重新构建方式见 [THIRD_PA
 
 WebP 工具的源码、许可证与离线构建方式见 [scripts/WEBPTOOLS.md](scripts/WEBPTOOLS.md) 和 [scripts/prepare-webptools.sh](scripts/prepare-webptools.sh)。编码器静态链接 libwebp，仅依赖系统动态库；可用 `bash scripts/prepare-webptools.sh --verify` 核对捆绑工具与源码校验值。
 
+MozJPEG 工具的源码、许可证与离线构建方式见 [scripts/JPEGTOOLS.md](scripts/JPEGTOOLS.md) 和 [scripts/prepare-jpegtools.sh](scripts/prepare-jpegtools.sh)。`cjpeg` 与 `jpegtran` 静态链接 MozJPEG 并启用 NEON SIMD，仅依赖系统动态库；可用 `bash scripts/prepare-jpegtools.sh --verify` 核对捆绑工具与源码校验值。
+
 ## 验证与打包
 
 ```sh
@@ -162,6 +164,7 @@ go vet ./...
 go tool mygo vet
 bash scripts/prepare-pngtools.sh --verify
 bash scripts/prepare-webptools.sh --verify
+bash scripts/prepare-jpegtools.sh --verify
 go tool mygo build -skip-dmg -skip-notarize -sign -
 ```
 
@@ -176,9 +179,9 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 测试持久化时可设置 `ZPIC_CONFIG_FILE=/absolute/path/to/test-settings.json`，将配置读写隔离到指定文件；退出并重启应用后核对方案列表、参数和当前选择。
 
-界面约定见 [DESIGN.md](DESIGN.md)，清理记录与防回归经验见 [LESSONS.md](LESSONS.md)。图片核心位于 `internal/compress`；原生工具执行、输出限制、超时与取消处理位于 `internal/pngtools` 和 `internal/webptools`。JPEG 编码及 PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
+界面约定见 [DESIGN.md](DESIGN.md)，清理记录与防回归经验见 [LESSONS.md](LESSONS.md)。图片核心位于 `internal/compress`；原生工具执行、输出限制、超时与取消处理位于 `internal/jpegtools`、`internal/pngtools` 和 `internal/webptools`。JPEG 在已捆绑平台使用 MozJPEG（有损 `cjpeg` 渐进式 + Trellis 量化，无损 `jpegtran` 优化霍夫曼表与渐进扫描），其他平台回退至 Go 标准库 `image/jpeg`；PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
 
-批处理调度与保存位于 `batch_runner.go`，图片工作内存预算位于 `image_budget.go`；PNG/WebP 共用的原生工具缓存、完整性验证与原子释放逻辑位于 `internal/toolcache`。每次获取工具都重新核对 SHA-256 和完整权限位，拒绝 setuid/setgid/sticky 工具并重新释放；不能用 inode、大小和 mtime 代替内容验证；校验与执行之间仍有同一用户并发改写路径的剩余竞态。`internal/toolio` 提供共用的 32 KiB stderr 缓冲（超过上限继续排空）及按上限裁剪扩容容量的有界输出缓冲 `BoundedBuffer`。GitHub Actions 在 macOS ARM64 上执行竞态检测、Go 与 MyGo 静态检查、捆绑编码器验证和构建，并在 Linux / Windows 及多架构目标上验证跨平台编译与可运行测试；编码器的真实集成测试随 `go test -race ./...` 一起运行。
+批处理调度与保存位于 `batch_runner.go`，图片工作内存预算位于 `image_budget.go`；JPEG/PNG/WebP 共用的原生工具缓存、完整性验证与原子释放逻辑位于 `internal/toolcache`。每次获取工具都重新核对 SHA-256 和完整权限位，拒绝 setuid/setgid/sticky 工具并重新释放；不能用 inode、大小和 mtime 代替内容验证；校验与执行之间仍有同一用户并发改写路径的剩余竞态。`internal/toolio` 提供共用的 32 KiB stderr 缓冲（超过上限继续排空）及按上限裁剪扩容容量的有界输出缓冲 `BoundedBuffer`。GitHub Actions 在 macOS ARM64 上执行竞态检测、Go 与 MyGo 静态检查、捆绑编码器验证和构建，并在 Linux / Windows 及多架构目标上验证跨平台编译与可运行测试；编码器的真实集成测试随 `go test -race ./...` 一起运行。
 
 批量导入在单次扫描内缓存成功解析的父目录规范路径，复用前核对目录身份；目录别名改向或目录重命名后重新解析。每次导入独立建立缓存，文件本身的符号链接保留独立路径身份，文件列表的目录识别阶段也逐项检查取消。
 

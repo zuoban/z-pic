@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 func TestSingleCompressionPreviewMatchesOutput(t *testing.T) {
@@ -83,12 +85,22 @@ func TestSingleCompressionPreviewMatchesOutput(t *testing.T) {
 }
 
 func TestUnchangedCompressionRebuildsMissingSourcePreview(t *testing.T) {
+	img := image.NewGray(image.Rect(0, 0, 16, 24))
+	for y := range 24 {
+		for x := range 16 {
+			img.SetGray(x, y, color.Gray{Y: uint8((x*23 + y*31) % 256)})
+		}
+	}
 	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, image.NewGray(image.Rect(0, 0, 2, 3)), &jpeg.Options{Quality: 1}); err != nil {
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 10}); err != nil {
+		t.Fatal(err)
+	}
+	minimal, err := compress.Bytes(context.Background(), encoded.Bytes(), "tiny.jpg", compress.Options{Quality: 10})
+	if err != nil {
 		t.Fatal(err)
 	}
 	app := newApplication()
-	app.file = &selectedImage{path: "tiny.jpg", data: encoded.Bytes(), width: 2, height: 3}
+	app.file = &selectedImage{path: "tiny.jpg", data: minimal.Data, width: 16, height: 24}
 	app.quality = 100
 	updates := make(chan func(), 1)
 	app.dispatchUpdate = func(update func()) { updates <- update }
@@ -97,7 +109,7 @@ func TestUnchangedCompressionRebuildsMissingSourcePreview(t *testing.T) {
 	if app.failed || app.result == nil || !app.result.Unchanged || app.preview == nil {
 		t.Fatalf("unchanged result without a source bitmap needs a decoded fallback: %q", app.message)
 	}
-	if width, height := app.preview.Size(); width != 2 || height != 3 {
+	if width, height := app.preview.Size(); width != 16 || height != 24 {
 		t.Fatalf("fallback preview dimensions: %dx%d", width, height)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"os"
 	"path/filepath"
@@ -1330,17 +1331,27 @@ func TestSuggestedPathBoundsCollisionSearch(t *testing.T) {
 }
 
 func TestUnchangedPreviewReusesSourceBitmap(test *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := range 16 {
+		for x := range 16 {
+			img.SetRGBA(x, y, color.RGBA{R: uint8(x * 17), G: uint8(y * 17), B: uint8((x ^ y) * 16), A: 255})
+		}
+	}
 	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2)), &jpeg.Options{Quality: 10}); err != nil {
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 10}); err != nil {
 		test.Fatal(err)
 	}
 	dir := test.TempDir()
 	sourcePath := filepath.Join(dir, "tiny.jpg")
 	savedPath := filepath.Join(dir, "tiny-compressed.jpg")
-	if err := os.WriteFile(sourcePath, encoded.Bytes(), 0o600); err != nil {
+	minimal, err := compress.Bytes(context.Background(), encoded.Bytes(), sourcePath, compress.Options{Quality: 10})
+	if err != nil {
 		test.Fatal(err)
 	}
-	if err := os.WriteFile(savedPath, encoded.Bytes(), 0o600); err != nil {
+	if err := os.WriteFile(sourcePath, minimal.Data, 0o600); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(savedPath, minimal.Data, 0o600); err != nil {
 		test.Fatal(err)
 	}
 
@@ -1372,10 +1383,10 @@ func TestUnchangedPreviewReusesSourceBitmap(test *testing.T) {
 		absPath:      sourcePath,
 		relPath:      "tiny.jpg",
 		format:       "jpeg",
-		width:        2,
-		height:       2,
-		originalSize: int64(encoded.Len()),
-		outputSize:   int64(encoded.Len()),
+		width:        16,
+		height:       16,
+		originalSize: int64(len(minimal.Data)),
+		outputSize:   int64(len(minimal.Data)),
 		unchanged:    true,
 		savedPath:    savedPath,
 		status:       batchDone,

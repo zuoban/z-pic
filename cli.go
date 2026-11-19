@@ -316,7 +316,7 @@ func printCompressCLIHelp(w io.Writer) {
   -p, --preset <name>      使用已保存预设作为基础参数
       --settings <path>    指定设置 JSON 文件路径
   -q, --quality <1-100>    JPEG / WebP 质量并联动调整 PNG 量化参数
-      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 不二次压缩）
+      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 使用 MozJPEG 无损优化）
       --format <keep|webp> 输出格式（keep 保持原格式，webp 转为 WebP）
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip

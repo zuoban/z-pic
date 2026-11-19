@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"zpic/internal/jpegtools"
 )
 
 func syntheticRGBICC() []byte {
@@ -134,13 +136,88 @@ func TestJPEGMetadataResizeLosslessAndSkipSnapshot(t *testing.T) {
 	// Orientation 6 rotates raw 320x160 to upright 160x320.
 	data := makeJPEGWithICCAndOrient(t, img, icc, 6)
 
-	// 1. Lossless JPEG without resize retains exact original bytes.
+	// 1. Lossless JPEG without resize: optimizes losslessly via MozJPEG jpegtran
+	// when bundled (preserving exact decoded pixels, ICC, EXIF orientation, and
+	// upright dimensions), or retains exact original bytes on non-bundled targets.
 	losslessRes, err := Bytes(context.Background(), data, "/tmp/photo.jpg", Options{Quality: 80, Lossless: true})
 	if err != nil {
 		t.Fatalf("lossless JPEG failed: %v", err)
 	}
-	if !losslessRes.Unchanged || !bytes.Equal(losslessRes.Data, data) || losslessRes.Width != 160 || losslessRes.Height != 320 {
-		t.Fatalf("lossless JPEG must retain exact bytes and upright dimensions: unchanged=%v %dx%d", losslessRes.Unchanged, losslessRes.Width, losslessRes.Height)
+	if losslessRes.Width != 160 || losslessRes.Height != 320 {
+		t.Fatalf("lossless JPEG must preserve upright dimensions: %dx%d", losslessRes.Width, losslessRes.Height)
+	}
+	if jpegtools.Available() {
+		if losslessRes.Unchanged || losslessRes.OutputSize >= losslessRes.OriginalSize {
+			t.Fatalf("MozJPEG lossless must shrink baseline stdlib JPEG: orig=%d out=%d unchanged=%v",
+				losslessRes.OriginalSize, losslessRes.OutputSize, losslessRes.Unchanged)
+		}
+		if jpegOrientation(losslessRes.Data) != 6 {
+			t.Fatalf("lossless MetadataKeepAll must retain EXIF orientation 6, got %d", jpegOrientation(losslessRes.Data))
+		}
+		if segs, _ := jpegICCSegments(losslessRes.Data); len(segs) == 0 {
+			t.Fatal("lossless MetadataKeepAll must retain ICC profile")
+		}
+		origDecoded, err := jpeg.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		optDecoded, err := jpeg.Decode(bytes.NewReader(losslessRes.Data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertImagesEqual(t, origDecoded, optDecoded)
+
+		// Lossless + MetadataKeepICC bakes orientation 6 losslessly via jpegtran -perfect -rotate 90,
+		// keeps ICC, and strips EXIF while producing bit-for-bit identical upright pixels.
+		losslessICC, err := Bytes(context.Background(), data, "/tmp/photo.jpg", Options{
+			Quality:  80,
+			Lossless: true,
+			Metadata: MetadataKeepICC,
+		})
+		if err != nil {
+			t.Fatalf("lossless JPEG MetadataKeepICC failed: %v", err)
+		}
+		if losslessICC.Width != 160 || losslessICC.Height != 320 || jpegOrientation(losslessICC.Data) != 1 {
+			t.Fatalf("lossless MetadataKeepICC must bake upright orientation: %dx%d orient=%d",
+				losslessICC.Width, losslessICC.Height, jpegOrientation(losslessICC.Data))
+		}
+		if segs, _ := jpegICCSegments(losslessICC.Data); len(segs) == 0 {
+			t.Fatal("lossless MetadataKeepICC must preserve ICC profile")
+		}
+		bakedDecoded, err := jpeg.Decode(bytes.NewReader(losslessICC.Data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// DCT block transposition is mathematically lossless, while Go's separable
+		// fixed-point IDCT can differ by ±1 in Y/Cb/Cr when horizontal/vertical
+		// passes swap (up to ±2 after YCbCr->RGB chroma scaling).
+		assertImagesNear(t, normalizeOrientation(origDecoded, 6), bakedDecoded, 2)
+
+		// Lossless + MetadataStrip strips both EXIF and ICC while preserving upright pixels.
+		losslessStrip, err := Bytes(context.Background(), data, "/tmp/photo.jpg", Options{
+			Quality:  80,
+			Lossless: true,
+			Metadata: MetadataStrip,
+		})
+		if err != nil {
+			t.Fatalf("lossless JPEG MetadataStrip failed: %v", err)
+		}
+		if segs, _ := jpegICCSegments(losslessStrip.Data); len(segs) != 0 || jpegOrientation(losslessStrip.Data) != 1 {
+			t.Fatal("lossless MetadataStrip must drop ICC and EXIF")
+		}
+
+		// Non-MCU-aligned rotated JPEG cannot strip EXIF losslessly without edge loss.
+		oddImg := image.NewRGBA(image.Rect(0, 0, 163, 99))
+		oddData := makeJPEGWithICCAndOrient(t, oddImg, icc, 6)
+		if _, err := Bytes(context.Background(), oddData, "/tmp/odd.jpg", Options{
+			Quality:  80,
+			Lossless: true,
+			Metadata: MetadataStrip,
+		}); err == nil {
+			t.Fatal("expected error for lossless EXIF strip on non-MCU-aligned rotated JPEG")
+		}
+	} else if !losslessRes.Unchanged || !bytes.Equal(losslessRes.Data, data) {
+		t.Fatalf("lossless JPEG without bundled MozJPEG must retain exact bytes: unchanged=%v", losslessRes.Unchanged)
 	}
 
 	// 2. MetadataKeepICC keeps ICC after APP0 JFIF; MetadataStrip drops ICC.
@@ -344,5 +421,36 @@ func TestNativeLosslessMetadataConvertAndResize(t *testing.T) {
 	}
 	if !pngHasChunk(pngResized.Data, "iCCP") {
 		t.Fatal("resized PNG with MetadataKeepICC must preserve iCCP")
+	}
+}
+
+func assertImagesEqual(t *testing.T, want, got image.Image) {
+	t.Helper()
+	assertImagesNear(t, want, got, 0)
+}
+
+func assertImagesNear(t *testing.T, want, got image.Image, maxDiff8 uint8) {
+	t.Helper()
+	wb, gb := want.Bounds(), got.Bounds()
+	if wb.Dx() != gb.Dx() || wb.Dy() != gb.Dy() {
+		t.Fatalf("image dimensions mismatch: got %dx%d want %dx%d", gb.Dx(), gb.Dy(), wb.Dx(), wb.Dy())
+	}
+	diff := func(a, b uint32) uint32 {
+		a8, b8 := a>>8, b>>8
+		if a8 > b8 {
+			return a8 - b8
+		}
+		return b8 - a8
+	}
+	limit := uint32(maxDiff8)
+	for y := 0; y < wb.Dy(); y++ {
+		for x := 0; x < wb.Dx(); x++ {
+			r1, g1, b1, a1 := want.At(wb.Min.X+x, wb.Min.Y+y).RGBA()
+			r2, g2, b2, a2 := got.At(gb.Min.X+x, gb.Min.Y+y).RGBA()
+			if diff(r1, r2) > limit || diff(g1, g2) > limit || diff(b1, b2) > limit || diff(a1, a2) > limit {
+				t.Fatalf("pixel mismatch at (%d,%d): got (%d,%d,%d,%d) want (%d,%d,%d,%d) (tol=%d)",
+					x, y, r2>>8, g2>>8, b2>>8, a2>>8, r1>>8, g1>>8, b1>>8, a1>>8, maxDiff8)
+			}
+		}
 	}
 }

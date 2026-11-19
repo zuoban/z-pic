@@ -1,0 +1,32 @@
+{
+  "version": "4.1.5",
+  "source_url": "https://github.com/mozilla/mozjpeg/archive/refs/tags/v4.1.5.tar.gz",
+  "source_sha256": "9fcbb7171f6ac383f5b391175d6fb3acde5e64c4c4727274eade84ed0998fcc1",
+  "binaries": {
+    "cjpeg": {
+      "sha256": "65ab9c401e1a1c6c3fc00e82f0ef13b085a772b443f311dd510851bfe1c41ce2",
+      "size": 560896
+    },
+    "jpegtran": {
+      "sha256": "aa2538aa96d5dbc2903c48ecefc3e8aef5fdf555d4885ee6e21d2496d307fad7",
+      "size": 361072
+    }
+  },
+  "cmake_flags": [
+    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_OSX_ARCHITECTURES=arm64",
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
+    "-DENABLE_SHARED=OFF",
+    "-DENABLE_STATIC=ON",
+    "-DWITH_TURBOJPEG=OFF",
+    "-DWITH_JAVA=OFF",
+    "-DPNG_SUPPORTED=OFF",
+    "-DWITH_SIMD=ON",
+    "-DREQUIRE_SIMD=ON"
+  ],
+  "cflags": "-O2 -arch arm64 -mmacosx-version-min=11.0",
+  "ldflags": "-arch arm64 -mmacosx-version-min=11.0",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "sdk": "27.0"
+}

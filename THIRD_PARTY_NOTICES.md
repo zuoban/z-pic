@@ -10,6 +10,7 @@ temporarily at runtime. No commercial pngquant license is included.
 | pngquant | 3.0.3 | GPL-3.0-or-later; includes original permissive notices | `licenses/pngquant-COPYRIGHT.txt` |
 | libimagequant | pngquant's pinned submodule (`6e980576…`) | GPL-3.0-or-later | `licenses/libimagequant-COPYRIGHT.txt` |
 | libwebp / cwebp | 1.6.0 | BSD-3-Clause and upstream patent grant | `licenses/libwebp-COPYING`, `licenses/libwebp-PATENTS`, `licenses/libwebp-AUTHORS` |
+| MozJPEG (cjpeg / jpegtran) | 4.1.5 | IJG / Modified 3-Clause BSD / zlib | `licenses/mozjpeg-LICENSE.md`, `licenses/mozjpeg-README.ijg`, `licenses/mozjpeg-README-mozilla.txt` |
 | Rust runtime / standard library | Rust 1.96.0 build | MIT / Apache-2.0 and bundled notices | `licenses/rust-*` |
 | Transitive Rust and native dependencies | frozen Cargo.lock versions | See dependency licenses | `licenses/pngtools-dependency-licenses.txt` and repository source archive |
 
@@ -55,3 +56,24 @@ are required. `scripts/prepare-webptools.sh` rebuilds it offline and
 `scripts/WEBPTOOLS.md` records flags and verification. Asset hashes, compiler,
 SDK and build flags are recorded in
 `internal/webptools/assets/darwin_arm64/manifest.json`.
+
+## MozJPEG tools
+
+The separately embedded `cjpeg` and `jpegtran` executables are built from
+MozJPEG 4.1.5, upstream tag `v4.1.5`:
+https://github.com/mozilla/mozjpeg/archive/refs/tags/v4.1.5.tar.gz
+
+Its unmodified official source archive is tracked in the repository at
+`scripts/sources/mozjpeg-4.1.5.tar.gz`.
+Source SHA-256: `9fcbb7171f6ac383f5b391175d6fb3acde5e64c4c4727274eade84ed0998fcc1`.
+The value is a locally computed digest of that download, not an upstream signed
+checksum. Full upstream license and attribution notices are included in
+`licenses/mozjpeg-LICENSE.md`, `licenses/mozjpeg-README.ijg`, and
+`licenses/mozjpeg-README-mozilla.txt`.
+
+The darwin/arm64 executables statically link libjpeg-turbo/MozJPEG with NEON
+SIMD enabled and optional PNG/TurboJPEG/Java support disabled. Only system
+dynamic libraries are required. `scripts/prepare-jpegtools.sh` rebuilds them
+offline and `scripts/JPEGTOOLS.md` records flags and verification. Asset hashes,
+compiler, SDK and CMake flags are recorded in
+`internal/jpegtools/assets/darwin_arm64/manifest.json`.

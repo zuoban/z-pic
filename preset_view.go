@@ -250,7 +250,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			ui.Box(c).Grow(1)
 			if ui.Checkbox(c.Key("preset-lossless"), &preset.lossless, "无损").
 				FontSize(settingsFontSize(c, 12)).Disabled(locked).
-				Tooltip("PNG 仅执行 Oxipng 无损优化，WebP 使用无损编码，JPEG 保持原样").Changed() {
+				Tooltip("PNG 仅执行 Oxipng 无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化").Changed() {
 				s.editor.message = ""
 			}
 			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
@@ -260,7 +260,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 		description := fmt.Sprintf("JPEG / WebP 质量 %.0f；PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", preset.quality,
 			preset.png.MinQuality, preset.png.MaxQuality, preset.png.Colors)
 		if preset.lossless {
-			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，JPEG 未缩放且保持原格式时不二次压缩。"
+			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化霍夫曼表与渐进扫描。"
 		} else if presetQualityLabel(*preset) == "自定义质量" {
 			description = "已保留自定义参数；调整滑块后将使用对应档位。" + description
 		}
@@ -302,7 +302,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			s.editQualityLevel(int(math.Round(value)))
 		}
 		if preset.lossless {
-			ui.Text(c, "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码；JPEG 保持原样不二次有损编码。").
+			ui.Text(c, "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化。").
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		} else {
 			ui.Row(c).Children(func() {

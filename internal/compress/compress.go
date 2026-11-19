@@ -19,6 +19,7 @@ import (
 
 	"zpic/internal/contextio"
 	"zpic/internal/imageinput"
+	"zpic/internal/jpegtools"
 	"zpic/internal/pngtools"
 	"zpic/internal/webptools"
 )
@@ -31,7 +32,7 @@ const (
 type Options struct {
 	Quality               int // JPEG and WebP quality in [1, 100].
 	PNG                   PNGOptions
-	Lossless              bool           // PNG: Oxipng only; WebP: cwebp -lossless; JPEG: retain original unless resized/converted.
+	Lossless              bool           // PNG: Oxipng only; WebP: cwebp -lossless; JPEG: MozJPEG jpegtran lossless optimization (retains original if not bundled).
 	Metadata              MetadataPolicy // "", "icc", or "strip".
 	OutputFormat          OutputFormat   // "" (preserve) or "webp".
 	MaxDimension          int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
@@ -325,7 +326,45 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				}
 				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 			}
-			encoded = data
+			if jpegtools.Available() {
+				mustStrip := options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
+				orientTransform := 0
+				if sourceOrient > 1 && options.Metadata != MetadataKeepAll {
+					orientTransform = sourceOrient
+				}
+				var optimized []byte
+				optimized, err = jpegtools.OptimizeLossless(ctx, data, jpegtools.OptimizeOptions{
+					Copy:        jpegCopyMode(options.Metadata),
+					Orientation: orientTransform,
+					Perfect:     orientTransform > 1,
+					SmallerOnly: !mustStrip,
+				})
+				if err != nil {
+					if errors.Is(err, jpegtools.ErrImperfectTransform) {
+						return nil, fmt.Errorf("无损模式下该旋转 JPEG 的边长未对齐 MCU 块，无法无损移除 EXIF 方向；请保留全部元数据或关闭无损模式")
+					}
+				} else if mustStrip || len(optimized) < len(data) {
+					outCfg, outFmt, cfgErr := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(optimized)))
+					if cfgErr != nil || outFmt != "jpeg" {
+						err = fmt.Errorf("MozJPEG 输出无效：%v", cfgErr)
+					} else {
+						outW, outH := outCfg.Width, outCfg.Height
+						if outOrient := jpegOrientation(optimized); outOrient >= 5 && outOrient <= 8 {
+							outW, outH = outH, outW
+						}
+						if outW != width || outH != height {
+							err = fmt.Errorf("MozJPEG 输出尺寸异常（%dx%d != %dx%d）", outW, outH, width, height)
+						} else {
+							encoded = optimized
+							forcedOutput = mustStrip
+						}
+					}
+				} else {
+					encoded = data
+				}
+			} else {
+				encoded = data
+			}
 		} else {
 			img, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
 			if cancelErr := ctx.Err(); cancelErr != nil {
@@ -365,23 +404,59 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				stopOnDiscard = false
 				forcedOutput = true
 			}
-			output := jpegOutput{ctx: ctx, limit: limit, stopOnDiscard: stopOnDiscard}
-			if output.limit <= 2 {
-				output.discarded = true
-			} else {
-				err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
-				if errors.Is(err, errJPEGNoSavings) {
-					err = nil
-				}
-			}
-			if err == nil {
-				if output.discarded {
+			if jpegtools.Available() {
+				if limit <= 2 {
 					if needsResize || mustStrip {
 						return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
 					}
 					encoded = data
 				} else {
-					encoded = injectJPEGICCSegments(output.buf.Bytes(), iccSegments, iccBytes)
+					maxOut := 0
+					if stopOnDiscard {
+						maxOut = limit
+					}
+					var rawOut []byte
+					rawOut, err = jpegtools.EncodeImage(ctx, img, jpegtools.EncodeOptions{
+						Quality:        options.Quality,
+						MaxOutputBytes: maxOut,
+					})
+					if errors.Is(err, jpegtools.ErrNoSavings) {
+						err = nil
+						encoded = data
+					} else if err == nil {
+						if len(rawOut)+iccBytes > maxInputSize {
+							if needsResize || mustStrip {
+								return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
+							}
+							encoded = data
+						} else if outCfg, outFmt, cfgErr := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(rawOut))); cfgErr != nil || outFmt != "jpeg" {
+							err = fmt.Errorf("MozJPEG 输出无效：%v", cfgErr)
+						} else if outCfg.Width != width || outCfg.Height != height {
+							err = fmt.Errorf("MozJPEG 输出尺寸异常（%dx%d != %dx%d）", outCfg.Width, outCfg.Height, width, height)
+						} else {
+							encoded = injectJPEGICCSegments(rawOut, iccSegments, iccBytes)
+						}
+					}
+				}
+			} else {
+				output := jpegOutput{ctx: ctx, limit: limit, stopOnDiscard: stopOnDiscard}
+				if output.limit <= 2 {
+					output.discarded = true
+				} else {
+					err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
+					if errors.Is(err, errJPEGNoSavings) {
+						err = nil
+					}
+				}
+				if err == nil {
+					if output.discarded {
+						if needsResize || mustStrip {
+							return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
+						}
+						encoded = data
+					} else {
+						encoded = injectJPEGICCSegments(output.buf.Bytes(), iccSegments, iccBytes)
+					}
 				}
 			}
 		}
@@ -467,6 +542,17 @@ func webpMetadataMode(policy MetadataPolicy) webptools.MetadataMode {
 		return webptools.MetadataNone
 	default:
 		return webptools.MetadataAll
+	}
+}
+
+func jpegCopyMode(policy MetadataPolicy) jpegtools.CopyMode {
+	switch policy {
+	case MetadataKeepICC:
+		return jpegtools.CopyICC
+	case MetadataStrip:
+		return jpegtools.CopyNone
+	default:
+		return jpegtools.CopyAll
 	}
 }
 
