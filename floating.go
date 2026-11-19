@@ -139,7 +139,7 @@ func (s *application) openDownloadedImagesDir() {
 }
 
 func (s *application) receiveDrop(data transfer.Data) {
-	if s.closed {
+	if s.closed || s.draggingOut {
 		return
 	}
 	if len(s.dropQueue) >= maxPendingDrops {
@@ -396,6 +396,29 @@ func (s *application) recordDownloadedURLs(saved map[string]string) {
 		}
 		s.downloadedURLOrder = slices.Clone(s.downloadedURLOrder[excess:])
 	}
+}
+
+func (s *application) pruneDownloadedURLPaths(removed map[string]bool) {
+	if len(removed) == 0 || len(s.downloadedURLs) == 0 {
+		return
+	}
+	kept := make([]string, 0, len(s.downloadedURLOrder))
+	for _, rawURL := range s.downloadedURLOrder {
+		path, ok := s.downloadedURLs[rawURL]
+		if !ok {
+			continue
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = path
+		}
+		if removed[abs] || removed[path] {
+			delete(s.downloadedURLs, rawURL)
+			continue
+		}
+		kept = append(kept, rawURL)
+	}
+	s.downloadedURLOrder = kept
 }
 
 func (s *application) floatingStatus() (string, bool) {

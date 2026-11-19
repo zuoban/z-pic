@@ -9,5 +9,25 @@
   "resources": [
     "THIRD_PARTY_NOTICES.md",
     "licenses"
+  ],
+  "fileAssociations": [
+    {
+      "ext": ["jpg", "jpeg"],
+      "name": "JPEG Image",
+      "mimeType": "image/jpeg",
+      "role": "Editor"
+    },
+    {
+      "ext": ["png"],
+      "name": "PNG Image",
+      "mimeType": "image/png",
+      "role": "Editor"
+    },
+    {
+      "ext": ["webp"],
+      "name": "WebP Image",
+      "mimeType": "image/webp",
+      "role": "Editor"
+    }
   ]
 }

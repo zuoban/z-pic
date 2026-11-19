@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
@@ -473,6 +474,22 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 				quietButton(c, "batch-copy-item", "复制", 32, !s.canCopyBatchItem(item)).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
+				dragItem := ui.Row(c.Key("batch-drag-item")).Height(32).Padding(0, 10).Gap(4).
+					AlignItems(ui.Center).Radius(innerRadius(c)).
+					Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+					Label("拖出图片").Tooltip("按住将此压缩输出文件拖到 Finder 或其他应用").
+					Disabled(s.modalOpen())
+				if !s.modalOpen() {
+					idx := selected
+					dragItem.DragDataFrom(func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
+					if dragItem.Hovered() {
+						dragItem.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+					}
+				}
+				dragItem.Children(func() {
+					ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
+					ui.Text(c, "拖出").FontSize(13).TextColor(t.Text).SingleLine()
+				})
 			}
 			quietButton(c, "batch-preview", "预览", 32, s.modalOpen() || item.invalidInput).
 				Tooltip("查看或对比选中图片").
@@ -585,6 +602,22 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 							quietButton(c, "batch-preview-reveal", "定位文件", 32, s.modalOpen()).
 								Tooltip("在文件夹中显示输出文件").
 								OnClick(func() { s.revealFileInFolder(outPath) })
+							dragItem := ui.Row(c.Key("batch-preview-drag")).Height(32).Padding(0, 10).Gap(4).
+								AlignItems(ui.Center).Radius(innerRadius(c)).
+								Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+								Label("拖出图片").Tooltip("按住将此压缩输出文件拖到 Finder 或其他应用").
+								Disabled(s.modalOpen())
+							if !s.modalOpen() {
+								idx := previewIdx
+								dragItem.DragDataFrom(func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
+								if dragItem.Hovered() {
+									dragItem.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+								}
+							}
+							dragItem.Children(func() {
+								ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
+								ui.Text(c, "拖出").FontSize(13).TextColor(t.Text).SingleLine()
+							})
 						}
 						quietButton(c, "batch-preview-remove", "移除", 32, s.modalOpen()).
 							Tooltip("从批量队列移除此图片").
@@ -629,6 +662,22 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 	if showOutput {
 		primaryAction(c, "batch-open-output", "打开输出文件夹", s.modalOpen()).Height(36).
 			OnClick(s.openOutputDir)
+	}
+	if !s.batch.previewOpen && !s.modalOpen() {
+		if donePaths := s.batchDoneOutputPaths(); len(donePaths) > 0 {
+			label := fmt.Sprintf("拖出已完成（%d 张）", len(donePaths))
+			dragChip := ui.Row(c.Key("drag-out-batch")).FillWidth().Height(30).Padding(0, 10).Gap(6).
+				Center().Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+				Label(label).Tooltip("按住将全部已完成的压缩文件直接拖到 Finder 或其他应用").
+				DragDataFrom(s.batchAllDoneDragExportData, s.dragExportOptions())
+			if dragChip.Hovered() {
+				dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			}
+			dragChip.Children(func() {
+				ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
+				ui.Text(c, label).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(t.TextMuted).SingleLine()
+			})
+		}
 	}
 	if s.batch.previewOpen && s.result != nil {
 		quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
@@ -682,8 +731,15 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			outputFilenamePreviewForFormat(c, s.output, name, s.outputFormat, false)
 		} else {
 			warning := "缩小后的文件将直接替换原图，未减小则跳过，无法撤销。"
+			if s.backupToTrash {
+				warning = "缩小后的文件会先将原图移入废纸篓再替换，未减小则跳过。"
+			}
 			if s.outputFormat == compress.OutputFormatWebP {
-				warning = "原 WebP 缩小后将直接替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+				if s.backupToTrash {
+					warning = "原 WebP 缩小后会先移入废纸篓再替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+				} else {
+					warning = "原 WebP 缩小后将直接替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+				}
 			}
 			ui.Text(c, warning).
 				FontSize(12).TextColor(t.Danger).MaxLines(2)
@@ -769,6 +825,9 @@ func (s *application) batchOverwriteConfirmation(c *ui.Context) {
 	mode, index := s.effectivePendingBatchRun()
 	targetCount := s.batchRunTargetCount(mode, index)
 	message := fmt.Sprintf("将压缩 %d 张图片；体积减小的文件会直接替换原文件，未减小的文件将保持不变。\n\n覆盖后无法通过本工具恢复原文件。", targetCount)
+	if s.backupToTrash {
+		message = fmt.Sprintf("将压缩 %d 张图片；体积减小的文件会先将原件移入废纸篓，再替换为压缩结果，未减小的文件将保持不变。", targetCount)
+	}
 	if ui.AlertDialog(c.Key("batch-overwrite-confirmation"), &s.confirmBatchOverwrite,
 		"确认批量覆盖原图？", message, "覆盖原图", "取消") == 0 {
 		s.executeConfirmedBatchOverwrite()

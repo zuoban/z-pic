@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
-
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -53,6 +53,7 @@ type application struct {
 	outputFormat   compress.OutputFormat
 	maxDimension   int
 	autoCompress   bool
+	backupToTrash  bool
 	output         presetSaveOptions
 	settingsOpen   bool
 	settingsFile   string
@@ -85,6 +86,8 @@ type application struct {
 	lastSavedPath         string
 	dispatchUpdate        func(func())
 	showInFolder          func(string)
+	trashItem             func(string) error
+	previewItem           func(string) error
 	applyNativeTheme      func(mygo.ThemeSource)
 	writeClipboardImage   func([]byte) error
 	readClipboardImages   func() (transfer.Data, error)
@@ -106,6 +109,10 @@ type application struct {
 	downloadedURLs        map[string]string
 	downloadedURLOrder    []string
 	dropTransport         *http.Transport
+	draggingOut           bool
+	dragTempDir           string
+	dragStagedResult      *compress.Result
+	dragStagedPath        string
 }
 
 func newApplication() *application {
@@ -208,16 +215,26 @@ func fileDropData(paths []string) (transfer.Data, bool) {
 }
 
 func (s *application) dropFiles(paths []string) {
-	if s.closed || s.dialogOpen() || len(paths) == 0 {
+	if s.closed || s.dialogOpen() || s.draggingOut || len(paths) == 0 {
+		return
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if s.isDragStagedPath(path) {
+			continue
+		}
+		filtered = append(filtered, path)
+	}
+	if len(filtered) == 0 {
 		return
 	}
 	if s.busy || len(s.dropQueue) > 0 {
-		if data, ok := fileDropData(paths); ok {
+		if data, ok := fileDropData(filtered); ok {
 			s.receiveDrop(data)
 		}
 		return
 	}
-	s.openPaths(paths)
+	s.openPaths(filtered)
 }
 
 func (s *application) shouldOpenAsBatch(paths []string) bool {
@@ -564,23 +581,39 @@ func (s *application) requestOverwrite() {
 
 // The confirmation invokes this on the UI thread. Started writes participate
 // in the same shutdown wait as saving a separate copy.
+func (s *application) overwriteBackupFunc() func(string) error {
+	if !s.backupToTrash {
+		return nil
+	}
+	if s.trashItem != nil {
+		return s.trashItem
+	}
+	return mygo.Shell.TrashItem
+}
+
 func (s *application) overwriteOriginal() {
 	if !s.canOverwrite() {
 		return
 	}
 	result := s.result
+	backup := s.overwriteBackupFunc()
+	backedUp := backup != nil
 	s.confirmOverwrite = false
 	s.busy, s.phase = true, "正在覆盖原图"
 	s.setMessage("", false)
 	s.saves.Add(1)
 	go func() {
 		defer s.saves.Done()
-		err := result.Overwrite()
-		s.update(func() { s.completeOverwrite(result, err) })
+		err := result.OverwriteWithBackup(backup)
+		s.update(func() { s.completeOverwriteWithBackup(result, backedUp, err) })
 	}()
 }
 
 func (s *application) completeOverwrite(result *compress.Result, err error) {
+	s.completeOverwriteWithBackup(result, false, err)
+}
+
+func (s *application) completeOverwriteWithBackup(result *compress.Result, backedUp bool, err error) {
 	s.busy, s.phase = false, ""
 	if err != nil {
 		s.lastSavedPath = ""
@@ -596,9 +629,66 @@ func (s *application) completeOverwrite(result *compress.Result, err error) {
 	s.overwritten = true
 	s.lastSavedPath = s.file.path
 	s.comparison.mode = previewResult
+	if backedUp {
+		s.setMessage("已覆盖原图（原件已移入废纸篓）："+s.file.path, false)
+		return
+	}
 	s.setMessage("已覆盖原图："+s.file.path, false)
 }
 
+func (s *application) supportsQuickLook() bool {
+	return s.previewItem != nil || runtime.GOOS == "darwin"
+}
+
+func (s *application) quickLookPath() string {
+	if s.modalOpen() {
+		return ""
+	}
+	if s.batch != nil {
+		index := s.batch.selected
+		if s.batch.previewOpen {
+			index = s.batch.previewIndex
+		}
+		if index < 0 || index >= len(s.batch.items) {
+			return ""
+		}
+		item := s.batch.items[index]
+		if outPath := batchItemOutputPath(item); outPath != "" {
+			return outPath
+		}
+		return item.path
+	}
+	if s.lastSavedPath != "" {
+		if _, err := os.Lstat(s.lastSavedPath); err == nil {
+			return s.lastSavedPath
+		}
+	}
+	if s.file != nil {
+		return s.file.path
+	}
+	return ""
+}
+
+func (s *application) quickLookCurrent() {
+	s.previewInQuickLook(s.quickLookPath())
+}
+
+func (s *application) previewInQuickLook(path string) {
+	if path == "" || s.modalOpen() || !s.supportsQuickLook() {
+		return
+	}
+	if _, err := os.Lstat(path); err != nil {
+		s.setMessage("找不到要预览的文件："+path, true)
+		return
+	}
+	preview := s.previewItem
+	if preview == nil {
+		preview = mygo.Shell.PreviewItem
+	}
+	if err := preview(path); err != nil && !errors.Is(err, errors.ErrUnsupported) {
+		s.setMessage("无法打开快速预览："+err.Error(), true)
+	}
+}
 func (s *application) revealFileInFolder(path string) {
 	if path == "" || s.modalOpen() {
 		return

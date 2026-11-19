@@ -590,8 +590,8 @@ func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map
 	options := s.compressionOptions()
 	outputMode := s.batch.outputMode
 	outputDir := s.batch.outputDir
+	backup := s.overwriteBackupFunc()
 	ctx, cancel := context.WithCancel(context.Background())
-	s.batch.done = 0
 	s.batch.total = len(tasks)
 	s.batch.running = true
 	s.batch.currentName = ""
@@ -602,7 +602,7 @@ func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map
 	s.saves.Add(1)
 	go func() {
 		defer s.saves.Done()
-		s.runBatchTasks(ctx, tasks, options, outputMode, outputDir, usedPaths, s.update)
+		s.runBatchTasksWithBackup(ctx, tasks, options, outputMode, outputDir, usedPaths, backup, s.update)
 		s.update(func() {
 			defer cancel()
 			s.completeBatchRun(ctx)

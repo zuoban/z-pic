@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
-
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
@@ -71,10 +71,13 @@ type settingsEditor struct {
 	section       settingsSection
 	theme         themeMode
 	autoCompress  bool
+	backupToTrash bool
+	downloadDir   string
 	presets       []compressionPreset
 	selected      int
 	active        int
 	message       string
+	notice        string
 	confirmDelete bool
 	focusField    string
 	selectName    bool
@@ -116,6 +119,8 @@ func (s *application) settingsHaveChanges() bool {
 	e := s.editor
 	return e != nil && (e.theme.normalized() != s.effectiveThemeMode() ||
 		e.autoCompress != s.autoCompress ||
+		e.backupToTrash != s.backupToTrash ||
+		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) ||
 		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme)
 }
 
@@ -138,6 +143,8 @@ func (s *application) restoreSettings() {
 	s.presets = cfg.presets
 	s.batchOutputDir = usableBatchOutputDir(cfg.batchOutputDir)
 	s.autoCompress = cfg.autoCompress
+	s.backupToTrash = cfg.backupToTrash
+	s.downloadDir = normalizeDownloadDir(cfg.downloadDir)
 	s.syncTheme(cfg.theme)
 	s.applyScheme(cfg.selected)
 }
@@ -170,9 +177,11 @@ func (s *application) setSettingsOpen(open bool) {
 		}
 	}
 	s.editor = &settingsEditor{
-		theme:        s.effectiveThemeMode(),
-		autoCompress: s.autoCompress,
-		presets:      slices.Clone(s.presets), selected: active, active: active,
+		theme:         s.effectiveThemeMode(),
+		autoCompress:  s.autoCompress,
+		backupToTrash: s.backupToTrash,
+		downloadDir:   s.downloadDir,
+		presets:       slices.Clone(s.presets), selected: active, active: active,
 		message: s.settingsError,
 	}
 	if s.window == nil {
@@ -370,6 +379,13 @@ func (s *application) saveSettingsEdits() {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
+	downloadDir := normalizeDownloadDir(s.editor.downloadDir)
+	if err := validateDownloadDir(downloadDir); err != nil {
+		s.editor.section = settingsGeneral
+		s.editor.message = "无法保存设置：" + err.Error()
+		s.editor.notice = ""
+		return
+	}
 	if s.settingsFile == "" {
 		path, err := settingsFilePath()
 		if err != nil {
@@ -378,12 +394,14 @@ func (s *application) saveSettingsEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress); err != nil {
+	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, downloadDir); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
 	s.presets = presets
 	s.autoCompress = s.editor.autoCompress
+	s.backupToTrash = s.editor.backupToTrash
+	s.downloadDir = downloadDir
 	if s.settingsError != "" {
 		s.setMessage("设置已保存。", false)
 	}
@@ -394,16 +412,18 @@ func (s *application) saveSettingsEdits() {
 }
 
 func (s *application) saveCurrentSettings(presets []compressionPreset, selected, batchOutputDir string, theme themeMode) error {
-	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress)
+	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress, s.backupToTrash, s.downloadDir)
 }
 
-func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress bool) error {
+func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress, backupToTrash bool, downloadDir string) error {
 	return saveFullSettings(s.settingsFile, appSettings{
 		presets:        presets,
 		selected:       selected,
 		batchOutputDir: usableBatchOutputDir(batchOutputDir),
 		theme:          theme,
 		autoCompress:   autoCompress,
+		backupToTrash:  backupToTrash,
+		downloadDir:    normalizeDownloadDir(downloadDir),
 	})
 }
 
@@ -440,4 +460,197 @@ func (s *application) rememberBatchOutputDir(dir string) {
 		return
 	}
 	_ = s.saveCurrentSettings(s.presets, s.scheme, s.batchOutputDir, s.effectiveThemeMode())
+}
+
+func (s *application) chooseDownloadDirectory() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor, parent := s.editor, s.settingsWindow
+	defaultPath := editor.downloadDir
+	if defaultPath == "" {
+		if dir, err := s.downloadedImagesDir(); err == nil {
+			defaultPath = dir
+		}
+	}
+	s.busy = true
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: parent, Title: "选择网页图片下载目录", ButtonLabel: "选择此文件夹",
+			DefaultPath: defaultPath, Directory: true, CreateDirectories: true,
+		})
+		s.update(func() {
+			s.busy = false
+			if s.editor != editor {
+				return
+			}
+			if err != nil {
+				editor.message = "无法选择下载目录：" + err.Error()
+				editor.notice = ""
+			} else if len(paths) != 0 {
+				editor.downloadDir = normalizeDownloadDir(paths[0])
+				editor.message, editor.notice = "", ""
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *application) resetDownloadDirectory() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	s.editor.downloadDir = ""
+	s.editor.message, s.editor.notice = "", ""
+}
+
+func (s *application) activeImagePaths() map[string]bool {
+	active := make(map[string]bool)
+	record := func(path string) {
+		if path == "" {
+			return
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			active[abs] = true
+		}
+		active[path] = true
+	}
+	if s.file != nil {
+		record(s.file.path)
+	}
+	record(s.lastSavedPath)
+	if s.batch != nil {
+		for _, item := range s.batch.items {
+			record(item.path)
+			record(item.absPath)
+			record(item.savedPath)
+		}
+	}
+	return active
+}
+
+func isCleanableDownloadImage(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
+type downloadCleanupReport struct {
+	trashed  int
+	tempGone int
+	skipped  int
+	removed  map[string]bool
+}
+
+func cleanupDownloadDirFiles(dir string, active map[string]bool, trash func(string) error) (downloadCleanupReport, error) {
+	var report downloadCleanupReport
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return report, nil
+		}
+		return report, err
+	}
+	report.removed = make(map[string]bool)
+	for _, entry := range entries {
+		name := entry.Name()
+		full := filepath.Join(dir, name)
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		abs, err := filepath.Abs(full)
+		if err != nil {
+			abs = full
+		}
+		if active[abs] || active[full] {
+			if isCleanableDownloadImage(name) {
+				report.skipped++
+			}
+			continue
+		}
+		if strings.HasPrefix(name, ".zpic-drop-") {
+			if err := os.Remove(full); err == nil {
+				report.tempGone++
+			}
+			continue
+		}
+		if !isCleanableDownloadImage(name) {
+			continue
+		}
+		if err := trash(full); err != nil {
+			return report, err
+		}
+		report.trashed++
+		report.removed[abs] = true
+	}
+	return report, nil
+}
+
+func (s *application) effectiveEditorDownloadDir() (string, error) {
+	if s.editor != nil && s.editor.downloadDir != "" {
+		return normalizeDownloadDir(s.editor.downloadDir), nil
+	}
+	return s.downloadedImagesDir()
+}
+
+func (s *application) cleanupDownloadedImages() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor := s.editor
+	dir, err := s.effectiveEditorDownloadDir()
+	if err != nil {
+		editor.message = "无法定位下载目录：" + err.Error()
+		editor.notice = ""
+		return
+	}
+	active := s.activeImagePaths()
+	trash := s.trashItem
+	if trash == nil {
+		trash = mygo.Shell.TrashItem
+	}
+	s.busy = true
+	s.saves.Add(1)
+	go func() {
+		defer s.saves.Done()
+		report, cleanupErr := cleanupDownloadDirFiles(dir, active, trash)
+		s.update(func() {
+			s.busy = false
+			s.pruneDownloadedURLPaths(report.removed)
+			if s.editor != editor {
+				return
+			}
+			if cleanupErr != nil {
+				if report.trashed > 0 {
+					editor.message = fmt.Sprintf("已移入废纸篓 %d 张，但清理中断：%v", report.trashed, cleanupErr)
+				} else {
+					editor.message = "清理下载目录失败：" + cleanupErr.Error()
+				}
+				editor.notice = ""
+			} else {
+				editor.message = ""
+				switch {
+				case report.trashed > 0 && report.skipped > 0:
+					editor.notice = fmt.Sprintf("已将 %d 张下载图片移入废纸篓，保留 %d 张队列中的图片", report.trashed, report.skipped)
+				case report.trashed > 0:
+					editor.notice = fmt.Sprintf("已将 %d 张下载图片移入废纸篓", report.trashed)
+				case report.tempGone > 0:
+					editor.notice = fmt.Sprintf("已清理 %d 个临时下载文件", report.tempGone)
+				case report.skipped > 0:
+					editor.notice = fmt.Sprintf("没有可清理的闲置图片（保留 %d 张队列中的图片）", report.skipped)
+				default:
+					editor.notice = "下载目录中没有可清理的图片"
+				}
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
 }

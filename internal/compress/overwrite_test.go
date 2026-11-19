@@ -77,7 +77,7 @@ func TestOverwriteJPEGFileAndBytes(t *testing.T) {
 					t.Fatalf("special mode bits leaked onto overwritten output: %v", after.Mode())
 				}
 			}
-			if os.SameFile(before, after) {
+			if runtime.GOOS != "windows" && os.SameFile(before, after) {
 				t.Fatal("source was not replaced with a new file")
 			}
 			img, err := jpeg.Decode(bytes.NewReader(result.Data))
@@ -344,7 +344,7 @@ func TestOverwriteFinalCheckCleansStagedOutput(t *testing.T) {
 			// Exercise the actual write/Sync/close/recheck transaction with an
 			// earlier observation, without introducing a timing-dependent race
 			// or a production callback to mutate the source during Overwrite.
-			if err := replaceOverwriteSource(path, result.Data, result.snapshot, source); err == nil {
+			if err := replaceOverwriteSource(path, result.Data, result.snapshot, source, nil); err == nil {
 				t.Fatal("final source check accepted a changed identity/content")
 			}
 			if change == "deleted" {
@@ -384,4 +384,62 @@ func TestOverwritePNG(t *testing.T) {
 	assertOverwriteFile(t, path, result.Data)
 	assertPNGResult(t, result, data, 320, 192)
 	assertNoOverwriteTemps(t, filepath.Dir(path))
+}
+
+func TestOverwriteWithBackupMovesOriginalBeforeReplacing(t *testing.T) {
+	data := jpegFixture(t, 100)
+	path := writeFixture(t, "source.jpg", data)
+	result, err := File(context.Background(), path, Options{Quality: 35})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Unchanged || len(result.Data) >= len(data) {
+		t.Fatal("fixture must save bytes")
+	}
+	trashDir := t.TempDir()
+	var trashed string
+	backup := func(src string) error {
+		trashed = filepath.Join(trashDir, filepath.Base(src))
+		return os.Rename(src, trashed)
+	}
+	if err := result.OverwriteWithBackup(backup); err != nil {
+		t.Fatal(err)
+	}
+	assertOverwriteFile(t, path, result.Data)
+	assertOverwriteFile(t, trashed, data)
+	assertNoOverwriteTemps(t, filepath.Dir(path))
+}
+
+func TestOverwriteWithBackupFailureAndNoOpPreserveOriginal(t *testing.T) {
+	data := jpegFixture(t, 100)
+	t.Run("error", func(t *testing.T) {
+		path := writeFixture(t, "source.jpg", data)
+		result, err := File(context.Background(), path, Options{Quality: 35})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = result.OverwriteWithBackup(func(string) error {
+			return errors.New("trash unavailable")
+		})
+		if err == nil || !strings.Contains(err.Error(), "移入废纸篓失败") {
+			t.Fatalf("expected trash failure error, got %v", err)
+		}
+		assertOverwriteFile(t, path, data)
+		assertNoOverwriteTemps(t, filepath.Dir(path))
+	})
+	t.Run("noop", func(t *testing.T) {
+		path := writeFixture(t, "source.jpg", data)
+		result, err := File(context.Background(), path, Options{Quality: 35})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = result.OverwriteWithBackup(func(string) error {
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "未能移入废纸篓") {
+			t.Fatalf("expected noop backup error, got %v", err)
+		}
+		assertOverwriteFile(t, path, data)
+		assertNoOverwriteTemps(t, filepath.Dir(path))
+	})
 }

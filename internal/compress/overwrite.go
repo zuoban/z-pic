@@ -3,6 +3,7 @@ package compress
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,15 @@ func captureOverwriteSnapshot(input, output []byte) *overwriteSnapshot {
 // Rename. These checks narrow that residual race; they do not eliminate it.
 // Callers must not mutate a Result concurrently with this operation.
 func (r *Result) Overwrite() error {
+	return r.OverwriteWithBackup(nil)
+}
+
+// OverwriteWithBackup behaves like Overwrite, but when backup is non-nil it
+// runs backup(sourcePath) after staging and re-verifying the original file.
+// The backup callback must move or remove sourcePath (for example to the OS
+// trash); if backup fails or leaves sourcePath in place, OverwriteWithBackup
+// aborts without modifying the original file.
+func (r *Result) OverwriteWithBackup(backup func(string) error) error {
 	if r == nil || r.snapshot == nil || r.sourcePath == "" {
 		return fmt.Errorf("没有可覆盖原图的有效压缩结果")
 	}
@@ -65,11 +75,11 @@ func (r *Result) Overwrite() error {
 	if err != nil {
 		return err
 	}
-	return replaceOverwriteSource(r.sourcePath, data, snapshot, source)
+	return replaceOverwriteSource(r.sourcePath, data, snapshot, source, backup)
 }
 
 // Stage the complete output before rechecking the already observed source.
-func replaceOverwriteSource(path string, data []byte, snapshot *overwriteSnapshot, source os.FileInfo) error {
+func replaceOverwriteSource(path string, data []byte, snapshot *overwriteSnapshot, source os.FileInfo, backup func(string) error) error {
 	dir := filepath.Dir(path)
 	dirInfo, err := os.Stat(dir)
 	if err != nil {
@@ -105,6 +115,21 @@ func replaceOverwriteSource(path string, data []byte, snapshot *overwriteSnapsho
 	}
 	if _, err := verifyOverwriteSource(path, snapshot, source); err != nil {
 		return err
+	}
+	if backup != nil {
+		if err := backup(path); err != nil {
+			return fmt.Errorf("移入废纸篓失败（原图未改动）：%w", err)
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				return fmt.Errorf("原图未能移入废纸篓，已取消覆盖")
+			}
+			return fmt.Errorf("校验废纸篓备份状态失败：%w", err)
+		}
+		if err := os.Rename(temp.Name(), path); err != nil {
+			return fmt.Errorf("原图已移入废纸篓，但写入压缩结果失败：%w", err)
+		}
+		return nil
 	}
 	if err := os.Rename(temp.Name(), path); err != nil {
 		return fmt.Errorf("原子替换原图失败：%w", err)

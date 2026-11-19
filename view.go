@@ -20,6 +20,7 @@ var (
 	toolbarFloatingIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><rect x="8" y="7" width="4" height="4" rx=".5"/></svg>`))
 	toolbarSettingsIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.75h3l.4 1.75 1.2.7 1.7-.5 1.5 2.6L13 7.5v1l1.3 1.2-1.5 2.6-1.7-.5-1.2.7-.4 1.75h-3l-.4-1.75-1.2-.7-1.7.5-1.5-2.6L3 8.5v-1L1.7 6.3l1.5-2.6 1.7.5 1.2-.7Z"/><circle cx="8" cy="8" r="2"/></svg>`))
 	toolbarPasteIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="1.5" width="6" height="3" rx="1"/><path d="M5 3H3.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H11M8 7v4m-2-2h4"/></svg>`))
+	toolbarDragIcon     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6-6M8 4h4v4M12 10v2.5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1H6"/></svg>`))
 )
 
 func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
@@ -82,6 +83,9 @@ func (s *application) view(c *ui.Context) {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyV, s.pasteImages)
 		if !c.FocusTakesText() && s.canCopyResult() {
 			c.OnWindowShortcut(ui.Cmd, ui.KeyC, s.copyResult)
+		}
+		if !c.FocusTakesText() && s.supportsQuickLook() {
+			c.OnWindowShortcut(0, ui.KeySpace, s.quickLookCurrent)
 		}
 		c.OnWindowShortcut(ui.Cmd, ui.KeyEnter, s.startActiveCompression)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveActiveAction)
@@ -507,6 +511,20 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 					KeyShortcuts(ui.Cmd, ui.KeyC).
 					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 			})
+			dragChip := ui.Row(c.Key("drag-out-single")).FillWidth().Height(30).Padding(0, 10).Gap(6).
+				Center().Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+				Label("拖出压缩图").Tooltip("按住拖动压缩后的图片到 Finder、聊天窗口或其他应用").
+				Disabled(s.modalOpen())
+			if !s.modalOpen() {
+				dragChip.DragDataFrom(s.singleDragExportData, s.dragExportOptions())
+				if dragChip.Hovered() {
+					dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+				}
+			}
+			dragChip.Children(func() {
+				ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
+				ui.Text(c, "拖出压缩图").FontSize(12).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+			})
 		}
 	})
 }
@@ -670,6 +688,10 @@ func (s *application) overwriteConfirmation(c *ui.Context) {
 	}
 	message := fmt.Sprintf("将用压缩结果替换以下文件：\n%s\n\n%s → %s。覆盖后无法通过本工具恢复原文件。",
 		s.file.path, formatSize(s.result.OriginalSize), formatSize(s.result.OutputSize))
+	if s.backupToTrash {
+		message = fmt.Sprintf("将先将原文件移入废纸篓，再用压缩结果替换：\n%s\n\n%s → %s。",
+			s.file.path, formatSize(s.result.OriginalSize), formatSize(s.result.OutputSize))
+	}
 	// The last button receives the default focus, so Enter and Escape cancel.
 	if ui.AlertDialog(c.Key("overwrite-confirmation"), &s.confirmOverwrite,
 		"确认覆盖原图？", message, "覆盖原图", "取消") == 0 {
@@ -738,6 +760,9 @@ func (s *application) saveActionDescription() (string, string) {
 		}
 		if s.result != nil && s.result.OutputSize >= s.result.OriginalSize {
 			return "无需覆盖（未减小）", "输出体积未小于原图，可另存副本或复制图片"
+		}
+		if s.backupToTrash {
+			return "覆盖原图…", "确认后先将原文件移入废纸篓并替换"
 		}
 		return "覆盖原图…", "确认后替换原文件，无法撤销"
 	}

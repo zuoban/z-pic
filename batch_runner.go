@@ -128,6 +128,19 @@ func (s *application) runBatchTasks(
 	usedPaths map[string]bool,
 	deliver func(func()),
 ) {
+	s.runBatchTasksWithBackup(ctx, tasks, options, outputMode, outputDir, usedPaths, s.overwriteBackupFunc(), deliver)
+}
+
+func (s *application) runBatchTasksWithBackup(
+	ctx context.Context,
+	tasks []batchTask,
+	options compress.Options,
+	outputMode int,
+	outputDir string,
+	usedPaths map[string]bool,
+	backup func(string) error,
+	deliver func(func()),
+) {
 	total := len(tasks)
 	if total == 0 || ctx.Err() != nil {
 		return
@@ -200,12 +213,16 @@ func (s *application) runBatchTasks(
 			}
 			return
 		}
-		update := saveBatchOutcome(task, outcome, outputMode, destinations[task.index])
+		update := saveBatchOutcomeWithBackup(task, outcome, outputMode, destinations[task.index], backup)
 		emit(func() { s.applyBatchItemUpdate(update) })
 	})
 }
 
 func saveBatchOutcome(task batchTask, outcome batchCompressionOutcome, outputMode int, destination string) batchItemUpdate {
+	return saveBatchOutcomeWithBackup(task, outcome, outputMode, destination, nil)
+}
+
+func saveBatchOutcomeWithBackup(task batchTask, outcome batchCompressionOutcome, outputMode int, destination string, backup func(string) error) batchItemUpdate {
 	update := batchItemUpdate{index: task.index, status: batchFailed, advanceDone: true}
 	if outcome.err != nil {
 		update.errMsg = outcome.err.Error()
@@ -227,7 +244,7 @@ func saveBatchOutcome(task batchTask, outcome batchCompressionOutcome, outputMod
 	} else if result.Unchanged || result.OutputSize >= result.OriginalSize {
 		outputSize, unchanged = result.OriginalSize, true
 	} else {
-		if err := result.Overwrite(); err != nil {
+		if err := result.OverwriteWithBackup(backup); err != nil {
 			update.errMsg = err.Error()
 			return update
 		}

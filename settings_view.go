@@ -141,17 +141,63 @@ func settingsSegments(c *ui.Context, key, label string, selected *int, disabled 
 func (s *application) generalSettingsContent(c *ui.Context) {
 	t := c.Theme()
 	width, _ := c.Size()
-	twoColShortcuts := width >= 560 && c.Preferences().TextScale <= 1.1
-	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(16, settingsPagePadding(c)).Gap(12).Children(func() {
+	narrow := width < 560
+	sideBySideWorkflow := !narrow && c.Preferences().TextScale <= 1.1
+	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
+	scrollPadV, scrollGap := float32(16), float32(12)
+	if narrow {
+		scrollPadV, scrollGap = 10, 8
+	}
+	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
 		settingsPanel(c, "settings-appearance-panel").Children(func() {
 			ui.Text(c, "外观").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
 		})
 		settingsPanel(c, "settings-workflow-panel").Children(func() {
 			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
-			ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
-				FontSize(settingsFontSize(c, 13)).Disabled(s.settingsDraftLocked()).
-				Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
+			locked := s.settingsDraftLocked()
+			autoCheck := func() {
+				ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
+					FontSize(settingsFontSize(c, 13)).Disabled(locked).
+					Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
+			}
+			trashCheck := func() {
+				ui.Checkbox(c.Key("settings-backup-to-trash"), &s.editor.backupToTrash, "覆盖原图前移入废纸篓").
+					FontSize(settingsFontSize(c, 13)).Disabled(locked).
+					Tooltip("覆盖单图或批量原图前先将原文件移至系统废纸篓（回收站）")
+			}
+			if sideBySideWorkflow {
+				ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
+					ui.Box(c).Width(0).Grow(1).Children(autoCheck)
+					ui.Box(c).Width(0).Grow(1).Children(trashCheck)
+				})
+			} else {
+				autoCheck()
+				trashCheck()
+			}
+			downloadPath := s.editor.downloadDir
+			downloadTooltip := downloadPath
+			if downloadPath == "" {
+				downloadPath = "默认（下载/Z Pic）"
+				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
+			}
+			ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
+				Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
+				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).
+					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
+				settingsButton(c, "settings-download-dir", "选择…", 28, locked).
+					Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
+					OnClick(s.chooseDownloadDirectory)
+				if s.editor.downloadDir != "" {
+					settingsButton(c, "settings-download-reset", "默认", 28, locked).
+						Label("恢复默认下载目录").Tooltip("恢复为系统下载目录下的 Z Pic 文件夹").
+						OnClick(s.resetDownloadDirectory)
+				}
+				settingsButton(c, "settings-download-clean", "清理", 28, locked).
+					Label("清理下载目录").Tooltip("将下载目录中未在队列里的图片移入废纸篓").
+					OnClick(s.cleanupDownloadedImages)
+			})
 		})
 		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
 			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
@@ -171,7 +217,11 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 						if row > 0 {
 							ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 						}
-						ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Center).Children(func() {
+						shortcutGap := float32(20)
+						if narrow {
+							shortcutGap = 12
+						}
+						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Center).Children(func() {
 							ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row].label, shortcuts[row].key) })
 							if row+1 < len(shortcuts) {
 								ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row+1].label, shortcuts[row+1].key) })
@@ -274,13 +324,15 @@ func (s *application) settingsFooter(c *ui.Context) {
 		switch {
 		case editor.message != "":
 			message, color, role = editor.message, t.Danger, ui.RoleAlert
+		case editor.notice != "":
+			message = editor.notice
 		case presetChanged:
 			message = "保存后使用：" + presetDisplayName(editor.presets[editor.active])
 		case dirty:
 			message = "有未保存的更改"
 		}
 		width, _ := c.Size()
-		statusAbove := editor.message != "" || presetChanged || (dirty && width < 560)
+		statusAbove := editor.message != "" || editor.notice != "" || presetChanged || (dirty && width < 560)
 		if statusAbove {
 			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
 		}

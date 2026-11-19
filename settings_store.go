@@ -26,6 +26,8 @@ type storedSettings struct {
 	BatchOutputDir string         `json:"batch_output_dir,omitempty"`
 	Theme          string         `json:"theme,omitempty"`
 	AutoCompress   bool           `json:"auto_compress,omitempty"`
+	BackupToTrash  bool           `json:"backup_to_trash,omitempty"`
+	DownloadDir    string         `json:"download_dir,omitempty"`
 }
 
 type appSettings struct {
@@ -34,6 +36,8 @@ type appSettings struct {
 	batchOutputDir string
 	theme          themeMode
 	autoCompress   bool
+	backupToTrash  bool
+	downloadDir    string
 }
 
 type storedPreset struct {
@@ -143,6 +147,29 @@ func sanitizeStoredBatchOutputDir(dir string) string {
 	return dir
 }
 
+func validateDownloadDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if !utf8.ValidString(dir) {
+		return errors.New("下载目录包含无效的 UTF-8 字符")
+	}
+	if strings.ContainsFunc(dir, unicode.IsControl) {
+		return errors.New("下载目录不能包含控制字符")
+	}
+	if !filepath.IsAbs(dir) {
+		return errors.New("下载目录必须是绝对路径")
+	}
+	return nil
+}
+
+func normalizeDownloadDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
 func loadAppSettings(path string) ([]compressionPreset, string, string, error) {
 	cfg, err := loadFullSettings(path)
 	if err != nil {
@@ -206,6 +233,9 @@ func loadFullSettings(path string) (appSettings, error) {
 	if err := mode.validate(); err != nil {
 		return appSettings{}, fmt.Errorf("设置文件内容无效：%w", err)
 	}
+	if err := validateDownloadDir(stored.DownloadDir); err != nil {
+		return appSettings{}, fmt.Errorf("设置文件内容无效：%w", err)
+	}
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
 		presets[index] = compressionPreset{
@@ -230,6 +260,8 @@ func loadFullSettings(path string) (appSettings, error) {
 		batchOutputDir: sanitizeStoredBatchOutputDir(stored.BatchOutputDir),
 		theme:          mode.normalized(),
 		autoCompress:   stored.AutoCompress,
+		backupToTrash:  stored.BackupToTrash,
+		downloadDir:    normalizeDownloadDir(stored.DownloadDir),
 	}, nil
 }
 
@@ -356,6 +388,9 @@ func saveFullSettings(path string, cfg appSettings) error {
 	if err := cfg.theme.validate(); err != nil {
 		return err
 	}
+	if err := validateDownloadDir(cfg.downloadDir); err != nil {
+		return err
+	}
 	batchOutputDir := sanitizeStoredBatchOutputDir(cfg.batchOutputDir)
 	stored := storedSettings{
 		Version:        1,
@@ -364,6 +399,8 @@ func saveFullSettings(path string, cfg appSettings) error {
 		BatchOutputDir: batchOutputDir,
 		Theme:          cfg.theme.storedValue(),
 		AutoCompress:   cfg.autoCompress,
+		BackupToTrash:  cfg.backupToTrash,
+		DownloadDir:    normalizeDownloadDir(cfg.downloadDir),
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{

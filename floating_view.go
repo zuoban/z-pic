@@ -233,6 +233,25 @@ func (s *application) revealFloatingSelection() {
 	}
 }
 
+func (s *application) quickLookFloatingSelection() {
+	if s.modalOpen() || !s.supportsQuickLook() {
+		return
+	}
+	item, ok := s.floatingSelectedImage()
+	if !ok {
+		return
+	}
+	path := item.path
+	if output := batchItemOutputPath(item); output != "" {
+		path = output
+	}
+	previousMessage := s.message
+	s.previewInQuickLook(path)
+	if s.failed && s.message != previousMessage {
+		s.rememberDropFailure(s.message)
+	}
+}
+
 func (s *application) openFloatingSelection() {
 	if s.modalOpen() {
 		return
@@ -363,6 +382,9 @@ func (s *application) floatingView(c *ui.Context) {
 			s.setFloatingOpen(false)
 		}
 	})
+	if s.floating.expanded && !s.modalOpen() && s.supportsQuickLook() {
+		c.OnWindowShortcut(0, ui.KeySpace, s.quickLookFloatingSelection)
+	}
 	options := transfer.DropOptions{
 		Formats: []transfer.Format{
 			transfer.FileList, transfer.URIList, transfer.HTML, transfer.Text,
@@ -372,9 +394,12 @@ func (s *application) floatingView(c *ui.Context) {
 	}
 	background := windowRootBackground(c)
 	root := ui.Column(c).Fill().Padding(8).Gap(4).Background(background)
-	_, over := ui.DataDragOver(root, options)
-	if drop, ok := ui.DropData(root, options); ok {
-		s.receiveDrop(drop.Data)
+	over := false
+	if !s.draggingOut {
+		_, over = ui.DataDragOver(root, options)
+		if drop, ok := ui.DropData(root, options); ok {
+			s.receiveDrop(drop.Data)
+		}
 	}
 	if over {
 		root.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
@@ -402,6 +427,24 @@ func (s *application) floatingView(c *ui.Context) {
 					quietButton(c, "floating-copy", "复制", 28, false).
 						Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
 						OnClick(s.copyFloatingSelection)
+					dragChip := ui.Row(c.Key("floating-drag")).Height(28).Padding(0, 8).Gap(4).
+						AlignItems(ui.Center).Radius(innerRadius(c)).
+						Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+						Label("拖出图片").Tooltip("按住将所选压缩结果拖到 Finder 或其他应用").
+						DragDataFrom(func() transfer.Data {
+							sel, ok := s.floatingSelectedImage()
+							if !ok {
+								return transfer.Data{}
+							}
+							return s.floatingItemDragExportData(sel)
+						}, s.dragExportOptions())
+					if dragChip.Hovered() {
+						dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+					}
+					dragChip.Children(func() {
+						ui.Icon(c, toolbarDragIcon).Size(13, 13).TextColor(theme.TextMuted).Shrink(0)
+						ui.Text(c, "拖出").FontSize(12).TextColor(theme.Text).SingleLine()
+					})
 				}
 				ui.Box(c).Grow(1)
 				quietButton(c, "floating-downloads", "下载位置", 28, false).
