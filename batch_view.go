@@ -413,10 +413,6 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		return
 	}
 	if s.batch.selected < 0 || s.batch.selected >= len(s.batch.items) {
-		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "点击列表项查看详情或预览").FontSize(13).FontWeight(500)
-			ui.Text(c, "可继续拖入图片或文件夹加入批量队列").FontSize(12).TextColor(metadataColor(c))
-		})
 		return
 	}
 	item := s.batch.items[s.batch.selected]
@@ -592,8 +588,7 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 	t := c.Theme()
 	summaryBody := func() {
 		if s.batch.previewOpen {
-			s.resultSummaryTitled(c, "当前图片结果")
-			ui.Text(c, "返回列表查看整批统计").FontSize(12).TextColor(metadataColor(c))
+			s.imageResultSummary(c, "当前图片结果")
 		} else {
 			s.batchResultSummary(c)
 		}
@@ -623,7 +618,6 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 			KeyShortcuts(ui.Cmd, ui.KeyC).
 			Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 	}
-	ui.Text(c, "不缩放尺寸 · 请保留原图").FontSize(12).TextColor(metadataColor(c))
 }
 
 func (s *application) batchOutputCard(c *ui.Context) {
@@ -634,16 +628,13 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			if path := batchItemOutputPath(item); path != "" {
 				ui.Text(c, "输出文件").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 				ui.Text(c, path).FontSize(12).SingleLine().TruncateMiddle().FillWidth().Tooltip(path)
-				note := "已保存，可定位文件或复制图片"
 				if item.overwritten {
-					note = "已覆盖原图，无法撤销"
+					ui.Text(c, "已覆盖原图，无法撤销").FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 				}
-				ui.Text(c, note).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 				return
 			}
 		}
 		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
-		ui.Text(c, "保存方式由当前预设决定").FontSize(12).TextColor(t.TextMuted)
 		if s.batch.outputMode == batchOutputFolder {
 			dirText, dirColor, dirTooltip := "压缩时选择保存位置", metadataColor(c), "将在开始压缩时选择保存文件夹"
 			btnLabel := "选择位置"

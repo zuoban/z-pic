@@ -95,7 +95,7 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 			ui.Column(c).FillWidth().Gap(8).Children(func() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
-					color := metadataColor(c)
+					color := chromeMetadataColor(c)
 					if utf8.RuneCountInString(preset.name) > 40 {
 						color = c.Theme().Danger
 					}
@@ -105,7 +105,7 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 				var name ui.Element
 				ui.Row(c).FillWidth().Height(settingsControlHeight(c, 36)).Gap(8).AlignItems(ui.Center).Children(func() {
 					name = ui.TextInput(c.Key("preset-name"), &preset.name).Label("预设名称").
-						Placeholder("输入预设名称").Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 36)).
+						Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 36)).
 						Width(0).Grow(1).MinWidth(0).FontSize(settingsFontSize(c, 14)).Padding(0, 12).Disabled(locked)
 					styleGlassField(name, c, 36)
 					if editor.focusField == "preset-name" && !locked {
@@ -118,12 +118,7 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 					if name.Changed() {
 						editor.message = ""
 					}
-					if editor.active == editor.selected {
-						ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-							presetActiveIndicator(c)
-							ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 12)).TextColor(c.Theme().TextMuted).SingleLine()
-						})
-					} else {
+					if editor.active != editor.selected {
 						settingsButton(c, "activate-preset", "设为当前预设", 32, s.busy || editor.confirmDelete).
 							OnClick(func() { s.selectSettingsPreset(editor.selected) })
 					}
@@ -154,7 +149,7 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 						Label("编辑预设："+name).Tooltip(name).Height(settingsControlHeight(c, 36)).
 						MinWidth(88).MaxWidth(196).Padding(0, 12).Gap(8).Radius(innerRadius(c)).
 						Border(1, ui.Transparent).AlignItems(ui.Center).
-						TextColor(t.TextMuted).Disabled(locked).AccessSelected(editor.selected == index)
+						TextColor(chromeMutedColor(c)).Disabled(locked).AccessSelected(editor.selected == index)
 					if editor.active == index {
 						button.Description("当前使用的预设")
 					}
@@ -298,7 +293,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 				AlignItems(ui.Center).Children(func() {
 				path := options.Directory
 				if path == "" {
-					path = "尚未选择；保存图片前需选择目录"
+					path = "未选择文件夹"
 				}
 				ui.Text(c, path).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).Width(0).Grow(1).
 					SingleLine().TruncateMiddle().Tooltip(path)
@@ -343,11 +338,6 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 				s.editor.message = ""
 			}
 		})
-		description := presetSaveDescription(*options)
-		if options.Mode != presetSaveFixed && !options.replacesOriginal() {
-			ui.Text(c, description).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).
-				FillWidth().MaxLines(2).Tooltip(description)
-		}
 		example := presetOutputExample(*options)
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "保存示例").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)

@@ -131,8 +131,7 @@ func (s *application) zoomPreviewActual() {
 func (s *application) previewToolbar(c *ui.Context) {
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		if s.result != nil && !s.overwritten {
-			ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "预览模式").FontSize(12).TextColor(metadataColor(c)).Grow(1)
+			ui.Row(c).FillWidth().Height(32).Justify(ui.End).Children(func() {
 				s.previewModeControl(c)
 			})
 		}

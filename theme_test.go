@@ -71,6 +71,81 @@ func TestThemeTextContrast(t *testing.T) {
 	}
 }
 
+func TestThemeGlassChromeAndPanelContrast(t *testing.T) {
+	for _, mode := range []themeMode{themeLight, themeDark} {
+		t.Run(string(mode), func(t *testing.T) {
+			var (
+				theme        ui.Theme
+				chromeMuted  ui.Color
+				chromeMeta   ui.Color
+				metadata     ui.Color
+				panel        ui.Color
+				subtle       ui.Color
+				emptyStage   ui.Color
+				disabledFill ui.Color
+			)
+			tester := ui.NewTester(func(c *ui.Context) {
+				applyThemeMode(c, mode)
+				theme = *c.Theme()
+				chromeMuted = chromeMutedColor(c)
+				chromeMeta = chromeMetadataColor(c)
+				metadata = metadataColor(c)
+				panel = panelSurface(c)
+				subtle = panelSubtleSurface(c)
+				emptyStage = panelEmptyStageBackground(c)
+				disabledFill = keycapSurface(c)
+			}, 100, 100)
+			tester.SetVibrancy(true)
+			tester.Frame()
+
+			// Worst-case macOS Liquid Glass backdrop: light over pure black (#888888)
+			// and dark over pure white (#828282), plus our 0.62 tint (effective 0.88x).
+			untintedGlass := ui.RGB(0x88, 0x88, 0x88)
+			tintColor := ui.Hex(lightWindowBackgroundHex)
+			if mode == themeDark {
+				untintedGlass = ui.RGB(0x82, 0x82, 0x82)
+				tintColor = ui.Hex(darkWindowBackgroundHex)
+			}
+			tintedGlass := tintColor.Alpha(0.62 * 0.88).Over(untintedGlass)
+
+			for name, fg := range map[string]ui.Color{
+				"body":            theme.Text,
+				"chrome-muted":    chromeMuted,
+				"chrome-metadata": chromeMeta,
+			} {
+				if ratio := themeContrast(fg, tintedGlass); ratio < 4.5 {
+					t.Errorf("%s on tinted glass %v: contrast %.2f, want >= 4.5", name, tintedGlass, ratio)
+				}
+			}
+			// Translucent panels must remain legible even over untinted worst-case glass.
+			panelOverUntinted := panel.Over(untintedGlass)
+			for surfaceName, surface := range map[string]ui.Color{
+				"panel":       panelOverUntinted,
+				"subtle":      subtle.Over(panelOverUntinted),
+				"empty-stage": emptyStage.Over(panelOverUntinted),
+				"disabled":    disabledFill,
+			} {
+				for fgName, fg := range map[string]ui.Color{
+					"secondary": theme.TextMuted,
+					"metadata":  metadata,
+				} {
+					if ratio := themeContrast(fg, surface); ratio < 4.5 {
+						t.Errorf("%s on glass %s (%v): contrast %.2f, want >= 4.5", fgName, surfaceName, surface, ratio)
+					}
+				}
+			}
+
+			// Fallback modes must return the standard opaque theme text tokens.
+			tester.SetPreferences(ui.Preferences{ReduceTransparency: true})
+			tester.Frame()
+			if chromeMuted != theme.TextMuted || chromeMeta != metadata {
+				t.Fatalf("reduced transparency must fall back to theme muted/metadata colors: got %v/%v, want %v/%v",
+					chromeMuted, chromeMeta, theme.TextMuted, metadata)
+			}
+		})
+	}
+}
+
 func TestThemePreservesAccessibilityPreferences(t *testing.T) {
 	for _, mode := range []themeMode{themeSystem, themeLight, themeDark} {
 		t.Run(string(mode), func(t *testing.T) {

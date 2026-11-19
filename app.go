@@ -267,7 +267,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 	s.lastSavedPath = ""
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
-	s.setMessage("图片已就绪，可以开始压缩。", false)
+	s.setMessage("", false)
 }
 
 func readSelection(ctx context.Context, path string) (*selectedImage, error) {
@@ -435,11 +435,7 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 	s.result, s.preview = result, preview
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
-	if result.Unchanged {
-		s.setMessage("未减小，已保留原始数据", false)
-	} else {
-		s.setMessage("压缩完成，可以按预设保存结果", false)
-	}
+	s.setMessage("", false)
 }
 
 func (s *application) cancelWork() {

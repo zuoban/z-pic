@@ -65,8 +65,12 @@ func settingsPanel(c *ui.Context, key string) ui.Element {
 	panel := ui.Column(c.Key(key)).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
 		Background(panelSurface(c)).Border(1, glassBorder(c))
 	if usesGlass(c) {
+		tint := ui.RGBA(255, 255, 255, 0.62)
+		if c.Theme().Dark {
+			tint = ui.RGBA(22, 25, 32, 0.62)
+		}
 		panel.Background(ui.Transparent).Border(0, ui.Transparent).
-			Material(settingsPanelGlass{material: glass.Glass{Native: true}})
+			Material(settingsPanelGlass{material: glass.Glass{Native: true, Tint: tint}})
 	}
 	return panel
 }

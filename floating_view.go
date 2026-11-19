@@ -280,7 +280,7 @@ func (s *application) floatingView(c *ui.Context) {
 }
 
 func (s *application) floatingStack(c *ui.Context) {
-	theme := c.Theme()
+	theme, emptyIconColor := c.Theme(), chromeMutedColor(c)
 	var bitmaps []*ui.Bitmap
 	for index := s.floatingImageCount() - 1; index >= 0 && len(bitmaps) < 3; index-- {
 		bitmaps = append(bitmaps, s.floatingBitmap(s.floatingImage(index)))
@@ -295,7 +295,7 @@ func (s *application) floatingStack(c *ui.Context) {
 			centerX, centerY := bounds.X+bounds.W/2, bounds.Y+bounds.H/2
 			if len(bitmaps) == 0 {
 				drawFloatingIcon(p, ui.Rect{X: centerX - 18, Y: centerY - 18, W: 36, H: 36},
-					"photo", theme.TextMuted)
+					"photo", emptyIconColor)
 				return
 			}
 			for index, bitmap := range bitmaps {
@@ -322,7 +322,7 @@ func (s *application) floatingStack(c *ui.Context) {
 			}
 		})
 	if s.floatingImageCount() == 0 {
-		ui.Text(c, "拖入本地或网页图片").FontSize(12).TextColor(metadataColor(c)).
+		ui.Text(c, "拖入本地或网页图片").FontSize(12).TextColor(chromeMetadataColor(c)).
 			FillWidth().TextAlign(ui.Center)
 	}
 }
@@ -337,11 +337,10 @@ func (s *application) floatingHeader(c *ui.Context) {
 				count = fmt.Sprintf("%d / %d 张图片", len(s.floating.paths), s.floatingImageCount())
 			}
 			ui.Text(c, count).FontSize(15).FontWeight(500).FontFeatures("tnum").SingleLine()
-			detail := "拖入本地或网页图片"
 			if item, ok := s.floatingSelectedImage(); ok {
-				detail = "已选 1 张 · " + formatSize(item.originalSize)
+				ui.Text(c, "已选 1 张 · "+formatSize(item.originalSize)).
+					FontSize(12).FontFeatures("tnum").TextColor(chromeMetadataColor(c)).SingleLine().TruncateMiddle()
 			}
-			ui.Text(c, detail).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle()
 		})
 		filterLabels := []string{"全部图片", "待处理", "已完成", "失败"}
 		filter := floatingIconButton(c, "floating-filter", "筛选图片", "filter", nil).
@@ -387,12 +386,11 @@ func (s *application) floatingHeader(c *ui.Context) {
 
 func (s *application) floatingGallery(c *ui.Context, indices []int) {
 	if len(indices) == 0 {
-		theme := c.Theme()
 		ui.Column(c).FillWidth().Grow(1).Center().Gap(8).Children(func() {
-			floatingIcon(c, "photo", 40, theme.TextMuted)
+			floatingIcon(c, "photo", 40, chromeMutedColor(c))
 			if s.floatingImageCount() == 0 {
 				ui.Text(c, "拖入图片").FontSize(14).FontWeight(500)
-				ui.Text(c, "本地或网页图片 · JPEG / PNG / WebP").FontSize(12).TextColor(metadataColor(c))
+				ui.Text(c, "本地或网页图片 · JPEG / PNG / WebP").FontSize(12).TextColor(chromeMetadataColor(c))
 			} else {
 				ui.Text(c, "没有符合筛选条件的图片").FontSize(14)
 				quietButton(c, "floating-reset-filter", "显示全部", 32, false).
@@ -565,7 +563,7 @@ func (s *application) floatingFeedback(c *ui.Context) {
 		return
 	}
 	theme := c.Theme()
-	color, role := theme.TextMuted, ui.RoleStatus
+	color, role := chromeMutedColor(c), ui.RoleStatus
 	if failed {
 		color, role = theme.Danger, ui.RoleAlert
 	}

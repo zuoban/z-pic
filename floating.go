@@ -47,7 +47,7 @@ func (s *application) setFloatingOpen(open bool) {
 		Title: "拖图入队 · Z Pic", Width: floatingCompactWidth, Height: floatingCompactHeight,
 		X: area.X + max(0, area.Width-floatingCompactWidth-24), Y: area.Y + 80,
 		UseContentSize: true, Frameless: true, CornerRadius: 20,
-		Transparent: true, Vibrancy: mygo.VibrancyGlass,
+		Transparent: true, Vibrancy: mygo.VibrancyGlass, VibrancyTint: windowVibrancyTintCSS,
 		Panel: true, AlwaysOnTop: true, SkipTaskbar: true,
 		DisableResize: true, DisableMaximize: true, DisableMinimize: true,
 		Hidden: true, Content: ui.View(s.floatingView),

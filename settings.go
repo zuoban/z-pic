@@ -174,6 +174,7 @@ func (s *application) setSettingsOpen(open bool) {
 		Title: "设置 · Z Pic", Parent: s.window, Modal: true,
 		Width: 724, Height: 700, MinWidth: 640, MinHeight: 600,
 		Vibrancy:        mygo.VibrancyGlass,
+		VibrancyTint:    windowVibrancyTintCSS,
 		BackgroundColor: windowBackgroundCSS,
 		UseContentSize:  true, Content: ui.View(s.settingsView),
 	})

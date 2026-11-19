@@ -68,7 +68,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 					Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
 					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
 			},
-		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip("保存后使用："+presetDisplayName(preset)).
+		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
 			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).
 			AlignItems(ui.Center).Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
@@ -144,8 +144,6 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 		settingsPanel(c, "settings-appearance-panel").Children(func() {
 			ui.Text(c, "外观").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
-			ui.Text(c, "立即预览外观，保存后记住选择；取消可恢复原主题。").
-				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
 		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
 			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
@@ -242,19 +240,19 @@ func (s *application) settingsFooter(c *ui.Context) {
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 	}
 	ui.Column(c).Padding(12, padding).Gap(8).Background(panelSurface(c)).Children(func() {
-		message, color, role := "更改将在保存后生效", t.TextMuted, ui.RoleStatus
+		message, color, role := "", t.TextMuted, ui.RoleStatus
 		dirty := s.settingsHaveChanges()
-		if dirty {
+		presetChanged := editor.presets[editor.active].name != s.scheme
+		switch {
+		case editor.message != "":
+			message, color, role = editor.message, t.Danger, ui.RoleAlert
+		case presetChanged:
+			message = "保存后使用：" + presetDisplayName(editor.presets[editor.active])
+		case dirty:
 			message = "有未保存的更改"
 		}
-		if editor.presets[editor.active].name != s.scheme {
-			message = "保存后使用：" + presetDisplayName(editor.presets[editor.active])
-		}
-		if editor.message != "" {
-			message, color, role = editor.message, t.Danger, ui.RoleAlert
-		}
 		width, _ := c.Size()
-		statusAbove := editor.message != "" || editor.presets[editor.active].name != s.scheme || (dirty && width < 560)
+		statusAbove := editor.message != "" || presetChanged || (dirty && width < 560)
 		if statusAbove {
 			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
 		}
@@ -269,8 +267,7 @@ func (s *application) settingsFooter(c *ui.Context) {
 				}
 				s.focusSettingsField(deleteButton, "delete-preset")
 			}
-			inlineStatus := !statusAbove && (editor.section == settingsGeneral || dirty)
-			if inlineStatus {
+			if !statusAbove && message != "" {
 				ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(message)
 			} else {
@@ -280,7 +277,7 @@ func (s *application) settingsFooter(c *ui.Context) {
 				OnClick(func() { s.setSettingsOpen(false) })
 			saveDisabled := s.busy || editor.confirmDelete
 			settingsSaveButton(c, saveDisabled).Width(88).Height(settingsControlHeight(c, 36)).
-				Tooltip("更改将在保存后生效").KeyShortcuts(ui.Cmd, ui.KeyS).OnClick(s.saveSettingsEdits)
+				KeyShortcuts(ui.Cmd, ui.KeyS).OnClick(s.saveSettingsEdits)
 		})
 	})
 }

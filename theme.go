@@ -18,6 +18,7 @@ const (
 	lightWindowBackgroundHex = "#f4f5f7"
 	darkWindowBackgroundHex  = "#0e1014"
 	windowBackgroundCSS      = "light-dark(" + lightWindowBackgroundHex + ", " + darkWindowBackgroundHex + ")"
+	windowVibrancyTintCSS    = "light-dark(rgba(244, 245, 247, 0.62), rgba(14, 16, 20, 0.62))"
 )
 
 type themeOption struct {
@@ -172,7 +173,7 @@ func applyThemeMode(c *ui.Context, mode themeMode) {
 		theme.SurfaceHover = ui.Hex("#282e3a")
 		theme.SurfacePressed = ui.Hex("#2f3644")
 		theme.Text = ui.Hex("#f1f3f8")
-		theme.TextMuted = ui.Hex("#b5bdca")
+		theme.TextMuted = ui.Hex("#c2cad7")
 		theme.Danger = ui.Hex("#ff808a")
 		theme.Warning = ui.Hex("#f4be5c")
 		theme.Success = ui.Hex("#4ee09a")
@@ -185,7 +186,7 @@ func applyThemeMode(c *ui.Context, mode themeMode) {
 		theme.SurfaceHover = ui.Hex("#eef1f6")
 		theme.SurfacePressed = ui.Hex("#e5e9f0")
 		theme.Text = ui.Hex("#11141a")
-		theme.TextMuted = ui.Hex("#454d5c")
+		theme.TextMuted = ui.Hex("#374050")
 		theme.Danger = ui.Hex("#bc1c2c")
 		theme.Warning = ui.Hex("#8d4b06")
 		theme.Success = ui.Hex("#0c6d43")
@@ -211,9 +212,30 @@ func metadataColor(c *ui.Context) ui.Color {
 		return c.Theme().TextMuted
 	}
 	if c.Theme().Dark {
-		return ui.Hex("#9da6b6")
+		return ui.Hex("#adb6c6")
 	}
-	return ui.Hex("#565f70")
+	return ui.Hex("#465063")
+}
+
+func chromeMutedColor(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.TextMuted
+	}
+	if t.Dark {
+		return ui.Hex("#dfe5ef")
+	}
+	return ui.Hex("#222833")
+}
+
+func chromeMetadataColor(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		return metadataColor(c)
+	}
+	if c.Theme().Dark {
+		return ui.Hex("#cfd7e4")
+	}
+	return ui.Hex("#2d3442")
 }
 
 func stageBackground(c *ui.Context) ui.Color {
@@ -513,6 +535,16 @@ func glassDivider(c *ui.Context) ui.Color {
 	return t.Text.Alpha(0.07)
 }
 
+func chromeDivider(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		return glassDivider(c)
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(255, 255, 255, 0.16)
+	}
+	return c.Theme().Text.Alpha(0.16)
+}
+
 func glassSelectionBackground(c *ui.Context) ui.Color {
 	t := c.Theme()
 	if !usesGlass(c) {
@@ -610,7 +642,7 @@ func destructiveAction(c *ui.Context, key, label string, height float32, disable
 func quietToolbarButton(c *ui.Context, key, label string, disabled bool) ui.Element {
 	t := c.Theme()
 	btn := ui.Button(c.Key(key), label).Height(32).Radius(pillRadius(32, c)).
-		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(t.TextMuted).Disabled(disabled)
+		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(chromeMutedColor(c)).Disabled(disabled)
 	if !disabled {
 		if btn.Pressed() {
 			btn.Background(glassControlPressed(c)).TextColor(t.Text)
