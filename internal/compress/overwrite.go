@@ -45,6 +45,9 @@ func (r *Result) Overwrite() error {
 	if r == nil || r.snapshot == nil || r.sourcePath == "" {
 		return fmt.Errorf("没有可覆盖原图的有效压缩结果")
 	}
+	if r.sourceFormat != "" && r.sourceFormat != r.Format {
+		return fmt.Errorf("输出格式已转换为 %s，不能直接覆盖原图", r.Format)
+	}
 	snapshot := r.snapshot
 	if r.Unchanged || snapshot.outputSize <= 0 || snapshot.outputSize >= snapshot.inputSize {
 		return fmt.Errorf("压缩结果未减小，不能覆盖原图")

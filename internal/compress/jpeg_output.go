@@ -227,11 +227,19 @@ func injectJPEGICCSegments(encoded []byte, segments [][]byte, iccBytes int) []by
 	if len(segments) == 0 || len(encoded) < 2 || encoded[0] != 0xff || encoded[1] != 0xd8 {
 		return encoded
 	}
+	insertAt := 2
+	// Place APP2 ICC_PROFILE after APP0 JFIF when present, matching JFIF ordering.
+	if len(encoded) >= 6 && encoded[2] == 0xff && encoded[3] == 0xe0 {
+		app0Len := int(binary.BigEndian.Uint16(encoded[4:6]))
+		if app0Len >= 2 && 4+app0Len <= len(encoded) {
+			insertAt = 4 + app0Len
+		}
+	}
 	out := make([]byte, 0, len(encoded)+iccBytes)
-	out = append(out, 0xff, 0xd8)
+	out = append(out, encoded[:insertAt]...)
 	for _, seg := range segments {
 		out = append(out, seg...)
 	}
-	out = append(out, encoded[2:]...)
+	out = append(out, encoded[insertAt:]...)
 	return out
 }

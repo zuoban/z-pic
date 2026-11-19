@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 func (s *application) batchListPanel(c *ui.Context) {
@@ -284,7 +286,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 						Width(0).Grow(1).Tooltip(item.path)
 					badge := ui.Text(c, statusText).FontSize(12).FontWeight(500).
 						FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
-					if item.status == batchDone && !item.unchanged {
+					if item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize {
 						badge.Padding(2, 8).Radius(badgeRadius(20)).
 							Background(statusTintSurface(c, t.Success)).Border(1, statusTintBorder(c, t.Success))
 					} else if item.status == batchFailed {
@@ -368,6 +370,13 @@ func batchItemStatus(item batchItem, t *ui.Theme) (string, ui.Color) {
 		if item.unchanged {
 			return "未减小", t.TextMuted
 		}
+		if item.outputSize > item.originalSize && item.originalSize > 0 {
+			grew := float64(item.outputSize-item.originalSize) / float64(item.originalSize) * 100
+			return fmt.Sprintf("+%0.1f%%", grew), t.TextMuted
+		}
+		if item.originalSize <= 0 {
+			return "已完成", t.Success
+		}
 		saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
 		return fmt.Sprintf("-%0.1f%%", saved), t.Success
 	case batchFailed:
@@ -447,6 +456,11 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			}
 		})
 		actions := func() {
+			if item.status == batchPending && !item.invalidInput {
+				quietButton(c, "batch-compress-item", "压缩此张", 32, s.modalOpen()).
+					Tooltip("仅压缩此张图片").
+					OnClick(func() { s.compressBatchItem(selected) })
+			}
 			if item.status == batchFailed && !item.invalidInput {
 				quietButton(c, "batch-retry-item", "重试", 32, s.modalOpen()).
 					Tooltip("重新压缩此失败图片").
@@ -456,6 +470,9 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 				quietButton(c, "batch-reveal-item", "定位文件", 32, s.modalOpen()).
 					Tooltip("在文件夹中显示输出文件").
 					OnClick(func() { s.revealFileInFolder(outPath) })
+				quietButton(c, "batch-copy-item", "复制", 32, !s.canCopyBatchItem(item)).
+					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
+					OnClick(func() { s.copyBatchItem(selected) })
 			}
 			quietButton(c, "batch-preview", "预览", 32, s.modalOpen() || item.invalidInput).
 				Tooltip("查看或对比选中图片").
@@ -662,9 +679,13 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			if s.batch.selected >= 0 && s.batch.selected < len(s.batch.items) {
 				name = s.batch.items[s.batch.selected].relPath
 			}
-			outputFilenamePreview(c, s.output, name)
+			outputFilenamePreviewForFormat(c, s.output, name, s.outputFormat, false)
 		} else {
-			ui.Text(c, "缩小后的文件将直接替换原图，未减小则跳过，无法撤销。").
+			warning := "缩小后的文件将直接替换原图，未减小则跳过，无法撤销。"
+			if s.outputFormat == compress.OutputFormatWebP {
+				warning = "原 WebP 缩小后将直接替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+			}
+			ui.Text(c, warning).
 				FontSize(12).TextColor(t.Danger).MaxLines(2)
 		}
 	})

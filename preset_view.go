@@ -9,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"zpic/internal/compress"
 )
 
 var (
@@ -25,11 +26,39 @@ func presetActiveIndicator(c *ui.Context) {
 }
 
 func presetQualityLabel(preset compressionPreset) string {
+	if preset.lossless {
+		return "无损压缩"
+	}
 	level := qualityLevel(preset)
 	if preset.quality != imageQualityLevels[level].quality || preset.png != imageQualityLevels[level].png {
 		return "自定义质量"
 	}
 	return fmt.Sprintf("%d · %s", level, imageQualityLevels[level].label)
+}
+
+func presetMetadataLabel(policy compress.MetadataPolicy) string {
+	switch policy {
+	case compress.MetadataKeepICC:
+		return "仅色彩配置"
+	case compress.MetadataStrip:
+		return "移除全部"
+	default:
+		return "保留全部"
+	}
+}
+
+func presetProcessingSummary(preset compressionPreset) string {
+	var parts []string
+	if preset.outputFormat == compress.OutputFormatWebP {
+		parts = append(parts, "转为 WebP")
+	}
+	if preset.maxDimension > 0 {
+		parts = append(parts, fmt.Sprintf("长边 ≤ %dpx", preset.maxDimension))
+	}
+	if preset.metadata != compress.MetadataKeepAll {
+		parts = append(parts, presetMetadataLabel(preset.metadata))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func presetDisplayName(preset compressionPreset) string {
@@ -40,13 +69,22 @@ func presetDisplayName(preset compressionPreset) string {
 }
 
 func presetOutputExample(options presetSaveOptions) string {
-	return presetOutputName(options, "example.png")
+	return presetOutputExampleForFormat(options, compress.OutputFormatKeep)
+}
+
+func presetOutputExampleForFormat(options presetSaveOptions, targetFormat compress.OutputFormat) string {
+	return presetOutputNameForFormat(options, "example.png", targetFormat)
 }
 
 func presetOutputName(options presetSaveOptions, filename string) string {
+	return presetOutputNameForFormat(options, filename, compress.OutputFormatKeep)
+}
+
+func presetOutputNameForFormat(options presetSaveOptions, filename string, targetFormat compress.OutputFormat) string {
 	if options.Mode == presetSaveOriginal {
 		filename = filepath.Base(filename)
 	}
+	filename = replaceFilenameExtension(filename, targetFormat)
 	ext := filepath.Ext(filename)
 	name := strings.TrimSuffix(filename, ext)
 	if options.UseSuffix {
@@ -128,8 +166,9 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 						FillWidth().MaxLines(2))
 				}
 			})
-			s.presetQualityCard(c, *preset)
+			s.presetQualityCard(c, preset)
 			s.presetSaveCard(c, preset)
+			s.presetProcessingCard(c, preset)
 		})
 	})
 }
@@ -199,8 +238,9 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 	})
 }
 
-func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset) {
+func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset) {
 	t := c.Theme()
+	locked := s.settingsDraftLocked()
 	settingsPanel(c, "settings-quality-panel").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetQualityIcon).Size(16, 16).TextColor(t.TextMuted)
@@ -208,18 +248,26 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 			ui.Icon(c, presetInfoIcon).Size(16, 16).TextColor(t.TextMuted).
 				Tooltip("压缩参数随图片质量自动调整。质量越高，越接近原图；质量越低，文件通常越小。")
 			ui.Box(c).Grow(1)
-			ui.Text(c, presetQualityLabel(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
+			if ui.Checkbox(c.Key("preset-lossless"), &preset.lossless, "无损").
+				FontSize(settingsFontSize(c, 12)).Disabled(locked).
+				Tooltip("PNG 仅执行 Oxipng 无损优化，WebP 使用无损编码，JPEG 保持原样").Changed() {
+				s.editor.message = ""
+			}
+			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
 				FontFeatures("tnum").TextColor(t.Text).SingleLine()
 		})
-		value := float64(qualityLevel(preset))
+		value := float64(qualityLevel(*preset))
 		description := fmt.Sprintf("JPEG / WebP 质量 %.0f；PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", preset.quality,
 			preset.png.MinQuality, preset.png.MaxQuality, preset.png.Colors)
-		if presetQualityLabel(preset) == "自定义质量" {
+		if preset.lossless {
+			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，JPEG 未缩放且保持原格式时不二次压缩。"
+		} else if presetQualityLabel(*preset) == "自定义质量" {
 			description = "已保留自定义参数；调整滑块后将使用对应档位。" + description
 		}
+		sliderDisabled := locked || preset.lossless
 		slider := ui.SliderBase(c.Key("quality-level"), &value, 0, float64(len(imageQualityLevels)-1)).Step(1).
-			Label("图片质量").Value(presetQualityLabel(preset)).Description(description).Tooltip(description).
-			Height(settingsControlHeight(c, 32)).PaddingX(12).Disabled(s.settingsDraftLocked())
+			Label("图片质量").Value(presetQualityLabel(*preset)).Description(description).Tooltip(description).
+			Height(settingsControlHeight(c, 32)).PaddingX(12).Disabled(sliderDisabled)
 		s.focusSettingsField(slider, "quality-level")
 		at := float32(value / float64(len(imageQualityLevels)-1))
 		slider.Draw(func(p *ui.Painter, r ui.Rect) {
@@ -228,14 +276,18 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 			p.Fill(track, meterTrackColor(c), 2)
 			fill := track
 			fill.W *= at
-			p.Fill(fill, t.Accent, 2)
+			fillColor := t.Accent
+			if sliderDisabled {
+				fillColor = t.TextMuted.Alpha(0.4)
+			}
+			p.Fill(fill, fillColor, 2)
 			activeIndex := int(math.Round(value))
 			for tick := range len(imageQualityLevels) {
 				x := track.X + track.W*float32(tick)/float32(len(imageQualityLevels)-1)
 				pip := ui.Rect{X: x - 3, Y: centerY - 3, W: 6, H: 6}
 				pipColor := meterTrackColor(c)
 				if tick <= activeIndex {
-					pipColor = t.Accent
+					pipColor = fillColor
 				}
 				p.Fill(pip, pipColor, 3)
 			}
@@ -244,14 +296,120 @@ func (s *application) presetQualityCard(c *ui.Context, preset compressionPreset)
 			p.Shadow(thumb, 10, 0, 2, 5, 0, ui.RGBA(0, 0, 0, 0.22))
 			p.Fill(thumb, ui.Hex("#ffffff"), 10)
 			p.Stroke(thumb, selectionBorder(c), 10, 1.25)
-			p.Fill(ui.Rect{X: thumbX - 3, Y: centerY - 3, W: 6, H: 6}, t.Accent, 3)
+			p.Fill(ui.Rect{X: thumbX - 3, Y: centerY - 3, W: 6, H: 6}, fillColor, 3)
 		})
 		if slider.Changed() {
 			s.editQualityLevel(int(math.Round(value)))
 		}
-		ui.Row(c).Children(func() {
-			ui.Text(c, "文件更小").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
-			ui.Text(c, "质量更高").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c))
+		if preset.lossless {
+			ui.Text(c, "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码；JPEG 保持原样不二次有损编码。").
+				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+		} else {
+			ui.Row(c).Children(func() {
+				ui.Text(c, "文件更小").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
+				ui.Text(c, "质量更高").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c))
+			})
+		}
+	})
+}
+
+var resizeDimensionPresets = [...]struct {
+	label string
+	value int
+}{
+	{"原尺寸", 0},
+	{"1280", 1280},
+	{"1920", 1920},
+	{"2560", 2560},
+	{"3840", 3840},
+}
+
+func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPreset) {
+	t := c.Theme()
+	locked := s.settingsDraftLocked()
+	settingsPanel(c, "settings-processing-panel").Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "格式与优化").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+		})
+		// Output format
+		ui.Column(c).FillWidth().Gap(6).Children(func() {
+			ui.Text(c, "输出格式").FontSize(settingsFontSize(c, 13)).FontWeight(500)
+			fmtIdx := 0
+			if preset.outputFormat == compress.OutputFormatWebP {
+				fmtIdx = 1
+			}
+			seg := settingsSegments(c, "preset-output-format", "输出格式", &fmtIdx, locked, "保持原格式", "转为 WebP").FillWidth()
+			s.focusSettingsField(seg, "preset-output-format")
+			if seg.Changed() {
+				if fmtIdx == 1 {
+					preset.outputFormat = compress.OutputFormatWebP
+				} else {
+					preset.outputFormat = compress.OutputFormatKeep
+				}
+				s.editor.message = ""
+			}
+			if preset.outputFormat == compress.OutputFormatWebP {
+				ui.Text(c, "将 JPEG / PNG 转换为 .webp；原文件不会被覆盖。").
+					FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+			}
+		})
+		// Max dimension downscale
+		ui.Column(c).FillWidth().Gap(6).Children(func() {
+			dimLabel := "不限制"
+			if preset.maxDimension > 0 {
+				dimLabel = fmt.Sprintf("长边 ≤ %d px", preset.maxDimension)
+			}
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "尺寸缩放").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
+				ui.Text(c, dimLabel).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
+			})
+			dimIdx := -1
+			labels := make([]string, len(resizeDimensionPresets))
+			for i, opt := range resizeDimensionPresets {
+				labels[i] = opt.label
+				if preset.maxDimension == opt.value {
+					dimIdx = i
+				}
+			}
+			seg := settingsSegments(c, "preset-max-dimension", "尺寸缩放", &dimIdx, locked, labels...).FillWidth()
+			s.focusSettingsField(seg, "preset-max-dimension")
+			if seg.Changed() && dimIdx >= 0 && dimIdx < len(resizeDimensionPresets) {
+				preset.maxDimension = resizeDimensionPresets[dimIdx].value
+				s.editor.message = ""
+			}
+			ui.Text(c, "仅缩小超过上限的图片，保持原比例不放大。").
+				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+		})
+		// Metadata policy
+		ui.Column(c).FillWidth().Gap(6).Children(func() {
+			ui.Text(c, "元数据").FontSize(settingsFontSize(c, 13)).FontWeight(500)
+			metaIdx := 0
+			switch preset.metadata {
+			case compress.MetadataKeepICC:
+				metaIdx = 1
+			case compress.MetadataStrip:
+				metaIdx = 2
+			}
+			seg := settingsSegments(c, "preset-metadata", "元数据", &metaIdx, locked, "保留全部", "仅色彩配置", "移除全部").FillWidth()
+			s.focusSettingsField(seg, "preset-metadata")
+			if seg.Changed() {
+				preset.metadata = [...]compress.MetadataPolicy{
+					compress.MetadataKeepAll,
+					compress.MetadataKeepICC,
+					compress.MetadataStrip,
+				}[metaIdx]
+				s.editor.message = ""
+			}
+			var metaNote string
+			switch preset.metadata {
+			case compress.MetadataKeepICC:
+				metaNote = "移除 EXIF、GPS 与文本注释，保留色彩配置（ICC / sRGB），适合分享与上传。"
+			case compress.MetadataStrip:
+				metaNote = "移除全部元数据与色彩配置，以换取最小体积。"
+			default:
+				metaNote = "PNG 与 WebP 保留原元数据；JPEG 仅保留兼容色彩配置并校正方向。"
+			}
+			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).MaxLines(2)
 		})
 	})
 }
@@ -282,7 +440,11 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 		})
 		if options.replacesOriginal() {
-			ui.Text(c, presetSaveDescription(*options)).FontSize(settingsFontSize(c, 12)).
+			warning := presetSaveDescription(*options)
+			if preset.outputFormat == compress.OutputFormatWebP {
+				warning = "当前设置将替换原 WebP 文件；JPEG / PNG 将在原文件夹另存为 .webp"
+			}
+			ui.Text(c, warning).FontSize(settingsFontSize(c, 12)).
 				TextColor(t.Danger).FillWidth().MaxLines(2)
 		}
 		if presetSaveSegments(c, options, locked) {
@@ -338,7 +500,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 				s.editor.message = ""
 			}
 		})
-		example := presetOutputExample(*options)
+		example := presetOutputExampleForFormat(*options, preset.outputFormat)
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "保存示例").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
 			ui.Text(c, example).Label("保存示例：" + example).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").

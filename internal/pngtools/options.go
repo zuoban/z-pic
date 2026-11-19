@@ -38,3 +38,29 @@ func (o QuantizeOptions) Validate() error {
 	}
 	return nil
 }
+
+// StripMode selects Oxipng metadata stripping behavior.
+// The zero value retains valid metadata chunks (default).
+type StripMode string
+
+const (
+	StripNone StripMode = ""
+	StripSafe StripMode = "safe"
+	StripAll  StripMode = "all"
+)
+
+func (m StripMode) Validate() error {
+	switch m {
+	case StripNone, StripSafe, StripAll:
+		return nil
+	default:
+		return fmt.Errorf("不支持的 PNG 元数据策略：%q", string(m))
+	}
+}
+
+// OptimizeOptions configures Oxipng execution.
+type OptimizeOptions struct {
+	Threads     int
+	Strip       StripMode
+	AllowLarger bool // Retain output even when >= len(input), e.g. when metadata must be stripped.
+}

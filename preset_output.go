@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
+
+	"zpic/internal/compress"
 )
 
 type presetSaveMode string
@@ -78,6 +80,21 @@ func (o presetSaveOptions) replacesOriginal() bool {
 	return o.Mode == presetSaveOriginal && !o.UseSubfolder && !o.UseSuffix
 }
 
+func (o presetSaveOptions) replacesFile(sourceFormat string, targetFormat compress.OutputFormat) bool {
+	if targetFormat == compress.OutputFormatWebP && sourceFormat != "" && sourceFormat != "webp" {
+		return false
+	}
+	return o.replacesOriginal()
+}
+
+func replaceFilenameExtension(name string, targetFormat compress.OutputFormat) string {
+	if targetFormat != compress.OutputFormatWebP {
+		return name
+	}
+	ext := filepath.Ext(name)
+	return strings.TrimSuffix(name, ext) + ".webp"
+}
+
 func (s *application) applyPresetOutput(o presetSaveOptions) {
 	if s.output == o {
 		return
@@ -102,10 +119,14 @@ func (s *application) configureBatchPresetOutput() {
 }
 
 func (o presetSaveOptions) copyPath(source, root, rel string, used map[string]bool) (string, error) {
-	return o.copyPathWithPlanner(source, root, rel, &batchOutputPlanner{used: used})
+	return o.copyPathForFormatWithPlanner(source, root, rel, compress.OutputFormatKeep, &batchOutputPlanner{used: used})
 }
 
 func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner *batchOutputPlanner) (string, error) {
+	return o.copyPathForFormatWithPlanner(source, root, rel, compress.OutputFormatKeep, planner)
+}
+
+func (o presetSaveOptions) copyPathForFormatWithPlanner(source, root, rel string, targetFormat compress.OutputFormat, planner *batchOutputPlanner) (string, error) {
 	if err := o.validate(); err != nil {
 		return "", err
 	}
@@ -138,6 +159,7 @@ func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner
 		root = subfolder
 	}
 	rel = sanitizeRelPath(rel, filepath.Base(source))
+	rel = replaceFilenameExtension(rel, targetFormat)
 	numberedOnly := false
 	if o.UseSuffix {
 		suffix := o.Suffix
@@ -160,13 +182,21 @@ func (s *application) savePresetResult() {
 		s.reportError(err, "保存失败")
 		return
 	}
-	if o.replacesOriginal() {
+	targetFormat := compress.OutputFormatKeep
+	if s.result.Format == "webp" && s.file != nil && s.file.format != "webp" {
+		targetFormat = compress.OutputFormatWebP
+	}
+	sourceFormat := ""
+	if s.file != nil {
+		sourceFormat = s.file.format
+	}
+	if o.replacesFile(sourceFormat, targetFormat) {
 		s.requestOverwrite()
 		return
 	}
 	result := s.result
 	save := func(root string) {
-		path, err := o.copyPath(result.SourcePath, root, filepath.Base(result.SourcePath), make(map[string]bool))
+		path, err := o.copyPathForFormatWithPlanner(result.SourcePath, root, filepath.Base(result.SourcePath), targetFormat, &batchOutputPlanner{used: make(map[string]bool)})
 		if err == nil {
 			err = os.MkdirAll(filepath.Dir(path), 0o755)
 		}

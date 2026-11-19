@@ -133,3 +133,62 @@ func (s *application) copyResult() {
 		})
 	}()
 }
+
+func (s *application) canCopyBatchItem(item batchItem) bool {
+	return !s.closed && !s.modalOpen() && item.status == batchDone && batchItemOutputPath(item) != ""
+}
+
+func (s *application) copyBatchItem(index int) {
+	if s.batch == nil || index < 0 || index >= len(s.batch.items) {
+		return
+	}
+	item := s.batch.items[index]
+	if !s.canCopyBatchItem(item) {
+		return
+	}
+	path := batchItemOutputPath(item)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.busy, s.phase, s.cancel = true, "正在准备剪贴板图片", cancel
+	s.setMessage("", false)
+	go func() {
+		selected, err := s.readSelectionWithBudget(ctx, path, nil)
+		var pngData []byte
+		if err == nil {
+			if selected.format == "png" {
+				pngData, err = compress.PNGBytes(ctx, selected.data)
+			} else {
+				var release func()
+				release, err = s.acquirePreviewMemory(ctx, compress.ImageInfo{
+					Format: selected.format, Width: selected.width, Height: selected.height, Size: selected.size,
+				})
+				if err == nil {
+					pngData, err = compress.PNGBytes(ctx, selected.data)
+					release()
+				}
+			}
+		}
+		s.update(func() {
+			defer cancel()
+			if canceled := ctx.Err(); canceled != nil {
+				err = canceled
+			}
+			s.busy, s.phase, s.cancel, s.canceling = false, "", nil, false
+			if err == nil {
+				if s.writeClipboardImage != nil {
+					err = s.writeClipboardImage(pngData)
+				} else {
+					err = mygo.Clipboard.Write(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, pngData))))
+				}
+			}
+			if err != nil {
+				s.reportError(err, "复制图片失败")
+				if s.failed {
+					s.showClipboardToast("复制图片失败", s.message, true)
+				}
+			} else {
+				s.setMessage("已复制压缩图片，可直接粘贴", false)
+				s.showClipboardToast("图片已复制到剪贴板", "可直接粘贴到其他应用", false)
+			}
+		})
+	}()
+}

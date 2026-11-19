@@ -288,7 +288,7 @@ func TestSettingsLargeTextKeepsControlsAndContentReachable(t *testing.T) {
 			}
 			label := "打开设置"
 			if section == settingsPresets {
-				label = "保存示例：example.png"
+				label = "元数据"
 			}
 			info, ok := tester.AccessByRole(ui.RoleText, label)
 			if !ok || info.Offscreen || info.Bounds.Y+info.Bounds.H > save.Bounds.Y-12 {

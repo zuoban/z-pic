@@ -48,6 +48,11 @@ type application struct {
 	scheme         string
 	theme          themeMode
 	png            compress.PNGOptions
+	lossless       bool
+	metadata       compress.MetadataPolicy
+	outputFormat   compress.OutputFormat
+	maxDimension   int
+	autoCompress   bool
 	output         presetSaveOptions
 	settingsOpen   bool
 	settingsFile   string
@@ -265,6 +270,20 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 	s.batch = nil
 	s.prepareThumbnailCache()
 	s.file, s.preview, s.result = selected, selected.preview, nil
+	s.lastSavedPath = ""
+	s.comparison = comparisonView{split: 50}
+	s.confirmOverwrite, s.overwritten = false, false
+	s.setMessage("", false)
+	if s.autoCompress && !s.closed {
+		s.startCompression()
+	}
+}
+
+func (s *application) clearSingleImage() {
+	if s.modalOpen() || s.batch != nil || s.file == nil {
+		return
+	}
+	s.file, s.preview, s.result = nil, nil, nil
 	s.lastSavedPath = ""
 	s.comparison = comparisonView{split: 50}
 	s.confirmOverwrite, s.overwritten = false, false
@@ -532,6 +551,7 @@ func (s *application) writeCopy(result *compress.Result, path string) {
 func (s *application) canOverwrite() bool {
 	return !s.busy && !s.settingsOpen && !s.confirmBatchOverwrite && s.batch == nil &&
 		s.file != nil && s.result != nil &&
+		(s.result.Format == "" || s.result.Format == s.file.format) &&
 		!s.result.Unchanged && s.result.OutputSize > 0 &&
 		s.result.OutputSize < s.result.OriginalSize && !s.overwritten
 }

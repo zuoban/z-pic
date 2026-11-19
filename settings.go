@@ -15,10 +15,14 @@ import (
 )
 
 type compressionPreset struct {
-	name    string
-	quality float64
-	png     compress.PNGOptions
-	output  presetSaveOptions
+	name         string
+	quality      float64
+	png          compress.PNGOptions
+	lossless     bool
+	metadata     compress.MetadataPolicy
+	outputFormat compress.OutputFormat
+	maxDimension int
+	output       presetSaveOptions
 }
 
 var compressionPresets = []compressionPreset{
@@ -66,6 +70,7 @@ const (
 type settingsEditor struct {
 	section       settingsSection
 	theme         themeMode
+	autoCompress  bool
 	presets       []compressionPreset
 	selected      int
 	active        int
@@ -110,6 +115,7 @@ func (e *settingsEditor) nameProblem() string {
 func (s *application) settingsHaveChanges() bool {
 	e := s.editor
 	return e != nil && (e.theme.normalized() != s.effectiveThemeMode() ||
+		e.autoCompress != s.autoCompress ||
 		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme)
 }
 
@@ -131,6 +137,7 @@ func (s *application) restoreSettings() {
 	s.settingsError = ""
 	s.presets = cfg.presets
 	s.batchOutputDir = usableBatchOutputDir(cfg.batchOutputDir)
+	s.autoCompress = cfg.autoCompress
 	s.syncTheme(cfg.theme)
 	s.applyScheme(cfg.selected)
 }
@@ -163,8 +170,9 @@ func (s *application) setSettingsOpen(open bool) {
 		}
 	}
 	s.editor = &settingsEditor{
-		theme:   s.effectiveThemeMode(),
-		presets: slices.Clone(s.presets), selected: active, active: active,
+		theme:        s.effectiveThemeMode(),
+		autoCompress: s.autoCompress,
+		presets:      slices.Clone(s.presets), selected: active, active: active,
 		message: s.settingsError,
 	}
 	if s.window == nil {
@@ -228,24 +236,37 @@ func (s *application) setScheme(name string) {
 					return
 				}
 			}
-			s.applyScheme(name)
+			paramsChanged := s.applyScheme(name)
+			if paramsChanged && s.autoCompress && s.batch == nil && s.file != nil && !s.modalOpen() {
+				s.startCompression()
+			}
 			return
 		}
 	}
 }
 
-func (s *application) applyScheme(name string) {
+func (s *application) applyScheme(name string) bool {
 	for _, preset := range s.presets {
 		if preset.name == name {
-			changed := s.quality != preset.quality || s.png != preset.png
-			s.scheme, s.quality, s.png = name, preset.quality, preset.png
+			changed := s.quality != preset.quality || s.png != preset.png ||
+				s.lossless != preset.lossless || s.metadata != preset.metadata ||
+				s.outputFormat != preset.outputFormat || s.maxDimension != preset.maxDimension
+			formatChanged := s.outputFormat != preset.outputFormat
+			s.scheme = name
+			s.quality, s.png = preset.quality, preset.png
+			s.lossless, s.metadata = preset.lossless, preset.metadata
+			s.outputFormat, s.maxDimension = preset.outputFormat, preset.maxDimension
 			if changed {
 				s.invalidateResult()
 			}
+			if formatChanged && s.output == preset.output {
+				s.configureBatchPresetOutput()
+			}
 			s.applyPresetOutput(preset.output)
-			return
+			return changed
 		}
 	}
+	return false
 }
 
 func (s *application) editQualityLevel(level int) {
@@ -357,11 +378,12 @@ func (s *application) saveSettingsEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := s.saveCurrentSettings(presets, selected, s.batchOutputDir, s.editor.theme); err != nil {
+	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
 	s.presets = presets
+	s.autoCompress = s.editor.autoCompress
 	if s.settingsError != "" {
 		s.setMessage("设置已保存。", false)
 	}
@@ -372,17 +394,29 @@ func (s *application) saveSettingsEdits() {
 }
 
 func (s *application) saveCurrentSettings(presets []compressionPreset, selected, batchOutputDir string, theme themeMode) error {
+	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress)
+}
+
+func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress bool) error {
 	return saveFullSettings(s.settingsFile, appSettings{
 		presets:        presets,
 		selected:       selected,
 		batchOutputDir: usableBatchOutputDir(batchOutputDir),
 		theme:          theme,
+		autoCompress:   autoCompress,
 	})
 }
 
 // Capture all settings on the UI thread before launching compression.
 func (s *application) compressionOptions() compress.Options {
-	return compress.Options{Quality: int(s.quality), PNG: s.png}
+	return compress.Options{
+		Quality:      int(s.quality),
+		PNG:          s.png,
+		Lossless:     s.lossless,
+		Metadata:     s.metadata,
+		OutputFormat: s.outputFormat,
+		MaxDimension: s.maxDimension,
+	}
 }
 
 func usableBatchOutputDir(path string) string {

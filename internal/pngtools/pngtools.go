@@ -59,19 +59,66 @@ func Optimize(ctx context.Context, data []byte) ([]byte, error) {
 
 // OptimizeWithThreads runs Optimize with an explicit native thread quota when threads > 0.
 func OptimizeWithThreads(ctx context.Context, data []byte, threads int) ([]byte, error) {
+	return OptimizeWithOptions(ctx, data, OptimizeOptions{Threads: threads})
+}
+
+// OptimizeWithOptions runs Oxipng with explicit thread quota and metadata strip mode.
+func OptimizeWithOptions(ctx context.Context, data []byte, options OptimizeOptions) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
-	representationMetadata, err := hasRepresentationMetadata(ctx, data)
-	if err != nil {
+	if err := options.Strip.Validate(); err != nil {
 		return nil, err
 	}
-	threadStr := effectivePNGThreads(threads)
+	threadStr := effectivePNGThreads(options.Threads)
 	args := []string{"-o", "2", "--threads", threadStr}
-	if representationMetadata {
-		args = append(args, "--nx")
+	switch options.Strip {
+	case StripSafe:
+		args = append(args, "--strip", "safe")
+	case StripAll:
+		args = append(args, "--strip", "all")
+	default:
+		representationMetadata, err := hasRepresentationMetadata(ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		if representationMetadata {
+			args = append(args, "--nx")
+		}
 	}
-	return invokeWithThreads(ctx, "oxipng", append(args, "--stdout", "-"), data, threads)
+	return invokeWithConfig(ctx, "oxipng", append(args, "--stdout", "-"), data, options.Threads, options.AllowLarger)
+}
+
+// HasStrippableMetadata reports whether data contains PNG chunks that would be
+// removed by Oxipng under mode.
+func HasStrippableMetadata(ctx context.Context, data []byte, mode StripMode) (bool, error) {
+	if mode == StripNone {
+		return false, ctx.Err()
+	}
+	for offset := 8; offset <= len(data)-12; {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		size := uint64(binary.BigEndian.Uint32(data[offset:]))
+		if size > uint64(len(data)-offset-12) {
+			return false, nil
+		}
+		chunkType := string(data[offset+4 : offset+8])
+		if chunkType == "IEND" {
+			return false, ctx.Err()
+		}
+		switch chunkType {
+		case "IHDR", "PLTE", "IDAT", "tRNS":
+		case "cICP", "iCCP", "sRGB", "pHYs", "acTL", "fcTL", "fdAT":
+			if mode == StripAll {
+				return true, nil
+			}
+		default:
+			return true, nil
+		}
+		offset += int(size) + 12
+	}
+	return false, ctx.Err()
 }
 
 // Quantize runs pngquant 3.0.3 with DefaultQuantizeOptions.
@@ -91,6 +138,11 @@ func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptio
 
 // QuantizeWithThreads runs QuantizeWithOptions with an explicit native thread quota when threads > 0.
 func QuantizeWithThreads(ctx context.Context, data []byte, options QuantizeOptions, threads int) ([]byte, error) {
+	return QuantizeWithStrip(ctx, data, options, threads, false)
+}
+
+// QuantizeWithStrip runs pngquant with optional --strip for full metadata removal.
+func QuantizeWithStrip(ctx context.Context, data []byte, options QuantizeOptions, threads int, stripAll bool) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
@@ -100,11 +152,16 @@ func QuantizeWithThreads(ctx context.Context, data []byte, options QuantizeOptio
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
-	return invokeWithThreads(ctx, "pngquant", []string{
+	args := make([]string, 0, 8)
+	if stripAll {
+		args = append(args, "--strip")
+	}
+	args = append(args,
 		fmt.Sprintf("--quality=%d-%d", options.MinQuality, options.MaxQuality),
-		"--speed=" + strconv.Itoa(options.Speed),
+		"--speed="+strconv.Itoa(options.Speed),
 		"--skip-if-larger", "--output", "-", strconv.Itoa(options.Colors), "-",
-	}, data, threads)
+	)
+	return invokeWithConfig(ctx, "pngquant", args, data, threads, false)
 }
 
 func checkInput(ctx context.Context, data []byte) error {
@@ -144,6 +201,10 @@ func invoke(ctx context.Context, name string, args []string, data []byte) ([]byt
 }
 
 func invokeWithThreads(ctx context.Context, name string, args []string, data []byte, threads int) ([]byte, error) {
+	return invokeWithConfig(ctx, name, args, data, threads, false)
+}
+
+func invokeWithConfig(ctx context.Context, name string, args []string, data []byte, threads int, allowLarger bool) ([]byte, error) {
 	// Include extraction in the cancellation/deadline budget.
 	ctx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
@@ -152,7 +213,7 @@ func invokeWithThreads(ctx context.Context, name string, args []string, data []b
 		return nil, err
 	}
 	defer cleanup()
-	return runCommandWithThreads(ctx, name, path, args, data, maxPNGBytes, threads)
+	return runCommandWithConfig(ctx, name, path, args, data, maxPNGBytes, threads, allowLarger)
 }
 
 func acquireTool(name string) (string, func(), error) {
@@ -186,12 +247,16 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 }
 
 func runCommandWithThreads(ctx context.Context, name, path string, args []string, data []byte, limit, threads int) ([]byte, error) {
+	return runCommandWithConfig(ctx, name, path, args, data, limit, threads, false)
+}
+
+func runCommandWithConfig(ctx context.Context, name, path string, args []string, data []byte, limit, threads int, allowLarger bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%s 已取消：%w", name, err)
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stdout := &limitedOutput{input: data, limit: limit + 1, cancel: cancel}
+	stdout := &limitedOutput{input: data, limit: limit + 1, allowLarger: allowLarger, cancel: cancel}
 	stderr := toolio.NewDiagnostic(maxStderr)
 	cmd := exec.CommandContext(childCtx, path, args...)
 	cmd.Stdin = bytes.NewReader(data)
@@ -220,7 +285,7 @@ func runCommandWithThreads(ctx context.Context, name, path string, args []string
 	if stdout.size == 0 {
 		return nil, fmt.Errorf("%s 未生成 PNG 数据", name)
 	}
-	if stdout.size >= len(data) {
+	if !allowLarger && stdout.size >= len(data) {
 		return data, nil
 	}
 	if stdout.buf.Len() == 0 {
@@ -230,19 +295,24 @@ func runCommandWithThreads(ctx context.Context, name, path string, args []string
 }
 
 type limitedOutput struct {
-	input    []byte
-	buf      toolio.BoundedBuffer
-	size     int
-	limit    int
-	overflow bool
-	cancel   context.CancelFunc
+	input       []byte
+	buf         toolio.BoundedBuffer
+	size        int
+	limit       int
+	allowLarger bool
+	overflow    bool
+	cancel      context.CancelFunc
 }
 
 func (w *limitedOutput) Write(p []byte) (int, error) {
 	n := min(len(p), w.limit-w.size)
 	start := w.size
 	w.size += n
-	if w.size >= len(w.input) {
+	if w.allowLarger {
+		if n > 0 {
+			w.buf.AppendBounded(nil, p[:n], w.limit)
+		}
+	} else if w.size >= len(w.input) {
 		w.buf.Reset()
 	} else if w.buf.Len() != 0 || !bytes.Equal(p[:n], w.input[start:w.size]) {
 		var prefix []byte

@@ -111,6 +111,25 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 	}
 	s.clipboardOutcome = clipboardOutcomeAdded
 	s.setMessage(batchScanMessage(len(scan.items), scan.duplicates, scan.truncated, appendMode), false)
+	if s.autoCompress && !s.closed && s.canAutoCompressBatch() {
+		s.startBatchCompression()
+	}
+}
+
+func (s *application) canAutoCompressBatch() bool {
+	if s.modalOpen() || s.batch == nil {
+		return false
+	}
+	if s.batch.outputMode == batchOutputOverwrite && s.batchRunWillOverwriteAny(batchRunPending, -1) {
+		return false
+	}
+	if s.output.Mode == presetSaveAsk {
+		return false
+	}
+	if s.output.Mode == presetSaveFixed && s.output.Directory == "" {
+		return false
+	}
+	return true
 }
 
 func batchScanMessage(added, duplicates int, truncated, appendMode bool) string {

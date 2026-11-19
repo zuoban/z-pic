@@ -25,6 +25,7 @@ type storedSettings struct {
 	Presets        []storedPreset `json:"presets"`
 	BatchOutputDir string         `json:"batch_output_dir,omitempty"`
 	Theme          string         `json:"theme,omitempty"`
+	AutoCompress   bool           `json:"auto_compress,omitempty"`
 }
 
 type appSettings struct {
@@ -32,14 +33,19 @@ type appSettings struct {
 	selected       string
 	batchOutputDir string
 	theme          themeMode
+	autoCompress   bool
 }
 
 type storedPreset struct {
-	Name     string              `json:"name"`
-	Quality  float64             `json:"quality"`
-	PNG      compress.PNGOptions `json:"png"`
-	Output   *presetSaveOptions  `json:"output,omitempty"`
-	Favorite bool                `json:"favorite,omitempty"`
+	Name         string                  `json:"name"`
+	Quality      float64                 `json:"quality"`
+	PNG          compress.PNGOptions     `json:"png"`
+	Lossless     bool                    `json:"lossless,omitempty"`
+	Metadata     compress.MetadataPolicy `json:"metadata,omitempty"`
+	OutputFormat compress.OutputFormat   `json:"output_format,omitempty"`
+	MaxDimension int                     `json:"max_dimension,omitempty"`
+	Output       *presetSaveOptions      `json:"output,omitempty"`
+	Favorite     bool                    `json:"favorite,omitempty"`
 }
 
 func settingsFilePath() (string, error) {
@@ -100,6 +106,15 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		}
 		if err := preset.png.Validate(); err != nil {
 			return invalid("quality-level", fmt.Errorf("预设「%s」的 PNG 参数无效：%w", preset.name, err))
+		}
+		if err := preset.metadata.Validate(); err != nil {
+			return invalid("preset-metadata", fmt.Errorf("预设「%s」的元数据策略无效：%w", preset.name, err))
+		}
+		if err := preset.outputFormat.Validate(); err != nil {
+			return invalid("preset-output-format", fmt.Errorf("预设「%s」的输出格式无效：%w", preset.name, err))
+		}
+		if err := compress.ValidateMaxDimension(preset.maxDimension); err != nil {
+			return invalid("preset-max-dimension", fmt.Errorf("预设「%s」的缩放尺寸无效：%w", preset.name, err))
 		}
 		if field, err := preset.output.validateField(); err != nil {
 			return invalid(field, fmt.Errorf("预设「%s」的保存设置无效：%w", preset.name, err))
@@ -194,9 +209,13 @@ func loadFullSettings(path string) (appSettings, error) {
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
 		presets[index] = compressionPreset{
-			name:    preset.Name,
-			quality: preset.Quality,
-			png:     preset.PNG,
+			name:         preset.Name,
+			quality:      preset.Quality,
+			png:          preset.PNG,
+			lossless:     preset.Lossless,
+			metadata:     preset.Metadata,
+			outputFormat: preset.OutputFormat,
+			maxDimension: preset.MaxDimension,
 		}
 		if preset.Output != nil {
 			presets[index].output = *preset.Output
@@ -210,6 +229,7 @@ func loadFullSettings(path string) (appSettings, error) {
 		selected:       stored.Selected,
 		batchOutputDir: sanitizeStoredBatchOutputDir(stored.BatchOutputDir),
 		theme:          mode.normalized(),
+		autoCompress:   stored.AutoCompress,
 	}, nil
 }
 
@@ -343,10 +363,17 @@ func saveFullSettings(path string, cfg appSettings) error {
 		Presets:        make([]storedPreset, len(cfg.presets)),
 		BatchOutputDir: batchOutputDir,
 		Theme:          cfg.theme.storedValue(),
+		AutoCompress:   cfg.autoCompress,
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{
-			Name: preset.name, Quality: preset.quality, PNG: preset.png,
+			Name:         preset.name,
+			Quality:      preset.quality,
+			PNG:          preset.png,
+			Lossless:     preset.lossless,
+			Metadata:     preset.metadata,
+			OutputFormat: preset.outputFormat,
+			MaxDimension: preset.maxDimension,
 		}
 		if preset.output != (presetSaveOptions{}) {
 			output := preset.output

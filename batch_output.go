@@ -187,11 +187,27 @@ func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPa
 	return "", errors.New("同名输出文件过多，请选择其他目录或文件名")
 }
 
+func (s *application) batchEffectiveOutputDir() string {
+	if s.batch == nil {
+		return ""
+	}
+	if s.batch.outputMode == batchOutputFolder && s.batch.outputDir != "" {
+		return s.batch.outputDir
+	}
+	for _, item := range s.batch.items {
+		if item.status == batchDone && item.savedPath != "" {
+			return filepath.Dir(item.savedPath)
+		}
+	}
+	return ""
+}
+
 func (s *application) openOutputDir() {
-	if s.modalOpen() || s.batch == nil || s.batch.outputDir == "" {
+	dir := s.batchEffectiveOutputDir()
+	if s.modalOpen() || dir == "" {
 		return
 	}
-	if err := mygo.Shell.OpenPath(s.batch.outputDir); err != nil {
+	if err := mygo.Shell.OpenPath(dir); err != nil {
 		s.setMessage("无法打开输出文件夹："+err.Error(), true)
 	}
 }

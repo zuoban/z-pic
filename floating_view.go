@@ -252,6 +252,92 @@ func (s *application) openFloatingSelection() {
 	s.showMainWindow()
 }
 
+func (s *application) floatingCompressAction() (string, bool) {
+	if s.modalOpen() {
+		return "开始压缩", false
+	}
+	if s.batch != nil {
+		_, pending, done, _, _, _, canRun := s.batchStats()
+		if !canRun {
+			return "开始压缩", false
+		}
+		switch {
+		case pending > 0 && done > 0:
+			return "继续压缩", true
+		case pending == 0 && done > 0:
+			return "重新压缩", true
+		default:
+			return "开始压缩", true
+		}
+	}
+	if s.file != nil {
+		if s.result != nil {
+			return "重新压缩", true
+		}
+		return "开始压缩", true
+	}
+	return "开始压缩", false
+}
+
+func (s *application) compressFromFloating() {
+	if s.modalOpen() {
+		return
+	}
+	if s.batch != nil {
+		_, pending, done, _, _, _, canRun := s.batchStats()
+		if !canRun {
+			return
+		}
+		mode := batchRunPending
+		if pending == 0 && done > 0 {
+			mode = batchRunRestart
+		}
+		needsMainPrompt := (s.batch.outputMode == batchOutputOverwrite && s.batchRunWillOverwriteAny(mode, -1)) ||
+			s.output.Mode == presetSaveAsk
+		if needsMainPrompt {
+			s.showMainWindow()
+		}
+		s.beginBatchRunMode(mode, -1)
+		return
+	}
+	if s.file != nil {
+		s.startCompression()
+	}
+}
+
+func (s *application) canCopyFloatingSelection() bool {
+	if s.modalOpen() {
+		return false
+	}
+	item, ok := s.floatingSelectedImage()
+	if !ok {
+		return false
+	}
+	if s.batch == nil {
+		return s.canCopyResult()
+	}
+	return s.canCopyBatchItem(item)
+}
+
+func (s *application) copyFloatingSelection() {
+	if !s.canCopyFloatingSelection() {
+		return
+	}
+	if s.batch == nil {
+		s.copyResult()
+		return
+	}
+	item, ok := s.floatingSelectedImage()
+	if !ok {
+		return
+	}
+	for index, candidate := range s.batch.items {
+		if candidate.path == item.path {
+			s.copyBatchItem(index)
+			return
+		}
+	}
+}
 func (s *application) floatingBitmap(item batchItem) *ui.Bitmap {
 	if s.batch == nil && s.file != nil && s.file.path == item.path {
 		return s.file.preview
@@ -301,13 +387,22 @@ func (s *application) floatingView(c *ui.Context) {
 			s.floatingHeader(c)
 			s.floatingGallery(c, indices)
 			s.floatingFeedback(c)
-			ui.Row(c).Height(28).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Height(28).Gap(6).AlignItems(ui.Center).Children(func() {
+				compressLabel, canCompress := s.floatingCompressAction()
+				primaryAction(c, "floating-compress", compressLabel, !canCompress).Height(28).Padding(0, 10).
+					Tooltip("直接按当前预设压缩队列图片").
+					OnClick(s.compressFromFloating)
 				quietButton(c, "floating-show-main", "查看队列", 28, false).
 					OnClick(s.showMainWindow)
 				item, selected := s.floatingSelectedImage()
 				quietButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).
 					Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
 					OnClick(s.openFloatingSelection)
+				if s.canCopyFloatingSelection() {
+					quietButton(c, "floating-copy", "复制", 28, false).
+						Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
+						OnClick(s.copyFloatingSelection)
+				}
 				ui.Box(c).Grow(1)
 				quietButton(c, "floating-downloads", "下载位置", 28, false).
 					Tooltip("打开网页原图下载文件夹").

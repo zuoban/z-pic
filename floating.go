@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -17,8 +19,9 @@ import (
 )
 
 const (
-	maxPendingDrops       = 16
-	maxCachedDownloadURLs = 512
+	maxPendingDrops            = 16
+	maxCachedDownloadURLs      = 512
+	maxConcurrentDropDownloads = 4
 )
 
 func (s *application) setFloatingOpen(open bool) {
@@ -185,13 +188,39 @@ func (s *application) startNextDropImport() {
 		if err != nil {
 			failures = append(failures, err.Error())
 		}
-		for index, item := range items {
-			if ctx.Err() != nil {
-				break
+		type stagedDrop struct {
+			staged   *dropimport.StagedItem
+			cached   string
+			url      string
+			errMsg   string
+			resolved bool
+		}
+		stagedDrops := make([]stagedDrop, len(items))
+		defer func() {
+			for i := range stagedDrops {
+				stagedDrops[i].staged.Discard()
 			}
-			phase := fmt.Sprintf("正在接收 %d / %d 张图片", index+1, len(items))
+		}()
+		remoteCount := 0
+		for _, item := range items {
 			if item.URL != "" {
-				phase = fmt.Sprintf("正在下载 %d / %d 张图片", index+1, len(items))
+				remoteCount++
+			}
+		}
+		workers := 1
+		if remoteCount > 1 {
+			workers = min(maxConcurrentDropDownloads, len(items))
+		}
+		var started atomic.Int64
+		stageOne := func(index int) {
+			if ctx.Err() != nil {
+				return
+			}
+			item := items[index]
+			n := int(started.Add(1))
+			phase := fmt.Sprintf("正在接收 %d / %d 张图片", n, len(items))
+			if item.URL != "" {
+				phase = fmt.Sprintf("正在下载 %d / %d 张图片", n, len(items))
 			}
 			s.update(func() {
 				if !s.canceling {
@@ -200,26 +229,82 @@ func (s *application) startNextDropImport() {
 			})
 			if item.URL != "" && cached[item.URL] != "" {
 				if info, statErr := os.Stat(cached[item.URL]); statErr == nil && info.Mode().IsRegular() {
-					paths = append(paths, cached[item.URL])
-					continue
+					stagedDrops[index] = stagedDrop{cached: cached[item.URL], resolved: true}
+					return
 				}
 			}
 			if item.Path == "" && dirErr != nil {
-				failures = append(failures, "无法读取下载目录："+dirErr.Error())
+				stagedDrops[index] = stagedDrop{errMsg: "无法读取下载目录：" + dirErr.Error()}
+				return
+			}
+			staged, stageErr := resolver.Stage(ctx, item)
+			if stageErr != nil {
+				if ctx.Err() == nil {
+					stagedDrops[index] = stagedDrop{errMsg: stageErr.Error()}
+				}
+				return
+			}
+			stagedDrops[index] = stagedDrop{staged: staged, url: item.URL, resolved: true}
+		}
+		if workers <= 1 {
+			for index := range items {
+				if ctx.Err() != nil {
+					break
+				}
+				stageOne(index)
+			}
+		} else {
+			jobs := make(chan int)
+			var wg sync.WaitGroup
+			for range workers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for index := range jobs {
+						stageOne(index)
+					}
+				}()
+			}
+			for index := range items {
+				if ctx.Err() != nil {
+					break
+				}
+				jobs <- index
+			}
+			close(jobs)
+			wg.Wait()
+		}
+		// Commit staged files strictly in import order so duplicate names get deterministic suffixes.
+		for i := range stagedDrops {
+			entry := &stagedDrops[i]
+			if entry.errMsg != "" {
+				failures = append(failures, entry.errMsg)
 				continue
 			}
-			path, saved, resolveErr := resolver.Resolve(ctx, item)
-			if resolveErr != nil {
+			if !entry.resolved {
+				continue
+			}
+			if entry.cached != "" {
+				paths = append(paths, entry.cached)
+				continue
+			}
+			if ctx.Err() != nil {
+				entry.staged.Discard()
+				continue
+			}
+			path, saved, commitErr := resolver.Commit(ctx, entry.staged)
+			entry.staged = nil
+			if commitErr != nil {
 				if ctx.Err() == nil {
-					failures = append(failures, resolveErr.Error())
+					failures = append(failures, commitErr.Error())
 				}
 				continue
 			}
 			paths = append(paths, path)
 			if saved {
 				downloaded++
-				if item.URL != "" {
-					savedURLs[item.URL] = path
+				if entry.url != "" {
+					savedURLs[entry.url] = path
 				}
 			}
 		}

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 const mainTitleBarHeight = 52
@@ -63,7 +65,7 @@ func (s *application) view(c *ui.Context) {
 	s.prepareBatchThumbnails()
 	_, pending, done, _, _, _, canRun := s.batchStats()
 	showBatchOutput := s.batch != nil && !s.batch.previewOpen && canRun && pending == 0 && done > 0 &&
-		s.batch.outputMode == batchOutputFolder && s.batch.outputDir != ""
+		s.batchEffectiveOutputDir() != ""
 	width, _ := c.Size()
 	mobile := width < 720
 	pagePadding, panelGap := float32(24), float32(20)
@@ -340,13 +342,26 @@ func (s *application) previewPanel(c *ui.Context) {
 				ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 					ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(500).
 						SingleLine().TruncateMiddle().Tooltip(s.file.path)
-					ui.Textf(c, "%s  ·  %d × %d  ·  %s",
-						strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size)).
-						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
+					meta := fmt.Sprintf("%s  ·  %d × %d  ·  %s",
+						strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size))
+					if s.result != nil {
+						if s.result.Format != "" && s.result.Format != s.file.format {
+							meta += "  →  " + strings.ToUpper(s.result.Format)
+						}
+						if s.result.Width > 0 && s.result.Height > 0 &&
+							(s.result.Width != s.file.width || s.result.Height != s.file.height) {
+							meta += fmt.Sprintf("  ·  %d × %d", s.result.Width, s.result.Height)
+						}
+					}
+					ui.Text(c, meta).
+						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle()
 				})
 				quietButton(c, "replace", "更换图片", 32, s.modalOpen()).
 					KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("更换图片 · " + shortcutLabel("O")).
 					OnClick(s.chooseFile)
+				quietButton(c, "single-clear", "清空", 32, s.modalOpen()).
+					Tooltip("关闭当前图片").
+					OnClick(s.clearSingleImage)
 			})
 		}
 	})
@@ -442,7 +457,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				s.imageResultSummary(c, "压缩结果")
 			}
 			s.singleOutputSummary(c)
-			if s.file != nil && s.file.format == "png" {
+			if s.file != nil && s.file.format == "png" && !s.lossless && s.outputFormat != compress.OutputFormatWebP {
 				ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
 					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 			}
@@ -475,9 +490,10 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 		}
 		if s.result != nil {
 			label, hint := s.saveActionDescription()
-			disabled := s.modalOpen() || (s.output.replacesOriginal() && !s.canOverwrite())
+			replaces := s.singleReplacesOriginal()
+			disabled := s.modalOpen() || (replaces && !s.canOverwrite())
 			var save ui.Element
-			if s.output.replacesOriginal() {
+			if replaces {
 				save = destructiveAction(c, "save", label, 36, disabled)
 			} else {
 				save = primaryAction(c, "save", label, disabled).Height(36)
@@ -533,46 +549,114 @@ func (s *application) workFeedback(c *ui.Context) {
 	}
 }
 
+func (s *application) activePresetSnapshot() compressionPreset {
+	return compressionPreset{
+		name:         s.scheme,
+		quality:      s.quality,
+		png:          s.png,
+		lossless:     s.lossless,
+		metadata:     s.metadata,
+		outputFormat: s.outputFormat,
+		maxDimension: s.maxDimension,
+		output:       s.output,
+	}
+}
+
+func (s *application) singleReplacesOriginal() bool {
+	sourceFormat := ""
+	if s.file != nil {
+		sourceFormat = s.file.format
+	}
+	targetFormat := s.outputFormat
+	if s.result != nil && s.result.Format == "webp" && sourceFormat != "" && sourceFormat != "webp" {
+		targetFormat = compress.OutputFormatWebP
+	}
+	return s.output.replacesFile(sourceFormat, targetFormat)
+}
+
 func (s *application) presetOverview(c *ui.Context) {
+	t := c.Theme()
+	active := s.activePresetSnapshot()
 	ui.Column(c).Gap(8).Children(func() {
 		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
 			if s.batch != nil && s.batch.previewOpen {
-				ui.Text(c, "单张预览").FontSize(12).FontWeight(500).TextColor(accentForeground(c.Theme())).
+				ui.Text(c, "单张预览").FontSize(12).FontWeight(500).TextColor(accentForeground(t)).
 					Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).
 					Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 			}
 		})
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
-			ui.Text(c, s.scheme).FontSize(13).FontWeight(500).Width(0).Grow(1).
-				SingleLine().TruncateMiddle().Tooltip(s.scheme)
-			quietButton(c, "manage-preset", "编辑", 28, s.modalOpen()).
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
+			disabled := s.modalOpen()
+			picker := ui.ButtonBase(c.Key("quick-preset-picker"))
+			picker.PopoverMenuButton(func(menu *ui.Menu) {
+				menu.MaxWidth(280)
+				for _, option := range s.presets {
+					name := presetDisplayName(option)
+					if menu.Item(name).Radio(option.name == s.scheme).Tooltip(name).Disabled(disabled).Chosen() {
+						s.setScheme(option.name)
+					}
+				}
+			}, ui.PopoverMenuButtonOptions{
+				At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
+				Panel: func(panel ui.Element) {
+					panel.MinWidth(max(160, picker.Bounds().W)).MaxWidth(280).
+						Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
+						NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+				},
+			}).Label("快速切换预设").Value(s.scheme).Tooltip("快速切换预设："+s.scheme).
+				Width(0).Grow(1).MinWidth(0).Height(28).Padding(0, 8).Gap(4).
+				AlignItems(ui.Center).Radius(innerRadius(c)).
+				Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
+			if !disabled {
+				if picker.Pressed() {
+					picker.Background(glassControlPressed(c))
+				} else if picker.Hovered() {
+					picker.Background(glassControlHover(c))
+				}
+			}
+			picker.Children(func() {
+				ui.Text(c, s.scheme).FontSize(13).FontWeight(500).SingleLine().TruncateMiddle().
+					Width(0).Grow(1).MinWidth(0)
+				ui.Icon(c, settingsChevronIcon).Size(14, 14).Shrink(0).TextColor(t.TextMuted)
+			})
+			quietButton(c, "manage-preset", "编辑", 28, disabled).
 				Label("管理预设").Tooltip("编辑当前预设的质量和保存方式").
 				OnClick(s.openPresetSettings)
 		})
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "图片质量").FontSize(12).TextColor(metadataColor(c)).Width(64).Shrink(0)
-			ui.Text(c, presetQualityLabel(compressionPreset{quality: s.quality, png: s.png})).
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "图片质量").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
+			ui.Text(c, presetQualityLabel(active)).
 				FontSize(13).FontFeatures("tnum").Width(0).Grow(1).SingleLine()
 		})
+		if summary := presetProcessingSummary(active); summary != "" {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "处理选项").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
+				ui.Text(c, summary).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
+					Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(summary)
+			})
+		}
 	})
 }
 
 func (s *application) singleOutputSummary(c *ui.Context) {
 	t := c.Theme()
+	replaces := s.singleReplacesOriginal()
 	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 		description, color := presetSaveDescription(s.output), t.Text
-		if s.output.replacesOriginal() {
+		if replaces {
 			color = t.Danger
+		} else if s.output.replacesOriginal() && s.outputFormat == compress.OutputFormatWebP {
+			description = "在原文件夹保存 .webp 副本"
 		}
 		ui.Text(c, description).FontSize(13).FontWeight(500).TextColor(color).MaxLines(2).Tooltip(description)
 		name := "example.png"
 		if s.file != nil {
 			name = filepath.Base(s.file.path)
 		}
-		outputFilenamePreview(c, s.output, name)
+		outputFilenamePreviewForFormat(c, s.output, name, s.outputFormat, replaces)
 	})
 }
 
@@ -605,16 +689,36 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 	if s.result != nil {
 		original = formatSize(s.result.OriginalSize)
 		output = formatSize(s.result.OutputSize)
-		saved := float64(s.result.OriginalSize-s.result.OutputSize) / float64(s.result.OriginalSize) * 100
-		label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
 		if s.result.OriginalSize > 0 {
 			ratio = min(1, max(0, float64(s.result.OutputSize)/float64(s.result.OriginalSize)))
 		}
-		if s.result.Unchanged {
+		switch {
+		case s.result.Unchanged:
 			label, color = "未减小（0.0%）", t.TextMuted
 			ratio = 1
 			note = "已保留原始数据"
+		case s.result.OutputSize > s.result.OriginalSize && s.result.OriginalSize > 0:
+			grew := float64(s.result.OutputSize-s.result.OriginalSize) / float64(s.result.OriginalSize) * 100
+			label, color = fmt.Sprintf("增大 %.1f%%", grew), t.TextMuted
+			ratio = 1
+		case s.result.OriginalSize > 0:
+			saved := float64(s.result.OriginalSize-s.result.OutputSize) / float64(s.result.OriginalSize) * 100
+			label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
 		}
+		var notes []string
+		if note != "" {
+			notes = append(notes, note)
+		}
+		if s.file != nil {
+			if s.result.Format != "" && s.result.Format != s.file.format {
+				notes = append(notes, "转为 "+strings.ToUpper(s.result.Format))
+			}
+			if s.result.Width > 0 && s.result.Height > 0 &&
+				(s.result.Width != s.file.width || s.result.Height != s.file.height) {
+				notes = append(notes, fmt.Sprintf("%d × %d → %d × %d", s.file.width, s.file.height, s.result.Width, s.result.Height))
+			}
+		}
+		note = strings.Join(notes, " · ")
 	}
 	if s.batch != nil && s.batch.previewOpen && s.result == nil {
 		if index := s.batch.previewIndex; index >= 0 && index < len(s.batch.items) && s.batch.items[index].status == batchFailed {
@@ -625,12 +729,15 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 }
 
 func (s *application) saveActionDescription() (string, string) {
-	if s.output.replacesOriginal() {
+	if s.singleReplacesOriginal() {
 		if s.overwritten {
 			return "已覆盖原图", "此结果已经写入原文件，可另存副本或复制图片"
 		}
 		if s.result != nil && s.result.Unchanged {
 			return "无需覆盖（未减小）", "已保留原始数据，可另存副本或复制图片"
+		}
+		if s.result != nil && s.result.OutputSize >= s.result.OriginalSize {
+			return "无需覆盖（未减小）", "输出体积未小于原图，可另存副本或复制图片"
 		}
 		return "覆盖原图…", "确认后替换原文件，无法撤销"
 	}
@@ -645,10 +752,14 @@ func (s *application) saveActionDescription() (string, string) {
 }
 
 func outputFilenamePreview(c *ui.Context, options presetSaveOptions, filename string) {
-	if options.replacesOriginal() {
+	outputFilenamePreviewForFormat(c, options, filename, compress.OutputFormatKeep, options.replacesOriginal())
+}
+
+func outputFilenamePreviewForFormat(c *ui.Context, options presetSaveOptions, filename string, targetFormat compress.OutputFormat, replaces bool) {
+	if replaces {
 		return
 	}
-	example := presetOutputName(options, filename)
+	example := presetOutputNameForFormat(options, filename, targetFormat)
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Text(c, "文件示例").FontSize(12).TextColor(metadataColor(c))
 		ui.Text(c, example).FontSize(12).FontFeatures("tnum").SingleLine().TruncateMiddle().

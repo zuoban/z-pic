@@ -140,27 +140,55 @@ func settingsSegments(c *ui.Context, key, label string, selected *int, disabled 
 
 func (s *application) generalSettingsContent(c *ui.Context) {
 	t := c.Theme()
-	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(20, settingsPagePadding(c)).Gap(20).Children(func() {
+	width, _ := c.Size()
+	twoColShortcuts := width >= 560 && c.Preferences().TextScale <= 1.1
+	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(16, settingsPagePadding(c)).Gap(12).Children(func() {
 		settingsPanel(c, "settings-appearance-panel").Children(func() {
 			ui.Text(c, "外观").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
 		})
+		settingsPanel(c, "settings-workflow-panel").Children(func() {
+			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
+				FontSize(settingsFontSize(c, 13)).Disabled(s.settingsDraftLocked()).
+				Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
+		})
 		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
 			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
-			ui.Column(c).FillWidth().Children(func() {
-				for index, shortcut := range []struct{ label, key string }{
-					{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
-				} {
-					if index > 0 {
-						ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+			shortcuts := []struct{ label, key string }{
+				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
+			}
+			renderRow := func(label, key string) {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 28)).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
+						Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(label)
+					keyboardKeycap(c, key).FontSize(settingsFontSize(c, 12))
+				})
+			}
+			if twoColShortcuts {
+				ui.Column(c).FillWidth().Children(func() {
+					for row := 0; row < len(shortcuts); row += 2 {
+						if row > 0 {
+							ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+						}
+						ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Center).Children(func() {
+							ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row].label, shortcuts[row].key) })
+							if row+1 < len(shortcuts) {
+								ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row+1].label, shortcuts[row+1].key) })
+							}
+						})
 					}
-					ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 28)).Gap(16).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, shortcut.label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
-							Width(0).Grow(1).SingleLine()
-						keyboardKeycap(c, shortcut.key).FontSize(settingsFontSize(c, 12))
-					})
-				}
-			})
+				})
+			} else {
+				ui.Column(c).FillWidth().Children(func() {
+					for index, shortcut := range shortcuts {
+						if index > 0 {
+							ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+						}
+						renderRow(shortcut.label, shortcut.key)
+					}
+				})
+			}
 		})
 	})
 }

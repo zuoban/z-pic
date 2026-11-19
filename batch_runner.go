@@ -109,7 +109,7 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 		if outputDir != "" {
 			output.Mode = presetSaveFixed
 		}
-		path, err := output.copyPathWithPlanner(task.path, outputDir, task.relPath, planner)
+		path, err := output.copyPathForFormatWithPlanner(task.path, outputDir, task.relPath, task.outputFormat, planner)
 		if err != nil {
 			failures[task.index] = err
 		} else {
@@ -139,7 +139,18 @@ func (s *application) runBatchTasks(
 	var destinations map[int]string
 	var outputErrors map[int]error
 	if outputMode == batchOutputFolder {
+		options.SkipOverwriteSnapshot = true
 		destinations, outputErrors = planBatchOutputs(ctx, tasks, outputDir, usedPaths)
+	} else if options.OutputFormat == compress.OutputFormatWebP {
+		var copyTasks []batchTask
+		for _, task := range tasks {
+			if !task.output.replacesFile(task.sourceFormat, task.outputFormat) {
+				copyTasks = append(copyTasks, task)
+			}
+		}
+		if len(copyTasks) > 0 {
+			destinations, outputErrors = planBatchOutputs(ctx, copyTasks, outputDir, usedPaths)
+		}
 	}
 	var deliverMu sync.Mutex
 	emit := func(fn func()) {
@@ -202,7 +213,8 @@ func saveBatchOutcome(task batchTask, outcome batchCompressionOutcome, outputMod
 	}
 	result := outcome.result
 	unchanged, outputSize := result.Unchanged, result.OutputSize
-	if outputMode == batchOutputFolder {
+	saveAsCopy := outputMode == batchOutputFolder || destination != ""
+	if saveAsCopy {
 		err := os.MkdirAll(filepath.Dir(destination), 0o755)
 		if err == nil {
 			err = result.Save(destination)

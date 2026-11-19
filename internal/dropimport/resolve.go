@@ -275,6 +275,7 @@ var (
 type Resolver struct {
 	dir       string
 	transport *http.Transport
+	mu        sync.Mutex
 	client    *http.Client
 	saved     map[string]bool
 	sequences map[string]filenameSequence
@@ -304,6 +305,7 @@ func checkImageRedirect(req *http.Request, via []*http.Request) error {
 
 func (resolver *Resolver) httpClient(transport *http.Transport) *http.Client {
 	if resolver.transport != nil && resolver.transport == transport {
+		resolver.mu.Lock()
 		if resolver.client == nil {
 			resolver.client = &http.Client{
 				Transport:     transport,
@@ -311,7 +313,9 @@ func (resolver *Resolver) httpClient(transport *http.Transport) *http.Client {
 				CheckRedirect: checkImageRedirect,
 			}
 		}
-		return resolver.client
+		client := resolver.client
+		resolver.mu.Unlock()
+		return client
 	}
 	return &http.Client{
 		Transport:     transport,
@@ -322,16 +326,43 @@ func (resolver *Resolver) httpClient(transport *http.Transport) *http.Client {
 
 type filenameSequence = nameseq.Sequence
 
+// StagedItem holds a downloaded and validated image awaiting deterministic filename assignment.
+type StagedItem struct {
+	localPath string
+	tempName  string
+	name      string
+	extension string
+}
+
+// Discard removes any staged temporary file if Commit was not completed.
+func (s *StagedItem) Discard() {
+	if s != nil && s.tempName != "" {
+		_ = os.Remove(s.tempName)
+		s.tempName = ""
+	}
+}
+
 func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, downloaded bool, err error) {
-	dir := resolver.dir
-	if err := ctx.Err(); err != nil {
+	staged, err := resolver.Stage(ctx, item)
+	if err != nil {
 		return "", false, err
 	}
+	return resolver.Commit(ctx, staged)
+}
+
+// Stage downloads and validates item into a temporary file without reserving
+// its final filename, allowing callers to stage multiple remote items concurrently
+// and then call Commit in deterministic import order.
+func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, error) {
+	dir := resolver.dir
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if item.Path != "" {
-		return item.Path, false, nil
+		return &StagedItem{localPath: item.Path}, nil
 	}
 	if dir == "" {
-		return "", false, fmt.Errorf("图片保存目录不能为空")
+		return nil, fmt.Errorf("图片保存目录不能为空")
 	}
 	var reader io.Reader
 	var prevalidatedFormat string
@@ -346,7 +377,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	if item.URL != "" {
 		parsed, err := httpURL(item.URL)
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
 		name = filename(parsed)
 		transport := resolver.transport
@@ -366,14 +397,14 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		}).WithContext(reqCtx)
 		response, err := client.Do(request)
 		if err != nil {
-			return "", false, fmt.Errorf("图片下载失败：%w", err)
+			return nil, fmt.Errorf("图片下载失败：%w", err)
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return "", false, fmt.Errorf("图片下载失败：HTTP %d", response.StatusCode)
+			return nil, fmt.Errorf("图片下载失败：HTTP %d", response.StatusCode)
 		}
 		if response.ContentLength > maxImage {
-			return "", false, fmt.Errorf("图片超过 64 MiB 限制")
+			return nil, fmt.Errorf("图片超过 64 MiB 限制")
 		}
 		// Reject login/error pages before downloading the whole response or
 		// creating a temporary file. The complete validation below remains required.
@@ -382,48 +413,52 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		pooledReader = buffered
 		header, err := buffered.Peek(12)
 		if err != nil && err != io.EOF {
-			return "", false, err
+			return nil, err
 		}
 		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
 			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
 			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
-			return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
 		}
 		reader = buffered
 	} else {
 		if len(item.Data) == 0 {
-			return "", false, unsupported()
+			return nil, unsupported()
 		}
 		if len(item.Data) > maxImage {
-			return "", false, fmt.Errorf("图片超过 64 MiB 限制")
+			return nil, fmt.Errorf("图片超过 64 MiB 限制")
 		}
 		header := item.Data[:min(12, len(item.Data))]
 		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
 			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
 			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
-			return "", false, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
 		}
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", false, fmt.Errorf("无法创建图片目录：%w", err)
+		return nil, fmt.Errorf("无法创建图片目录：%w", err)
 	}
 	if len(item.Data) > 0 {
-		prevalidatedFormat, err = inspectInMemory(ctx, item.Data)
-		if err != nil {
-			return "", false, err
+		var inspectErr error
+		prevalidatedFormat, inspectErr = inspectInMemory(ctx, item.Data)
+		if inspectErr != nil {
+			return nil, inspectErr
 		}
 	}
 	temp, err := os.CreateTemp(dir, ".drop-*")
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	tempName := temp.Name()
 	tempClosed := false
+	keepTemp := false
 	defer func() {
 		if !tempClosed {
 			_ = temp.Close()
 		}
-		_ = os.Remove(tempName)
+		if !keepTemp {
+			_ = os.Remove(tempName)
+		}
 	}()
 	var size int64
 	if reader == nil {
@@ -435,31 +470,31 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 		resolveCopyBufPool.Put(copyBuf)
 	}
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	if size > maxImage {
-		return "", false, fmt.Errorf("图片超过 64 MiB 限制")
+		return nil, fmt.Errorf("图片超过 64 MiB 限制")
 	}
 	format := prevalidatedFormat
 	if format == "" {
 		info, err := compress.InspectReader(ctx, temp, size)
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
 		if _, err := temp.Seek(0, io.SeekStart); err != nil {
-			return "", false, err
+			return nil, err
 		}
 		if _, _, err := image.Decode(contextio.NewReader(ctx, temp)); err != nil {
-			return "", false, fmt.Errorf("图片数据损坏：%w", err)
+			return nil, fmt.Errorf("图片数据损坏：%w", err)
 		}
 		format = info.Format
 	}
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return nil, err
 	}
 	if err := temp.Close(); err != nil {
 		tempClosed = true
-		return "", false, err
+		return nil, err
 	}
 	tempClosed = true
 	extension := ".png"
@@ -468,6 +503,28 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 	} else if format == "webp" {
 		extension = ".webp"
 	}
+	keepTemp = true
+	return &StagedItem{tempName: tempName, name: name, extension: extension}, nil
+}
+
+// Commit assigns a collision-free filename in resolver.dir for a staged item and cleans up its temp file.
+func (resolver *Resolver) Commit(ctx context.Context, staged *StagedItem) (path string, downloaded bool, err error) {
+	if staged == nil {
+		return "", false, unsupported()
+	}
+	defer staged.Discard()
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if staged.localPath != "" {
+		return staged.localPath, false, nil
+	}
+	dir := resolver.dir
+	tempName := staged.tempName
+	name := staged.name
+	extension := staged.extension
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
 	if resolver.saved == nil {
 		resolver.saved = make(map[string]bool)
 	}

@@ -8,6 +8,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 const maxBatchFiles = 2000
@@ -138,10 +140,12 @@ type batchScanResult struct {
 }
 
 type batchTask struct {
-	index   int
-	path    string
-	relPath string
-	output  presetSaveOptions
+	index        int
+	path         string
+	relPath      string
+	sourceFormat string
+	outputFormat compress.OutputFormat
+	output       presetSaveOptions
 }
 
 type batchItemUpdate struct {
@@ -493,7 +497,7 @@ func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 		s.setMessage("请选择固定输出目录", true)
 		return
 	}
-	if s.batch.outputMode == batchOutputOverwrite {
+	if s.batch.outputMode == batchOutputOverwrite && s.batchRunWillOverwriteAny(mode, singleIndex) {
 		s.pendingBatchRun = mode
 		s.pendingBatchIndex = singleIndex
 		s.pendingBatchRestart = mode == batchRunRestart
@@ -630,6 +634,19 @@ func (s *application) prepareBatchTasks(mode batchRunMode, singleIndex int) ([]b
 	})
 }
 
+func (s *application) batchRunWillOverwriteAny(mode batchRunMode, singleIndex int) bool {
+	if s.batch == nil || !s.output.replacesOriginal() {
+		return false
+	}
+	for i, item := range s.batch.items {
+		if itemMatchesBatchRunMode(i, item, mode, singleIndex) &&
+			s.output.replacesFile(item.format, s.outputFormat) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) bool) ([]batchTask, map[string]bool) {
 	var tasks []batchTask
 	usedPaths := make(map[string]bool)
@@ -638,7 +655,14 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 			usedPaths[item.savedPath] = true
 		}
 		if match(i, item) {
-			tasks = append(tasks, batchTask{index: i, path: item.path, relPath: item.relPath, output: s.output})
+			tasks = append(tasks, batchTask{
+				index:        i,
+				path:         item.path,
+				relPath:      item.relPath,
+				sourceFormat: item.format,
+				outputFormat: s.outputFormat,
+				output:       s.output,
+			})
 		}
 	}
 	return tasks, usedPaths

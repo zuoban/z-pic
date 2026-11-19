@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -29,8 +30,40 @@ var (
 	cwebpSlot    toolcache.Slot
 )
 
+// MetadataMode selects which metadata chunks cwebp copies from WebP inputs.
+// The zero value retains all metadata (-metadata all).
+type MetadataMode string
+
+const (
+	MetadataAll  MetadataMode = ""
+	MetadataICC  MetadataMode = "icc"
+	MetadataNone MetadataMode = "none"
+)
+
+func (m MetadataMode) arg() (string, error) {
+	switch m {
+	case MetadataAll:
+		return "all", nil
+	case MetadataICC:
+		return "icc", nil
+	case MetadataNone:
+		return "none", nil
+	default:
+		return "", fmt.Errorf("不支持的 WebP 元数据策略：%q", string(m))
+	}
+}
+
+// EncodeOptions configures cwebp execution.
+type EncodeOptions struct {
+	Quality     int
+	Lossless    bool
+	Metadata    MetadataMode
+	Threads     int
+	SmallerOnly bool // When true and input is WebP, discard outputs >= len(data) and return data.
+}
+
 func Encode(ctx context.Context, data []byte, quality int) ([]byte, error) {
-	return encode(ctx, data, quality, false, 0)
+	return EncodeWithOptions(ctx, data, EncodeOptions{Quality: quality})
 }
 
 // EncodeSmaller returns the encoded output only when it is smaller than data.
@@ -42,22 +75,22 @@ func EncodeSmaller(ctx context.Context, data []byte, quality int) ([]byte, error
 
 // EncodeSmallerWithThreads follows EncodeSmaller and bounds multi-threading when threads == 1.
 func EncodeSmallerWithThreads(ctx context.Context, data []byte, quality, threads int) ([]byte, error) {
-	return encode(ctx, data, quality, true, threads)
+	return EncodeWithOptions(ctx, data, EncodeOptions{
+		Quality:     quality,
+		Threads:     threads,
+		SmallerOnly: true,
+	})
 }
 
-func useMultiThreading(threads int) bool {
-	if threads > 0 {
-		return threads > 1
-	}
-	return runtime.GOMAXPROCS(0) > 1
-}
-
-func encode(ctx context.Context, data []byte, quality int, smallerOnly bool, threads int) ([]byte, error) {
+// EncodeWithOptions recompresses raw WebP bytes using the configured quality,
+// lossless mode, metadata policy, and threading cap.
+func EncodeWithOptions(ctx context.Context, data []byte, options EncodeOptions) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("WebP 处理已取消：%w", err)
 	}
-	if quality < 0 || quality > 100 {
-		return nil, fmt.Errorf("WebP 质量必须在 0–100 之间")
+	args, err := buildEncodeArgs(options, true)
+	if err != nil {
+		return nil, err
 	}
 	if len(data) > maxWebPBytes {
 		return nil, fmt.Errorf("WebP 输入超过 64 MiB 限制")
@@ -73,16 +106,43 @@ func encode(ctx context.Context, data []byte, quality int, smallerOnly bool, thr
 	}
 	defer cleanup()
 	var fallback []byte
-	if smallerOnly {
+	if options.SmallerOnly {
 		fallback = data
 	}
-	args := make([]string, 0, 12)
-	args = append(args, "-q", strconv.Itoa(quality), "-m", "4")
-	if useMultiThreading(threads) {
+	return runCommandWithReader(ctx, path, args, bytes.NewReader(data), maxWebPBytes, fallback)
+}
+
+func buildEncodeArgs(options EncodeOptions, withMetadata bool) ([]string, error) {
+	if !options.Lossless && (options.Quality < 0 || options.Quality > 100) {
+		return nil, fmt.Errorf("WebP 质量必须在 0–100 之间")
+	}
+	metaArg, err := options.Metadata.arg()
+	if err != nil {
+		return nil, err
+	}
+	args := make([]string, 0, 14)
+	if options.Lossless {
+		args = append(args, "-lossless", "-z", "6")
+	} else {
+		args = append(args, "-q", strconv.Itoa(options.Quality), "-m", "4", "-alpha_q", "100")
+	}
+	if useMultiThreading(options.Threads) {
 		args = append(args, "-mt")
 	}
-	args = append(args, "-alpha_q", "100", "-metadata", "all", "-quiet", "-o", "-", "--", "-")
-	return runCommandWithFallback(ctx, path, args, data, maxWebPBytes, fallback)
+	if withMetadata {
+		args = append(args, "-metadata", metaArg)
+	} else {
+		args = append(args, "-metadata", "none")
+	}
+	args = append(args, "-quiet", "-o", "-", "--", "-")
+	return args, nil
+}
+
+func useMultiThreading(threads int) bool {
+	if threads > 0 {
+		return threads > 1
+	}
+	return runtime.GOMAXPROCS(0) > 1
 }
 
 func acquireTool() (string, func(), error) {
@@ -110,6 +170,10 @@ func runCommand(ctx context.Context, path string, args []string, data []byte, li
 }
 
 func runCommandWithFallback(ctx context.Context, path string, args []string, data []byte, limit int, fallback []byte) ([]byte, error) {
+	return runCommandWithReader(ctx, path, args, bytes.NewReader(data), limit, fallback)
+}
+
+func runCommandWithReader(ctx context.Context, path string, args []string, stdin io.Reader, limit int, fallback []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("cwebp 已取消：%w", err)
 	}
@@ -118,7 +182,7 @@ func runCommandWithFallback(ctx context.Context, path string, args []string, dat
 	stdout := &limitedOutput{limit: limit, cancel: cancel, fallback: fallback}
 	stderr := toolio.NewDiagnostic(maxStderr)
 	cmd := exec.CommandContext(childCtx, path, args...)
-	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = []string{"LC_ALL=C"}
