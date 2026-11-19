@@ -50,6 +50,46 @@ func jpegOrientation(data []byte) int {
 	return 1
 }
 
+func exifPayloadOrientation(payload []byte) int {
+	if bytes.HasPrefix(payload, []byte("Exif\x00\x00")) {
+		payload = payload[6:]
+	}
+	return tiffOrientation(payload)
+}
+
+// WebPOrientation reads the first EXIF chunk in a RIFF/WEBP container and
+// returns its TIFF IFD0 orientation in [1, 8], defaulting to 1 when absent or malformed.
+func WebPOrientation(data []byte) int {
+	return webpOrientation(data)
+}
+
+func webpOrientation(data []byte) int {
+	if len(data) < 20 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 1
+	}
+	for offset := 12; offset <= len(data)-8; {
+		kind := string(data[offset : offset+4])
+		length := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		if length < 0 || length > len(data)-offset-8 {
+			return 1
+		}
+		if kind == "EXIF" {
+			return exifPayloadOrientation(data[offset+8 : offset+8+length])
+		}
+		padded := length + length%2
+		if padded > len(data)-offset-8 {
+			return 1
+		}
+		offset += 8 + padded
+	}
+	return 1
+}
+
+// NormalizeOrientation wraps img with an upright coordinate mapping when orientation is in [2, 8].
+func NormalizeOrientation(img image.Image, orientation int) image.Image {
+	return normalizeOrientation(img, orientation)
+}
+
 func tiffOrientation(data []byte) int {
 	if len(data) < 8 {
 		return 1
@@ -121,43 +161,19 @@ func orientForJPEGEncode(ctx context.Context, img image.Image, orientation int) 
 	width, height := bounds.Dx(), bounds.Dy()
 	switch source := img.(type) {
 	case *image.YCbCr:
-		ratio := image.YCbCrSubsampleRatio444
-		if source.SubsampleRatio == image.YCbCrSubsampleRatio420 &&
-			source.Rect.Min == (image.Point{}) &&
-			source.Rect.Dx()%2 == 0 && source.Rect.Dy()%2 == 0 {
-			ratio = image.YCbCrSubsampleRatio420
-		}
+		ratio := orientedYCbCrRatio(source)
 		output := image.NewYCbCr(bounds, ratio)
-		if err := copyOrientedPlane(ctx, output.Y, output.YStride, source.Y, source.YStride, oriented, 0); err != nil {
+		if err := copyOrientedYCbCrPlanes(ctx, output, source, oriented, ratio); err != nil {
 			return nil, err
 		}
-		if ratio == image.YCbCrSubsampleRatio420 {
-			if err := copyOrientedPlane(ctx, output.Cb, output.CStride, source.Cb, source.CStride, oriented, 1); err != nil {
-				return nil, err
-			}
-			if err := copyOrientedPlane(ctx, output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1); err != nil {
-				return nil, err
-			}
-			return output, nil
+		return output, nil
+	case *image.NYCbCrA:
+		ratio := orientedYCbCrRatio(&source.YCbCr)
+		output := image.NewNYCbCrA(bounds, ratio)
+		if err := copyOrientedYCbCrPlanes(ctx, &output.YCbCr, &source.YCbCr, oriented, ratio); err != nil {
+			return nil, err
 		}
-		originX, originY := oriented.mapCoords(0, 0)
-		nextX, nextY := oriented.mapCoords(1, 0)
-		stepX, stepY := nextX-originX, nextY-originY
-		for row := 0; row < height; row++ {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			rowBase := row * output.CStride
-			mappedX, mappedY := oriented.mapCoords(0, row)
-			for column := 0; column < width; column++ {
-				sourceIndex := source.COffset(mappedX, mappedY)
-				output.Cb[rowBase+column] = source.Cb[sourceIndex]
-				output.Cr[rowBase+column] = source.Cr[sourceIndex]
-				mappedX += stepX
-				mappedY += stepY
-			}
-		}
-		if err := ctx.Err(); err != nil {
+		if err := copyOrientedPlane(ctx, output.A, output.AStride, source.A, source.AStride, oriented, 0); err != nil {
 			return nil, err
 		}
 		return output, nil
@@ -188,6 +204,47 @@ func orientForJPEGEncode(ctx context.Context, img image.Image, orientation int) 
 		}
 		return output, nil
 	}
+}
+
+func orientedYCbCrRatio(source *image.YCbCr) image.YCbCrSubsampleRatio {
+	if source.SubsampleRatio == image.YCbCrSubsampleRatio420 &&
+		source.Rect.Min == (image.Point{}) &&
+		source.Rect.Dx()%2 == 0 && source.Rect.Dy()%2 == 0 {
+		return image.YCbCrSubsampleRatio420
+	}
+	return image.YCbCrSubsampleRatio444
+}
+
+func copyOrientedYCbCrPlanes(ctx context.Context, output, source *image.YCbCr, oriented orientedImage, ratio image.YCbCrSubsampleRatio) error {
+	if err := copyOrientedPlane(ctx, output.Y, output.YStride, source.Y, source.YStride, oriented, 0); err != nil {
+		return err
+	}
+	if ratio == image.YCbCrSubsampleRatio420 {
+		if err := copyOrientedPlane(ctx, output.Cb, output.CStride, source.Cb, source.CStride, oriented, 1); err != nil {
+			return err
+		}
+		return copyOrientedPlane(ctx, output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1)
+	}
+	bounds := oriented.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	originX, originY := oriented.mapCoords(0, 0)
+	nextX, nextY := oriented.mapCoords(1, 0)
+	stepX, stepY := nextX-originX, nextY-originY
+	for row := range height {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rowBase := row * output.CStride
+		mappedX, mappedY := oriented.mapCoords(0, row)
+		for column := range width {
+			sourceIndex := source.COffset(mappedX, mappedY)
+			output.Cb[rowBase+column] = source.Cb[sourceIndex]
+			output.Cr[rowBase+column] = source.Cr[sourceIndex]
+			mappedX += stepX
+			mappedY += stepY
+		}
+	}
+	return ctx.Err()
 }
 
 func copyOrientedPlane(ctx context.Context, output []byte, outputStride int, source []byte, sourceStride int, oriented orientedImage, subsampleShift int) error {

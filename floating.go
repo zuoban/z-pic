@@ -204,10 +204,12 @@ func (s *application) startNextDropImport() {
 			}
 			if len(paths) == 0 {
 				if pasted && ctx.Err() != nil {
+					s.clipboardOutcome = clipboardOutcomeCanceled
 					s.reportError(ctx.Err(), "粘贴图片失败")
 					s.completeClipboardImport()
 					return
 				}
+				s.clipboardOutcome = clipboardOutcomeFailed
 				s.dropMessage = s.dropImportErrors
 				if s.dropMessage == "" {
 					s.dropMessage = "请拖入本地 JPEG/PNG/WebP 图片或网页图片。"

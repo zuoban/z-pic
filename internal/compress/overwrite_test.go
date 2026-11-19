@@ -34,7 +34,14 @@ func TestOverwriteJPEGFileAndBytes(t *testing.T) {
 	for _, method := range inputMethods(data) {
 		t.Run(method.name, func(t *testing.T) {
 			path := writeFixture(t, "source.jpg", data)
-			if err := os.Chmod(path, 0640); err != nil {
+			initialMode := os.FileMode(0o640)
+			if runtime.GOOS != "windows" {
+				if err := os.Chmod(path, initialMode|os.ModeSticky); err == nil {
+					initialMode |= os.ModeSticky
+				} else if err := os.Chmod(path, initialMode); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Chmod(path, initialMode); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.Stat(path)
@@ -62,8 +69,13 @@ func TestOverwriteJPEGFileAndBytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if runtime.GOOS != "windows" && after.Mode().Perm() != 0640 {
-				t.Fatalf("permissions changed to %v", after.Mode().Perm())
+			if runtime.GOOS != "windows" {
+				if after.Mode().Perm() != 0o640 {
+					t.Fatalf("permissions changed to %v", after.Mode().Perm())
+				}
+				if after.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+					t.Fatalf("special mode bits leaked onto overwritten output: %v", after.Mode())
+				}
 			}
 			if os.SameFile(before, after) {
 				t.Fatal("source was not replaced with a new file")

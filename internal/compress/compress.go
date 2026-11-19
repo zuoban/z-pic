@@ -31,6 +31,7 @@ const (
 type Options struct {
 	Quality int // JPEG and WebP quality in [1, 100].
 	PNG     PNGOptions
+	Threads int // Optional native encoder thread cap; <= 0 selects automatic default.
 }
 
 // PNGOptions controls lossy color quantization. The zero value uses the
@@ -198,7 +199,11 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
 		width, height = img.Bounds().Dx(), img.Bounds().Dy()
-		iccSegments, iccBytes := jpegICCSegments(data)
+		outputComponents := 3
+		if _, isGray := img.(*image.Gray); isGray {
+			outputComponents = 1
+		}
+		iccSegments, iccBytes := jpegCompatibleICCSegments(data, outputComponents)
 		output := jpegOutput{ctx: ctx, limit: len(data) - iccBytes, stopOnDiscard: true}
 		if output.limit <= 2 {
 			output.discarded = true
@@ -222,21 +227,34 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 			encoded = data
 		} else {
-			encoded, err = webptools.EncodeSmaller(ctx, data, options.Quality)
+			encoded, err = webptools.EncodeSmallerWithThreads(ctx, data, options.Quality, options.Threads)
 			if err == nil {
 				if len(encoded) < len(data) {
-					var decoded image.Image
-					decoded, err = decodeWebPOutput(ctx, encoded, config)
-					if err == nil && preview != nil {
-						*preview = decoded
+					if preview != nil {
+						var decoded image.Image
+						decoded, err = decodeWebPOutput(ctx, encoded, config)
+						if err == nil {
+							*preview = normalizeOrientation(decoded, webpOrientation(encoded))
+						}
+					} else {
+						err = validateWebPStructureAndDimensions(ctx, encoded, config)
 					}
 				} else if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 					return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 				}
 			}
 		}
+		if err == nil {
+			selectedBytes := data
+			if len(encoded) < len(data) {
+				selectedBytes = encoded
+			}
+			if orient := webpOrientation(selectedBytes); orient >= 5 && orient <= 8 {
+				width, height = height, width
+			}
+		}
 	} else {
-		encoded, err = compressPNG(ctx, data, config, options.PNG, preview)
+		encoded, err = compressPNG(ctx, data, config, options.PNG, options.Threads, preview)
 	}
 	if cancelErr := ctx.Err(); cancelErr != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
@@ -260,16 +278,16 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	return result, nil
 }
 
-func compressPNG(ctx context.Context, data []byte, config image.Config, options PNGOptions, preview *image.Image) ([]byte, error) {
+func compressPNG(ctx context.Context, data []byte, config image.Config, options PNGOptions, threads int, preview *image.Image) ([]byte, error) {
 	candidate := data
-	quantized, err := pngtools.QuantizeWithOptions(ctx, data, options)
+	quantized, err := pngtools.QuantizeWithThreads(ctx, data, options, threads)
 	if err != nil {
 		return nil, err
 	}
 	if len(quantized) < len(candidate) {
 		candidate = quantized
 	}
-	optimized, err := pngtools.Optimize(ctx, candidate)
+	optimized, err := pngtools.OptimizeWithThreads(ctx, candidate, threads)
 	if err != nil {
 		if !sameBytesBacking(candidate, data) {
 			if validateErr := validatePNGOutput(ctx, candidate, config); validateErr != nil {
@@ -287,15 +305,21 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 		}
 		return candidate, nil
 	}
-	decoded, err := decodePNGOutput(ctx, candidate, config)
-	if err != nil {
-		if sameBytesBacking(candidate, quantized) {
-			return nil, fmt.Errorf("pngquant 输出无效：%w", err)
-		}
-		return nil, fmt.Errorf("Oxipng 输出无效：%w", err)
-	}
+	var validateErr error
 	if preview != nil {
-		*preview = decoded
+		var decoded image.Image
+		decoded, validateErr = decodePNGOutput(ctx, candidate, config)
+		if validateErr == nil {
+			*preview = decoded
+		}
+	} else {
+		validateErr = validatePNGStructureAndCRCs(ctx, candidate, config)
+	}
+	if validateErr != nil {
+		if sameBytesBacking(candidate, quantized) {
+			return nil, fmt.Errorf("pngquant 输出无效：%w", validateErr)
+		}
+		return nil, fmt.Errorf("Oxipng 输出无效：%w", validateErr)
 	}
 	return candidate, nil
 }

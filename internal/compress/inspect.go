@@ -140,9 +140,12 @@ func inspectStream(ctx context.Context, f io.ReadSeeker, size int64) (string, in
 		}
 		return "png", width, height, nil
 	case n >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WEBP":
-		width, height, err := validateWebPContainerSize(ctx, f, size)
+		width, height, orientation, err := inspectWebPContainerSize(ctx, f, size)
 		if err != nil {
 			return "", 0, 0, err
+		}
+		if orientation >= 5 && orientation <= 8 {
+			width, height = height, width
 		}
 		return "webp", width, height, nil
 	case n >= 3 && head[0] == 0xff && head[1] == 0xd8 && head[2] == 0xff:
@@ -275,9 +278,15 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 	}
 	var lenBytes [2]byte
 	var sof [18]byte
+	var width, height int
+	orientation := 1
+	foundSOF, foundExif := false, false
 	for {
 		b, err := reader.nextByte()
 		if err != nil {
+			if foundSOF && err == io.EOF {
+				break
+			}
 			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 		}
 		if b != 0xff {
@@ -289,8 +298,14 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 			}
 		}
-		if b == 0x00 || b == 0xd8 || b == 0xd9 || b == 0xda {
+		if b == 0x00 || b == 0xd8 {
 			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+		}
+		if b == 0xd9 || b == 0xda {
+			if !foundSOF {
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+			}
+			break
 		}
 		if b == 0x01 || (b >= 0xd0 && b <= 0xd7) {
 			continue
@@ -302,7 +317,32 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 		if payloadLen < 0 {
 			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 段长度无效")
 		}
+		if b == 0xe1 && !foundExif && payloadLen >= 14 {
+			var exifHead [6]byte
+			if err := reader.readFull(exifHead[:]); err != nil {
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+			}
+			if string(exifHead[:]) == "Exif\x00\x00" {
+				tiffBuf := make([]byte, payloadLen-6)
+				if err := reader.readFull(tiffBuf); err != nil {
+					return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+				}
+				orientation = tiffOrientation(tiffBuf)
+				foundExif = true
+				if foundSOF {
+					break
+				}
+				continue
+			}
+			if err := reader.discard(payloadLen - 6); err != nil {
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+			}
+			continue
+		}
 		if b == 0xc0 || b == 0xc2 {
+			if foundSOF {
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+			}
 			if payloadLen < 6 || payloadLen > len(sof) {
 				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 帧头无效")
 			}
@@ -310,14 +350,14 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 			}
 			precision := sof[0]
-			height := int(binary.BigEndian.Uint16(sof[1:3]))
-			width := int(binary.BigEndian.Uint16(sof[3:5]))
+			hVal := int(binary.BigEndian.Uint16(sof[1:3]))
+			wVal := int(binary.BigEndian.Uint16(sof[3:5]))
 			nComp := int(sof[5])
 			if precision != 8 || (nComp != 1 && nComp != 3 && nComp != 4) || payloadLen != 6+3*nComp {
 				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 采样不支持")
 			}
 			var seenIDs [256]bool
-			for i := 0; i < nComp; i++ {
+			for i := range nComp {
 				id := sof[6+3*i]
 				hv := sof[6+3*i+1]
 				h, v := hv>>4, hv&0x0f
@@ -326,10 +366,15 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 				}
 				seenIDs[id] = true
 			}
-			if width <= 0 || height <= 0 || uint64(width) > uint64(maxPixels)/uint64(height) {
+			if wVal <= 0 || hVal <= 0 || uint64(wVal) > uint64(maxPixels)/uint64(hVal) {
 				return 0, 0, errors.New("图片超过 3200 万像素限制或尺寸无效")
 			}
-			return width, height, nil
+			width, height = wVal, hVal
+			foundSOF = true
+			if foundExif {
+				break
+			}
+			continue
 		}
 		if b >= 0xc1 && b <= 0xcf && b != 0xc4 && b != 0xc8 && b != 0xcc {
 			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：不支持的 JPEG 编码模式")
@@ -338,4 +383,8 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
 		}
 	}
+	if orientation >= 5 && orientation <= 8 {
+		width, height = height, width
+	}
+	return width, height, nil
 }

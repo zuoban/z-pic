@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +16,18 @@ import (
 
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/dropimport"
 )
+
+func newLoopbackDropTransport(t *testing.T) *http.Transport {
+	t.Helper()
+	transport := dropimport.NewTransport()
+	transport.Proxy = nil
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	t.Cleanup(transport.CloseIdleConnections)
+	return transport
+}
 
 func waitForDropImports(t *testing.T, app *application, updates <-chan func()) {
 	t.Helper()
@@ -141,6 +153,7 @@ func TestFloatingWebImagesDownloadAndReuseOriginals(t *testing.T) {
 	defer server.Close()
 	updates := make(chan func(), 32)
 	app := newApplication()
+	app.dropTransport = newLoopbackDropTransport(t)
 	app.dispatchUpdate = func(update func()) { updates <- update }
 	app.downloadDir = filepath.Join(root, "downloads")
 	data := transfer.New(transfer.NewItem(
@@ -188,6 +201,7 @@ func TestFloatingSameNameImagesKeepImportOrder(test *testing.T) {
 	defer server.Close()
 	updates := make(chan func(), 32)
 	app := newApplication()
+	app.dropTransport = newLoopbackDropTransport(test)
 	app.dispatchUpdate = func(update func()) { updates <- update }
 	app.downloadDir = filepath.Join(root, "downloads")
 	var urls []string
@@ -220,6 +234,7 @@ func TestFloatingDownloadCanCancel(t *testing.T) {
 	defer server.Close()
 	updates := make(chan func(), 16)
 	app := newApplication()
+	app.dropTransport = newLoopbackDropTransport(t)
 	app.dispatchUpdate = func(update func()) { updates <- update }
 	app.downloadDir = filepath.Join(t.TempDir(), "downloads")
 	data, err := transfer.URLData(server.URL + "/image")
@@ -259,6 +274,7 @@ func TestFloatingFailuresRemainVisibleAcrossLaterSuccessfulDrops(t *testing.T) {
 	defer server.Close()
 	updates := make(chan func(), 16)
 	app := newApplication()
+	app.dropTransport = newLoopbackDropTransport(t)
 	app.dispatchUpdate = func(update func()) { updates <- update }
 	app.downloadDir = filepath.Join(root, "downloads")
 	app.busy = true

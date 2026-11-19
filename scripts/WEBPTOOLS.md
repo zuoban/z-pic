@@ -6,7 +6,7 @@ Requires the Apple Command Line Tools (clang, SDK, make, strip, otool, codesign,
 xcrun), Python 3, tar, and shasum. No Homebrew libraries, Go dependencies,
 network access, downloads, or package manager are used during preparation.
 
-The checked-in official source is `licenses/libwebp-1.6.0.tar.gz`:
+The checked-in official source is `scripts/sources/libwebp-1.6.0.tar.gz`:
 
 - Official release: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz
 - Release tag: `v1.6.0`, commit `4fa21912338357f89e4fd51cf2368325b59e9bd9`.

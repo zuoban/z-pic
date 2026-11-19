@@ -52,6 +52,35 @@ func (budget *imageMemoryBudget) acquire(ctx context.Context, estimate int64) (f
 	}
 }
 
+func (s *application) acquireImageMemory(ctx context.Context, info compress.ImageInfo, thumbnail bool) (func(), error) {
+	if s == nil || s.imageMemory == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
+	}
+	return s.imageMemory.acquire(ctx, imageMemoryEstimate(info, thumbnail))
+}
+
+func (s *application) acquirePreviewMemory(ctx context.Context, info compress.ImageInfo) (func(), error) {
+	if s == nil || s.imageMemory == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
+	}
+	return s.imageMemory.acquire(ctx, previewMemoryEstimate(info))
+}
+
+func previewMemoryEstimate(info compress.ImageInfo) int64 {
+	if info.Width <= 0 || info.Height <= 0 ||
+		int64(info.Width) > int64(maxPixels)/int64(info.Height) ||
+		info.Size < 0 || info.Size > maxInputBytes {
+		return imageMemoryLimit
+	}
+	return int64(info.Width)*int64(info.Height)*12 + 2*info.Size + 4<<20
+}
+
 func imageMemoryEstimate(info compress.ImageInfo, thumbnail bool) int64 {
 	if info.Width <= 0 || info.Height <= 0 ||
 		int64(info.Width) > int64(maxPixels)/int64(info.Height) ||

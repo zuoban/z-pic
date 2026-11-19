@@ -84,3 +84,56 @@ func TestImageMemoryEstimateAccountsForFormatAndDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleImagePreviewAndClipboardRespectMemoryBudget(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := root + "/photo.jpg"
+	writeTestJPEG(t, sourcePath, 96, 64, 95)
+
+	updates := make(chan func(), 16)
+	app := newApplication()
+	app.dispatchUpdate = func(fn func()) { updates <- fn }
+	app.writeClipboardImage = func([]byte) error { return nil }
+
+	// Hold the full budget and verify single-image load blocks and cancels cleanly.
+	holdRelease, err := app.imageMemory.acquire(context.Background(), imageMemoryLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.load(sourcePath)
+	if !app.busy {
+		t.Fatal("load should enter busy state")
+	}
+	app.cancelWork()
+	for app.busy {
+		(<-updates)()
+	}
+	if app.file != nil {
+		t.Fatal("canceled load while memory budget contended must not populate file")
+	}
+
+	// Release budget and verify load -> compress -> clipboard copy all release capacity back to zero.
+	holdRelease()
+	app.load(sourcePath)
+	for app.busy {
+		(<-updates)()
+	}
+	if app.file == nil || app.imageMemory.used != 0 {
+		t.Fatalf("load did not complete or leaked budget: file=%v used=%d", app.file != nil, app.imageMemory.used)
+	}
+	app.quality = 40
+	app.startCompression()
+	for app.busy {
+		(<-updates)()
+	}
+	if app.result == nil || app.imageMemory.used != 0 {
+		t.Fatalf("compression did not complete or leaked budget: result=%v used=%d", app.result != nil, app.imageMemory.used)
+	}
+	app.copyResult()
+	for app.busy {
+		(<-updates)()
+	}
+	if app.failed || app.imageMemory.used != 0 {
+		t.Fatalf("clipboard copy failed or leaked budget: msg=%q used=%d", app.message, app.imageMemory.used)
+	}
+}

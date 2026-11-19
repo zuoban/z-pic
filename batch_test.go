@@ -13,6 +13,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -234,6 +235,9 @@ func TestResolveBatchOutputPathAvoidsSourceAndCollisions(t *testing.T) {
 }
 
 func TestBatchFolderCompressionEndToEnd(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("bundled native encoders require darwin/arm64")
+	}
 	root := t.TempDir()
 	inDir := filepath.Join(root, "in")
 	outDir := filepath.Join(root, "out")

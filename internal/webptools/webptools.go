@@ -30,17 +30,29 @@ var (
 )
 
 func Encode(ctx context.Context, data []byte, quality int) ([]byte, error) {
-	return encode(ctx, data, quality, false)
+	return encode(ctx, data, quality, false, 0)
 }
 
 // EncodeSmaller returns the encoded output only when it is smaller than data.
 // Otherwise it returns data itself, which the caller must keep immutable.
 // Output limits, process failures and cancellation still return errors.
 func EncodeSmaller(ctx context.Context, data []byte, quality int) ([]byte, error) {
-	return encode(ctx, data, quality, true)
+	return EncodeSmallerWithThreads(ctx, data, quality, 0)
 }
 
-func encode(ctx context.Context, data []byte, quality int, smallerOnly bool) ([]byte, error) {
+// EncodeSmallerWithThreads follows EncodeSmaller and bounds multi-threading when threads == 1.
+func EncodeSmallerWithThreads(ctx context.Context, data []byte, quality, threads int) ([]byte, error) {
+	return encode(ctx, data, quality, true, threads)
+}
+
+func useMultiThreading(threads int) bool {
+	if threads > 0 {
+		return threads > 1
+	}
+	return runtime.GOMAXPROCS(0) > 1
+}
+
+func encode(ctx context.Context, data []byte, quality int, smallerOnly bool, threads int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("WebP 处理已取消：%w", err)
 	}
@@ -64,10 +76,13 @@ func encode(ctx context.Context, data []byte, quality int, smallerOnly bool) ([]
 	if smallerOnly {
 		fallback = data
 	}
-	return runCommandWithFallback(ctx, path, []string{
-		"-q", strconv.Itoa(quality), "-m", "4", "-mt", "-alpha_q", "100",
-		"-metadata", "all", "-quiet", "-o", "-", "--", "-",
-	}, data, maxWebPBytes, fallback)
+	args := make([]string, 0, 12)
+	args = append(args, "-q", strconv.Itoa(quality), "-m", "4")
+	if useMultiThreading(threads) {
+		args = append(args, "-mt")
+	}
+	args = append(args, "-alpha_q", "100", "-metadata", "all", "-quiet", "-o", "-", "--", "-")
+	return runCommandWithFallback(ctx, path, args, data, maxWebPBytes, fallback)
 }
 
 func acquireTool() (string, func(), error) {

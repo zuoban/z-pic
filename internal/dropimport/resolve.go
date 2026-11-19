@@ -62,11 +62,50 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 	return ResolveWithTransport(ctx, item, dir, nil)
 }
 
+type (
+	lookupNetIPFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
+	dialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+)
+
 func NewTransport() *http.Transport {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	return newTransport(net.DefaultResolver.LookupNetIP, dialer.DialContext)
+}
+
+func newTransport(lookup lookupNetIPFunc, baseDial dialContextFunc) *http.Transport {
+	var proxyMu sync.RWMutex
+	var allowedProxyAddrs map[string]struct{}
+
+	proxyFunc := func(req *http.Request) (*url.URL, error) {
+		if isLocalOrPrivateHost(req.URL.Hostname()) {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", req.URL.Hostname())
+		}
+		proxyURL, err := http.ProxyFromEnvironment(req)
+		if err != nil || proxyURL == nil {
+			return proxyURL, err
+		}
+		if proxyAddr := urlDialAddr(proxyURL); proxyAddr != "" {
+			proxyMu.Lock()
+			if allowedProxyAddrs == nil {
+				allowedProxyAddrs = make(map[string]struct{})
+			}
+			allowedProxyAddrs[proxyAddr] = struct{}{}
+			proxyMu.Unlock()
+		}
+		return proxyURL, nil
+	}
+
+	isAllowedProxy := func(addr string) bool {
+		proxyMu.RLock()
+		_, ok := allowedProxyAddrs[addr]
+		proxyMu.RUnlock()
+		return ok
+	}
+
 	return &http.Transport{
-		Proxy:                  http.ProxyFromEnvironment,
+		Proxy:                  proxyFunc,
 		DisableCompression:     true,
-		DialContext:            (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:            newSafeDialContext(lookup, baseDial, isAllowedProxy),
 		ForceAttemptHTTP2:      true,
 		MaxIdleConns:           16,
 		MaxIdleConnsPerHost:    2,
@@ -74,6 +113,75 @@ func NewTransport() *http.Transport {
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  15 * time.Second,
 		MaxResponseHeaderBytes: 1 << 20,
+	}
+}
+
+func urlDialAddr(u *url.URL) string {
+	host := u.Hostname()
+	if host == "" {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		default:
+			return ""
+		}
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func newSafeDialContext(lookup lookupNetIPFunc, baseDial dialContextFunc, isAllowedProxy func(string) bool) dialContextFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if isAllowedProxy != nil && isAllowedProxy(addr) {
+			return baseDial(ctx, network, addr)
+		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		trimmed := strings.TrimSuffix(host, ".")
+		if isLocalHostName(trimmed) {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+		}
+		if ip, parseErr := netip.ParseAddr(trimmed); parseErr == nil {
+			if isDisallowedIP(ip) {
+				return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+			}
+			return baseDial(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+		}
+		ips, err := lookup(ctx, "ip", trimmed)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("无法解析域名：%s", host)
+		}
+		allowed := make([]netip.Addr, 0, len(ips))
+		for _, ip := range ips {
+			if isDisallowedIP(ip) {
+				return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+			}
+			allowed = append(allowed, ip.Unmap())
+		}
+		var lastErr error
+		for _, ip := range allowed {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			conn, dialErr := baseDial(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
 	}
 }
 
@@ -114,8 +222,12 @@ func checkImageRedirect(req *http.Request, via []*http.Request) error {
 	if err != nil {
 		return err
 	}
-	if len(via) > 0 && !isLocalOrPrivateHost(via[0].URL.Hostname()) && isLocalOrPrivateHost(target.Hostname()) {
-		return fmt.Errorf("拒绝从公网地址重定向到本地或内网地址")
+	if isLocalOrPrivateHost(target.Hostname()) {
+		for _, prev := range via {
+			if !isLocalOrPrivateHost(prev.URL.Hostname()) {
+				return fmt.Errorf("拒绝从公网地址重定向到本地或内网地址")
+			}
+		}
 	}
 	return nil
 }
@@ -379,16 +491,65 @@ func filename(parsed *url.URL) string {
 	return safe.String()
 }
 
-func isLocalOrPrivateHost(host string) bool {
+var disallowedIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
+func isLocalHostName(host string) bool {
 	lower := strings.ToLower(strings.TrimSuffix(host, "."))
-	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+	return lower == "localhost" || strings.HasSuffix(lower, ".localhost")
+}
+
+func isDisallowedIP(addr netip.Addr) bool {
+	if !addr.IsValid() || addr.Zone() != "" {
 		return true
 	}
-	addr, err := netip.ParseAddr(host)
+	unmapped := addr.Unmap()
+	if !unmapped.IsGlobalUnicast() || unmapped.IsLoopback() || unmapped.IsPrivate() ||
+		unmapped.IsLinkLocalUnicast() || unmapped.IsLinkLocalMulticast() ||
+		unmapped.IsMulticast() || unmapped.IsUnspecified() {
+		return true
+	}
+	for _, prefix := range disallowedIPPrefixes {
+		if prefix.Contains(addr) || prefix.Contains(unmapped) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalOrPrivateHost(host string) bool {
+	trimmed := strings.TrimSuffix(host, ".")
+	if isLocalHostName(trimmed) {
+		return true
+	}
+	addr, err := netip.ParseAddr(trimmed)
 	if err != nil {
 		return false
 	}
-	addr = addr.Unmap()
-	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
-		addr.IsLinkLocalMulticast() || addr.IsUnspecified()
+	return isDisallowedIP(addr)
 }

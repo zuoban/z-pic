@@ -242,6 +242,7 @@ func (s *application) clearBatch() {
 	s.closeBatchPreview()
 	s.clearPendingBatchConfirmation()
 	s.batch = nil
+	s.prepareThumbnailCache()
 	s.setMessage("", false)
 }
 
@@ -337,6 +338,7 @@ func (s *application) deleteBatchItems(shouldRemove func(index int, item batchIt
 		s.closeBatchPreview()
 		s.clearPendingBatchConfirmation()
 		s.batch = nil
+		s.prepareThumbnailCache()
 		return removed
 	}
 	s.batch.items = kept
@@ -529,16 +531,26 @@ func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex
 			if len(paths) == 0 || s.batch == nil {
 				return
 			}
-			tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
-			if s.batch.outputDir != paths[0] {
-				s.resetBatchRunState()
-				usedPaths = make(map[string]bool)
-			}
-			s.batch.outputDir = paths[0]
-			s.rememberBatchOutputDir(paths[0])
-			s.launchPreparedBatchWorker(tasks, usedPaths)
+			s.startBatchWithPickedOutputDir(paths[0], mode, singleIndex)
 		})
 	}()
+}
+
+func (s *application) startBatchWithPickedOutputDir(dir string, mode batchRunMode, singleIndex int) {
+	if dir == "" || s.batch == nil {
+		return
+	}
+	prevDir := s.batch.outputDir
+	s.batch.outputDir = dir
+	s.rememberBatchOutputDir(dir)
+	if prevDir != "" && prevDir != dir {
+		s.resetBatchRunState()
+		if mode != batchRunSingle {
+			mode = batchRunPending
+		}
+	}
+	tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
+	s.launchPreparedBatchWorker(tasks, usedPaths)
 }
 
 func (s *application) executeConfirmedBatchOverwrite() {

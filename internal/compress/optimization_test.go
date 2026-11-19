@@ -47,6 +47,8 @@ func TestJPEGOrientationObservesCancellationDuringConversion(t *testing.T) {
 		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio420),
 		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio444),
 		image.NewYCbCr(bounds, image.YCbCrSubsampleRatio422),
+		image.NewNYCbCrA(bounds, image.YCbCrSubsampleRatio420),
+		image.NewNYCbCrA(bounds, image.YCbCrSubsampleRatio444),
 		image.NewGray(bounds),
 		image.NewNRGBA(bounds),
 	} {

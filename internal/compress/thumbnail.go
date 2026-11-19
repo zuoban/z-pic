@@ -68,8 +68,11 @@ func ThumbnailWithAcquire(ctx context.Context, path string, maxEdge int, acquire
 	if err != nil {
 		return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 	}
-	if format == "jpeg" {
+	switch format {
+	case "jpeg":
 		decoded = normalizeOrientation(decoded, jpegOrientation(data))
+	case "webp":
+		decoded = normalizeOrientation(decoded, webpOrientation(data))
 	}
 	output, err := thumbnailRaster(ctx, decoded, maxEdge)
 	if err != nil {

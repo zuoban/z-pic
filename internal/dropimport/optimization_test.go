@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,12 +28,13 @@ func TestDownloadResponseHeadersAreBounded(t *testing.T) {
 	}))
 	defer server.Close()
 	dir := t.TempDir()
-	path, saved, err := Resolve(context.Background(), Item{URL: server.URL + "/oversized"}, dir)
+	transport := newLoopbackTransport(t)
+	path, saved, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/oversized"}, dir, transport)
 	if err == nil || saved || path != "" {
 		t.Fatalf("oversized response headers accepted: %q, %v, %v", path, saved, err)
 	}
 	assertFileCount(t, dir, 0)
-	if _, saved, err := Resolve(context.Background(), Item{URL: server.URL + "/normal"}, dir); err != nil || !saved {
+	if _, saved, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/normal"}, dir, transport); err != nil || !saved {
 		t.Fatalf("ordinary response rejected: saved=%v, err=%v", saved, err)
 	}
 }
@@ -49,7 +51,7 @@ func TestResolveRejectsNonImageBeforeReadingResponseTail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	directory := filepath.Join(t.TempDir(), "not-created")
-	_, saved, err := Resolve(ctx, Item{URL: server.URL}, directory)
+	_, saved, err := ResolveWithTransport(ctx, Item{URL: server.URL}, directory, newLoopbackTransport(t))
 	if saved || err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("non-image response consumed tail: saved=%v, error=%v", saved, err)
 	}
@@ -71,16 +73,29 @@ func TestDownloadTransportReusesConnectionsAndBoundsIdlePool(t *testing.T) {
 	}
 	server.Start()
 	defer server.Close()
-	transport := NewTransport()
-	defer transport.CloseIdleConnections()
-	if transport.MaxIdleConns <= 0 || transport.MaxIdleConns > 32 ||
-		transport.IdleConnTimeout <= 0 || transport.TLSHandshakeTimeout <= 0 ||
-		transport.ResponseHeaderTimeout <= 0 || transport.DialContext == nil {
+	prodTransport := NewTransport()
+	defer prodTransport.CloseIdleConnections()
+	if prodTransport.MaxIdleConns <= 0 || prodTransport.MaxIdleConns > 32 ||
+		prodTransport.IdleConnTimeout <= 0 || prodTransport.TLSHandshakeTimeout <= 0 ||
+		prodTransport.ResponseHeaderTimeout <= 0 || prodTransport.DialContext == nil {
 		t.Fatal("download transport lacks connection/timeout bounds")
 	}
+	serverAddr := server.Listener.Addr().String()
+	transport := newTransport(
+		func(_ context.Context, _, _ string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		},
+		func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != "93.184.216.34:80" {
+				t.Fatalf("expected literal IP dial, got %s", addr)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, serverAddr)
+		},
+	)
+	defer transport.CloseIdleConnections()
 	resolver := NewResolver(t.TempDir(), transport)
 	for range 3 {
-		if _, saved, err := resolver.Resolve(context.Background(), Item{URL: server.URL}); err != nil || !saved {
+		if _, saved, err := resolver.Resolve(context.Background(), Item{URL: "http://cdn.example.com/image.png"}); err != nil || !saved {
 			t.Fatalf("valid response rejected: %v", err)
 		}
 	}

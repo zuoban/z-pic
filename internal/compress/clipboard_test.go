@@ -64,6 +64,55 @@ func TestClipboardPNGPreservesPixelsAndOrientation(t *testing.T) {
 	}
 }
 
+func TestWebPEXIFOrientationAcrossClipboardThumbnailAndPreview(t *testing.T) {
+	base := webpFixture(t, "alpha") // 96x64 NYCbCrA
+	for _, withExifPrefix := range []bool{false, true} {
+		payload := exifTIFF(binary.LittleEndian, 6)
+		if withExifPrefix {
+			payload = append([]byte("Exif\x00\x00"), payload...)
+		}
+		orientedWebP := appendWebPChunk(extendedWebP(base, 0x18, 96, 64), "EXIF", payload)
+
+		rawDecoded, _, err := image.Decode(bytes.NewReader(orientedWebP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := rawDecoded.(*image.NYCbCrA); !ok {
+			t.Fatalf("expected *image.NYCbCrA from alpha WebP decode, got %T", rawDecoded)
+		}
+		want := normalizeOrientation(rawDecoded, 6)
+
+		pngOut, err := PNGBytes(context.Background(), orientedWebP)
+		if err != nil {
+			t.Fatalf("PNGBytes failed: %v", err)
+		}
+		gotPNG, err := png.Decode(bytes.NewReader(pngOut))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotPNG.Bounds() != image.Rect(0, 0, 64, 96) {
+			t.Fatalf("clipboard PNG bounds = %v, want 64x96", gotPNG.Bounds())
+		}
+		for y := 0; y < 96; y += 7 {
+			for x := 0; x < 64; x += 7 {
+				wantC := color.NRGBA64Model.Convert(want.At(x, y))
+				gotC := color.NRGBA64Model.Convert(gotPNG.At(x, y))
+				if wantC != gotC {
+					t.Fatalf("clipboard pixel (%d,%d) = %v, want %v", x, y, gotC, wantC)
+				}
+			}
+		}
+
+		thumb, err := Thumbnail(context.Background(), writeFixture(t, "oriented.webp", orientedWebP), 48)
+		if err != nil {
+			t.Fatalf("Thumbnail failed: %v", err)
+		}
+		if thumb.Bounds() != image.Rect(0, 0, 32, 48) {
+			t.Fatalf("thumbnail bounds = %v, want 32x48", thumb.Bounds())
+		}
+	}
+}
+
 func TestClipboardPNGRejectsInvalidOrCanceledInput(t *testing.T) {
 	for _, data := range [][]byte{nil, []byte("broken image"), jpegFixture(t, 80)[:40]} {
 		if _, err := PNGBytes(context.Background(), data); err == nil {

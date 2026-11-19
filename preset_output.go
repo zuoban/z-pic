@@ -138,6 +138,7 @@ func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner
 		root = subfolder
 	}
 	rel = sanitizeRelPath(rel, filepath.Base(source))
+	numberedOnly := false
 	if o.UseSuffix {
 		suffix := o.Suffix
 		if suffix == "" {
@@ -145,8 +146,9 @@ func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner
 		}
 		ext := filepath.Ext(rel)
 		rel = strings.TrimSuffix(rel, ext) + suffix + ext
+		numberedOnly = true
 	}
-	return planner.resolve(root, source, rel)
+	return planner.resolveCandidate(root, source, rel, numberedOnly)
 }
 
 func (s *application) savePresetResult() {

@@ -35,8 +35,15 @@ var (
 	}
 )
 
+func effectivePNGThreads(threads int) string {
+	if threads > 0 {
+		return strconv.Itoa(min(8, threads))
+	}
+	return strconv.Itoa(min(4, max(1, runtime.GOMAXPROCS(0)/2)))
+}
+
 func pngThreadCount() string {
-	return strconv.Itoa(min(4, max(2, runtime.GOMAXPROCS(0)/2)))
+	return effectivePNGThreads(0)
 }
 
 // Optimize losslessly recompresses PNG data with Oxipng 10.2.1.
@@ -47,6 +54,11 @@ func pngThreadCount() string {
 // Signed/offset-dependent caBX and iDOT chunks preclude changing the file, so
 // those inputs are returned untouched. The returned bytes may alias data.
 func Optimize(ctx context.Context, data []byte) ([]byte, error) {
+	return OptimizeWithThreads(ctx, data, 0)
+}
+
+// OptimizeWithThreads runs Optimize with an explicit native thread quota when threads > 0.
+func OptimizeWithThreads(ctx context.Context, data []byte, threads int) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
@@ -57,11 +69,12 @@ func Optimize(ctx context.Context, data []byte) ([]byte, error) {
 	if immutable {
 		return data, nil
 	}
-	args := []string{"-o", "2", "--threads", pngThreadCount()}
+	threadStr := effectivePNGThreads(threads)
+	args := []string{"-o", "2", "--threads", threadStr}
 	if representationMetadata {
 		args = append(args, "--nx")
 	}
-	return invoke(ctx, "oxipng", append(args, "--stdout", "-"), data)
+	return invokeWithThreads(ctx, "oxipng", append(args, "--stdout", "-"), data, threads)
 }
 
 // Quantize runs pngquant 3.0.3 with DefaultQuantizeOptions.
@@ -76,6 +89,11 @@ func Quantize(ctx context.Context, data []byte) ([]byte, error) {
 // signed/offset-dependent caBX and iDOT inputs are returned untouched, as in
 // Optimize. Callers run Optimize afterwards and validate the final output.
 func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptions) ([]byte, error) {
+	return QuantizeWithThreads(ctx, data, options, 0)
+}
+
+// QuantizeWithThreads runs QuantizeWithOptions with an explicit native thread quota when threads > 0.
+func QuantizeWithThreads(ctx context.Context, data []byte, options QuantizeOptions, threads int) ([]byte, error) {
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
@@ -92,11 +110,11 @@ func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptio
 	if immutable {
 		return data, nil
 	}
-	return invoke(ctx, "pngquant", []string{
+	return invokeWithThreads(ctx, "pngquant", []string{
 		fmt.Sprintf("--quality=%d-%d", options.MinQuality, options.MaxQuality),
 		"--speed=" + strconv.Itoa(options.Speed),
 		"--skip-if-larger", "--output", "-", strconv.Itoa(options.Colors), "-",
-	}, data)
+	}, data, threads)
 }
 
 func checkInput(ctx context.Context, data []byte) error {
@@ -132,6 +150,10 @@ func chunkConstraints(ctx context.Context, data []byte) (immutable, representati
 }
 
 func invoke(ctx context.Context, name string, args []string, data []byte) ([]byte, error) {
+	return invokeWithThreads(ctx, name, args, data, 0)
+}
+
+func invokeWithThreads(ctx context.Context, name string, args []string, data []byte, threads int) ([]byte, error) {
 	// Include extraction in the cancellation/deadline budget.
 	ctx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
@@ -140,7 +162,7 @@ func invoke(ctx context.Context, name string, args []string, data []byte) ([]byt
 		return nil, err
 	}
 	defer cleanup()
-	return runCommand(ctx, name, path, args, data, maxPNGBytes)
+	return runCommandWithThreads(ctx, name, path, args, data, maxPNGBytes, threads)
 }
 
 func acquireTool(name string) (string, func(), error) {
@@ -170,6 +192,10 @@ func extractTool(name string) (string, func(), error) {
 // runCommand is private so tests can exercise process behavior without a
 // production environment override or an exported executable injection hook.
 func runCommand(ctx context.Context, name, path string, args []string, data []byte, limit int) ([]byte, error) {
+	return runCommandWithThreads(ctx, name, path, args, data, limit, 0)
+}
+
+func runCommandWithThreads(ctx context.Context, name, path string, args []string, data []byte, limit, threads int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%s 已取消：%w", name, err)
 	}
@@ -181,8 +207,9 @@ func runCommand(ctx context.Context, name, path string, args []string, data []by
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	threadStr := effectivePNGThreads(threads)
 	// No PATH lookup or inherited dynamic-library overrides are necessary.
-	cmd.Env = []string{"PATH=", "LC_ALL=C", "RAYON_NUM_THREADS=" + pngThreadCount()}
+	cmd.Env = []string{"PATH=", "LC_ALL=C", "RAYON_NUM_THREADS=" + threadStr, "OMP_NUM_THREADS=" + threadStr}
 	cmd.WaitDelay = time.Second
 	err := cmd.Run()
 	if ctx.Err() != nil {

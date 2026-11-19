@@ -33,8 +33,9 @@ func captureOverwriteSnapshot(input, output []byte) *overwriteSnapshot {
 
 // Overwrite atomically replaces the original source with a smaller, validated
 // File/Bytes result, provided the source still matches the compression input.
-// It preserves file permission bits, but does not preserve inode identity,
-// ownership, extended attributes, or hard-link relationships.
+// It preserves regular file permission bits (0777) while stripping special mode
+// bits (setuid/setgid/sticky), and does not preserve inode identity, ownership,
+// extended attributes, or hard-link relationships.
 //
 // Portable Rename is not a conditional exchange: another process can still
 // replace or remove the source between the final identity/hash check and
@@ -89,7 +90,7 @@ func replaceOverwriteSource(path string, data []byte, snapshot *overwriteSnapsho
 	if n != len(data) {
 		return fmt.Errorf("写入覆盖临时文件失败：%w", io.ErrShortWrite)
 	}
-	mode := source.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	mode := source.Mode().Perm()
 	if err := temp.Chmod(mode); err != nil {
 		return fmt.Errorf("保留原图权限失败：%w", err)
 	}

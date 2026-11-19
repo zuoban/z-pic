@@ -258,3 +258,39 @@ func TestBatchPresetOutputDirectoryRespectsOriginalSubfolderMode(t *testing.T) {
 		})
 	}
 }
+
+func TestPresetSuffixedCollisionUsesNumberedSequence(t *testing.T) {
+	sourceDir := t.TempDir()
+	source := filepath.Join(sourceDir, "photo.JPEG")
+	if err := os.WriteFile(source, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"-zpic", "-compressed"} {
+		t.Run(suffix, func(t *testing.T) {
+			outDir := t.TempDir()
+			options := presetSaveOptions{Mode: presetSaveFixed, Directory: outDir, UseSuffix: true, Suffix: suffix}
+			wantNames := []string{
+				"photo" + suffix + ".JPEG",
+				"photo" + suffix + "-2.JPEG",
+				"photo" + suffix + "-3.JPEG",
+			}
+			for index, wantName := range wantNames {
+				got, err := options.copyPath(source, outDir, "photo.JPEG", nil)
+				want := filepath.Join(outDir, wantName)
+				if err != nil || got != want {
+					t.Fatalf("run %d: got %q (%v), want %q", index, got, err, want)
+				}
+				result := &compress.Result{SourcePath: source, Data: []byte{byte('a' + index)}}
+				if err := result.Save(got); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for index, wantName := range wantNames {
+				data, err := os.ReadFile(filepath.Join(outDir, wantName))
+				if err != nil || !bytes.Equal(data, []byte{byte('a' + index)}) {
+					t.Fatalf("output %q modified: %q (%v)", wantName, data, err)
+				}
+			}
+		})
+	}
+}

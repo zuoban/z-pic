@@ -51,6 +51,27 @@ func TestInspectValidJPEGAndPNG(t *testing.T) {
 	}
 }
 
+func TestInspectReportsVisualUprightDimensionsForJPEGAndWebP(t *testing.T) {
+	jpgData := withEXIF(jpegFixture(t, 85), exifTIFF(binary.LittleEndian, 6))
+	jpgInfo, err := Inspect(context.Background(), writeFixture(t, "portrait.jpg", jpgData))
+	if err != nil {
+		t.Fatalf("Inspect oriented JPEG failed: %v", err)
+	}
+	if jpgInfo.Width != 96 || jpgInfo.Height != 128 {
+		t.Fatalf("Inspect JPEG visual dimensions = %dx%d, want 96x128", jpgInfo.Width, jpgInfo.Height)
+	}
+
+	webpBase := webpFixture(t, "alpha") // 96x64
+	webpOriented := appendWebPChunk(extendedWebP(webpBase, 0x18, 96, 64), "EXIF", exifTIFF(binary.BigEndian, 6))
+	webpInfo, err := Inspect(context.Background(), writeFixture(t, "portrait.webp", webpOriented))
+	if err != nil {
+		t.Fatalf("Inspect oriented WebP failed: %v", err)
+	}
+	if webpInfo.Width != 64 || webpInfo.Height != 96 {
+		t.Fatalf("Inspect WebP visual dimensions = %dx%d, want 64x96", webpInfo.Width, webpInfo.Height)
+	}
+}
+
 func TestInspectPNGChecksChunksAfterImageData(t *testing.T) {
 	data := pngFixture(t, image.NewNRGBA(image.Rect(0, 0, 3, 2)), png.DefaultCompression)
 	end := len(data) - 12

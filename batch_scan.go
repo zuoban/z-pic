@@ -60,15 +60,23 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 	}
 	s.busy, s.phase, s.cancel, s.canceling = false, "", nil, false
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			s.clipboardOutcome = clipboardOutcomeCanceled
+		} else {
+			s.clipboardOutcome = clipboardOutcomeFailed
+		}
 		s.reportError(err, "扫描图片失败")
 		return
 	}
 	if len(scan.items) == 0 {
 		if scan.truncated {
+			s.clipboardOutcome = clipboardOutcomeFailed
 			s.setMessage(batchScanMessage(0, scan.duplicates, true, appendMode), false)
 		} else if appendMode && scan.duplicates > 0 {
+			s.clipboardOutcome = clipboardOutcomeDuplicate
 			s.setMessage("所选图片均已在批量队列中。", false)
 		} else {
+			s.clipboardOutcome = clipboardOutcomeFailed
 			s.setMessage("未找到可处理的 JPEG、PNG 或 WebP 图片。", true)
 		}
 		return
@@ -101,6 +109,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		s.batch = newBatchState(scan.items)
 		s.configureBatchPresetOutput()
 	}
+	s.clipboardOutcome = clipboardOutcomeAdded
 	s.setMessage(batchScanMessage(len(scan.items), scan.duplicates, scan.truncated, appendMode), false)
 }
 

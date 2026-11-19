@@ -11,6 +11,16 @@ import (
 	"zpic/internal/compress"
 )
 
+type clipboardImportOutcome uint8
+
+const (
+	clipboardOutcomeNone clipboardImportOutcome = iota
+	clipboardOutcomeAdded
+	clipboardOutcomeDuplicate
+	clipboardOutcomeCanceled
+	clipboardOutcomeFailed
+)
+
 func (s *application) canPasteImages() bool {
 	return !s.closed && !s.modalOpen() && len(s.dropQueue) == 0
 }
@@ -37,6 +47,7 @@ func (s *application) pasteImages() {
 		return
 	}
 	s.clipboardImporting = true
+	s.clipboardOutcome = clipboardOutcomeNone
 	s.receiveDrop(data)
 }
 
@@ -52,14 +63,19 @@ func (s *application) completeClipboardImport() {
 	if !s.clipboardImporting {
 		return
 	}
+	outcome := s.clipboardOutcome
 	s.clipboardImporting = false
+	s.clipboardOutcome = clipboardOutcomeNone
 	title := "剪贴板图片已加入队列"
-	if s.failed {
+	if s.failed || outcome == clipboardOutcomeFailed {
 		title = "剪贴板图片导入失败"
-	} else if s.message == "操作已取消。" {
-		title = "已取消粘贴图片"
-	} else if s.message == "所选图片均已在批量队列中。" {
-		title = "图片已在队列中"
+	} else {
+		switch outcome {
+		case clipboardOutcomeCanceled:
+			title = "已取消粘贴图片"
+		case clipboardOutcomeDuplicate:
+			title = "图片已在队列中"
+		}
 	}
 	s.showClipboardToast(title, s.message, s.failed)
 }
@@ -73,12 +89,25 @@ func (s *application) copyResult() {
 	if !s.canCopyResult() {
 		return
 	}
-	data := s.result.Data
+	res := *s.result
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在准备剪贴板图片", cancel
 	s.setMessage("", false)
 	go func() {
-		pngData, err := compress.PNGBytes(ctx, data)
+		var pngData []byte
+		var err error
+		if res.Format == "png" {
+			pngData, err = compress.PNGBytes(ctx, res.Data)
+		} else {
+			var release func()
+			release, err = s.acquirePreviewMemory(ctx, compress.ImageInfo{
+				Format: res.Format, Width: res.Width, Height: res.Height, Size: int64(len(res.Data)),
+			})
+			if err == nil {
+				pngData, err = compress.PNGBytes(ctx, res.Data)
+				release()
+			}
+		}
 		s.update(func() {
 			defer cancel()
 			if canceled := ctx.Err(); canceled != nil {

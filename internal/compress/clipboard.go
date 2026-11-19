@@ -80,11 +80,14 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if format == "png" {
 		return data, nil
 	}
-	if format == "jpeg" {
+	switch format {
+	case "jpeg":
 		decoded, err = orientForJPEGEncode(ctx, decoded, jpegOrientation(data))
-		if err != nil {
-			return nil, err
-		}
+	case "webp":
+		decoded, err = orientForJPEGEncode(ctx, decoded, webpOrientation(data))
+	}
+	if err != nil {
+		return nil, err
 	}
 	return encodeClipboardPNG(ctx, decoded, maxInputSize)
 }

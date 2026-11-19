@@ -149,3 +149,76 @@ func TestBatchRestartProcessesEverySourceWithQueuedUpdates(t *testing.T) {
 		})
 	}
 }
+
+func TestAskModePickedOutputDirHandlesFirstSingleAndDirectorySwitch(t *testing.T) {
+	root := t.TempDir()
+	outA := filepath.Join(root, "out-a")
+	outB := filepath.Join(root, "out-b")
+	for _, dir := range []string{outA, outB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p0 := filepath.Join(root, "first.jpg")
+	p1 := filepath.Join(root, "second.jpg")
+	writeTestJPEG(t, p0, 120, 90, 95)
+	writeTestJPEG(t, p1, 120, 90, 95)
+	scan, err := scanBatchPaths(context.Background(), []string{p0, p1}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updates := make(chan func(), 16)
+	app := newApplication()
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.applyPresetOutput(presetSaveOptions{Mode: presetSaveAsk, UseSuffix: true, Suffix: "-zpic"})
+	app.batch = newBatchState(scan.items)
+	app.batch.outputMode = batchOutputFolder
+	app.batch.items[0].status = batchFailed
+	app.batch.items[0].errMsg = "上次失败"
+
+	drainWorker := func() {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			app.saves.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("batch worker timed out")
+		}
+		for len(updates) > 0 {
+			(<-updates)()
+		}
+	}
+
+	// First single-item run when outputDir is still empty must preserve sibling failure state.
+	app.startBatchWithPickedOutputDir(outA, batchRunSingle, 1)
+	drainWorker()
+	if app.batch.items[0].status != batchFailed || app.batch.items[1].status != batchDone ||
+		app.batch.items[1].savedPath != filepath.Join(outA, "second-zpic.jpg") {
+		t.Fatalf("first single run in ask mode corrupted sibling state: %+v", app.batch.items)
+	}
+	firstExport, err := os.ReadFile(app.batch.items[1].savedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Retrying/resuming into a different directory must reset and export all valid items to the new directory.
+	app.startBatchWithPickedOutputDir(outB, batchRunRetryFailed, -1)
+	drainWorker()
+	for index, wantName := range []string{"first-zpic.jpg", "second-zpic.jpg"} {
+		want := filepath.Join(outB, wantName)
+		if app.batch.items[index].status != batchDone || app.batch.items[index].savedPath != want {
+			t.Fatalf("directory switch left item %d incomplete: %+v (want %q)", index, app.batch.items[index], want)
+		}
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("expected export %q in new directory: %v", want, err)
+		}
+	}
+	if after, err := os.ReadFile(filepath.Join(outA, "second-zpic.jpg")); err != nil || !bytes.Equal(after, firstExport) {
+		t.Fatalf("previous directory export modified: %v", err)
+	}
+}

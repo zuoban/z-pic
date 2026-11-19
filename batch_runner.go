@@ -22,6 +22,13 @@ func batchWorkerCount(taskCount int) int {
 	return min(taskCount, max(2, min(6, available/2)))
 }
 
+func batchThreadsPerWorker(workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	return min(4, max(1, runtime.GOMAXPROCS(0)/workers))
+}
+
 type batchCompressionOutcome struct {
 	result  *compress.Result
 	err     error
@@ -125,6 +132,10 @@ func (s *application) runBatchTasks(
 	if total == 0 || ctx.Err() != nil {
 		return
 	}
+	workers := batchWorkerCount(total)
+	if options.Threads <= 0 {
+		options.Threads = batchThreadsPerWorker(workers)
+	}
 	var destinations map[int]string
 	var outputErrors map[int]error
 	if outputMode == batchOutputFolder {
@@ -167,7 +178,7 @@ func (s *application) runBatchTasks(
 		)
 		return batchCompressionOutcome{result: result, err: err, started: started, release: release}
 	}
-	runBatchPipeline(ctx, tasks, batchWorkerCount(total), process, func(task batchTask, outcome batchCompressionOutcome) {
+	runBatchPipeline(ctx, tasks, workers, process, func(task batchTask, outcome batchCompressionOutcome) {
 		if ctx.Err() != nil {
 			if outcome.started {
 				emit(func() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build only the embedded PNG CLI assets, never the application.
-# Source and every Cargo dependency are shipped in licenses/pngtools-source.tar.gz.
+# Source and every Cargo dependency are shipped in scripts/sources/pngtools-source.tar.gz.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,7 +10,7 @@ if [[ $# -gt 1 || ( $# -eq 1 && "${1:-}" != --verify ) ]]; then
 fi
 source_sha=844426084a044fcafe6913faf8102d74f5da0e0aaf9c98a67599d723f0d9d45d
 command -v python3 >/dev/null || { echo "Missing tool: python3" >&2; exit 1; }
-python3 - "$repo_root/licenses/pngtools-source.tar.gz" "$source_sha" <<'PY'
+python3 - "$repo_root/scripts/sources/pngtools-source.tar.gz" "$source_sha" <<'PY'
 import hashlib, pathlib, sys
 actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()
 if actual != sys.argv[2]:
@@ -65,7 +65,7 @@ fi
 if [[ -n "${PNGTOOLS_SOURCE_DIR:-}" ]]; then
   source_dir="$(cd "$PNGTOOLS_SOURCE_DIR" && pwd)"
 else
-  tar -xzf "$repo_root/licenses/pngtools-source.tar.gz" -C "$work_dir"
+  tar -xzf "$repo_root/scripts/sources/pngtools-source.tar.gz" -C "$work_dir"
   source_dir="$work_dir/pngtools-source"
 fi
 

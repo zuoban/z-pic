@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,8 +24,7 @@ func TestResolverKeepsMixedNamesAndFormats(test *testing.T) {
 		_, _ = writer.Write(payloads[request.URL.Query().Get("format")])
 	}))
 	defer server.Close()
-	transport := NewTransport()
-	defer transport.CloseIdleConnections()
+	transport := newLoopbackTransport(test)
 	dir := test.TempDir()
 	resolver := NewResolver(dir, transport)
 	cases := []struct {
@@ -53,7 +53,7 @@ func TestResolverKeepsMixedNamesAndFormats(test *testing.T) {
 			test.Fatalf("source bytes changed: %s, %v", path, err)
 		}
 		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0o600 {
+		if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 			test.Fatalf("saved file permissions: %v, %v", info, err)
 		}
 	}
@@ -76,6 +76,9 @@ func TestResolverRechecksExternalNames(test *testing.T) {
 				err = os.Symlink("missing.png", external)
 			}
 			if err != nil {
+				if kind == "symlink" && runtime.GOOS == "windows" {
+					test.Skipf("symlink unavailable: %v", err)
+				}
 				test.Fatal(err)
 			}
 			resolver := NewResolver(dir, nil)

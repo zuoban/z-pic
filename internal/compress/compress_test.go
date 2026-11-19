@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -100,6 +101,9 @@ func TestJPEGCompressionPreservesDimensions(t *testing.T) {
 }
 
 func TestPNGSupports8And16BitTransparency(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("bundled native encoders require darwin/arm64")
+	}
 	for _, depth := range []int{8, 16} {
 		t.Run(strconv.Itoa(depth)+"bit", func(t *testing.T) {
 			img := image.NewNRGBA64(image.Rect(0, 0, 32, 24))

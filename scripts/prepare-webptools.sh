@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_sha=e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564
-archive="$repo_root/licenses/libwebp-1.6.0.tar.gz"
+archive="$repo_root/scripts/sources/libwebp-1.6.0.tar.gz"
 asset_dir="$repo_root/internal/webptools/assets/darwin_arm64"
 
 [[ "$(uname -s)/$(uname -m)" == Darwin/arm64 ]] || {

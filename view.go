@@ -306,10 +306,10 @@ func (s *application) previewPanel(c *ui.Context) {
 					})
 					ui.Column(c).Gap(12).AlignItems(ui.Center).Children(func() {
 						ui.Row(c).Gap(8).Children(func() {
-							primaryAction(c, "select", "选择图片", s.busy).Height(36).Padding(0, 16).
+							primaryAction(c, "select", "选择图片", s.modalOpen()).Height(36).Padding(0, 16).
 								KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
 								OnClick(s.chooseFile)
-							quietButton(c, "select-folder", "选择文件夹", 36, s.busy).Padding(0, 16).
+							quietButton(c, "select-folder", "选择文件夹", 36, s.modalOpen()).Padding(0, 16).
 								Tooltip("选择包含图片的文件夹").
 								OnClick(s.chooseFolder)
 						})
@@ -332,7 +332,7 @@ func (s *application) previewPanel(c *ui.Context) {
 						strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size)).
 						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
 				})
-				quietButton(c, "replace", "更换图片", 32, s.busy).
+				quietButton(c, "replace", "更换图片", 32, s.modalOpen()).
 					KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("更换图片 · " + shortcutLabel("O")).
 					OnClick(s.chooseFile)
 			})
@@ -455,7 +455,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
 						Width(0).Grow(1).MaxLines(2).Tooltip(s.message)
-					quietButton(c, "reveal-saved", "定位文件", 32, s.busy).
+					quietButton(c, "reveal-saved", "定位文件", 32, s.modalOpen()).
 						Tooltip("在文件夹中显示输出文件").
 						OnClick(func() { s.revealFileInFolder(s.lastSavedPath) })
 				})
@@ -476,7 +476,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 			save.FillWidth().KeyShortcuts(ui.Cmd, ui.KeyS).
 				Tooltip(hint + " · " + shortcutLabel("S")).OnClick(s.savePresetResult)
 			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				quietButton(c, "save-copy", "另存副本", 32, s.busy).Width(0).Grow(1).
+				quietButton(c, "save-copy", "另存副本", 32, s.modalOpen()).Width(0).Grow(1).
 					OnClick(s.saveCopy)
 				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
 					KeyShortcuts(ui.Cmd, ui.KeyC).
@@ -515,6 +515,13 @@ func (s *application) workFeedback(c *ui.Context) {
 			ui.Text(c, "已完成项会保留，可继续剩余图片").FontSize(12).
 				TextColor(metadataColor(c)).MaxLines(2)
 		}
+	}
+	if len(s.dropQueue) > 0 {
+		queuedNote := fmt.Sprintf("已暂存 %d 次拖入，当前操作结束后入队", len(s.dropQueue))
+		if s.dropFailed && s.dropMessage != "" {
+			queuedNote = s.dropMessage
+		}
+		ui.Text(c, queuedNote).FontSize(12).TextColor(metadataColor(c)).MaxLines(2)
 	}
 }
 

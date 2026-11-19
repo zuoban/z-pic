@@ -14,8 +14,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -42,6 +44,15 @@ func TestResolveRejectsInvalidRequestBeforeWork(t *testing.T) {
 	if requests.Load() != 0 {
 		t.Fatal("invalid destination caused a network request")
 	}
+}
+
+func newLoopbackTransport(tb testing.TB) *http.Transport {
+	tb.Helper()
+	transport := NewTransport()
+	transport.Proxy = nil
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tb.Cleanup(transport.CloseIdleConnections)
+	return transport
 }
 
 func imageBytes(t *testing.T, format string) []byte {
@@ -88,11 +99,12 @@ func TestResolveOriginalsAndCollisions(t *testing.T) {
 			} else if format == "webp" {
 				extension = ".webp"
 			}
-			first, downloaded, err := Resolve(context.Background(), Item{URL: server.URL + "/no-extension"}, dir)
+			transport := newLoopbackTransport(t)
+			first, downloaded, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/no-extension"}, dir, transport)
 			if err != nil || !downloaded || filepath.Base(first) != "no-extension"+extension {
 				t.Fatalf("Resolve = %q, %v, %v", first, downloaded, err)
 			}
-			second, _, err := Resolve(context.Background(), Item{URL: server.URL + "/no-extension"}, dir)
+			second, _, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/no-extension"}, dir, transport)
 			if err != nil || second == first {
 				t.Fatalf("collision = %q, %v", second, err)
 			}
@@ -102,12 +114,12 @@ func TestResolveOriginalsAndCollisions(t *testing.T) {
 					t.Fatalf("original changed: %v", err)
 				}
 				info, _ := os.Stat(path)
-				if info.Mode().Perm() != 0600 {
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 					t.Fatalf("permissions: %v", info.Mode())
 				}
 			}
 			info, _ := os.Stat(dir)
-			if info.Mode().Perm() != 0700 {
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
 				t.Fatalf("directory permissions: %v", info.Mode())
 			}
 			assertFileCount(t, dir, 2)
@@ -184,7 +196,7 @@ func TestResolveWebPRepresentations(t *testing.T) {
 			if err != nil || len(items) != 1 {
 				t.Fatalf("Parse = %#v, %v", items, err)
 			}
-			path, downloaded, err := Resolve(context.Background(), items[0], dir)
+			path, downloaded, err := ResolveWithTransport(context.Background(), items[0], dir, newLoopbackTransport(t))
 			if err != nil || !downloaded || filepath.Base(path) != test.want {
 				t.Fatalf("Resolve = %q, %v, %v", path, downloaded, err)
 			}
@@ -285,7 +297,7 @@ func TestResolveHTTPFailuresAndCleanup(t *testing.T) {
 			server := httptest.NewServer(test.handler)
 			defer server.Close()
 			dir := t.TempDir()
-			path, downloaded, err := Resolve(context.Background(), Item{URL: server.URL}, dir)
+			path, downloaded, err := ResolveWithTransport(context.Background(), Item{URL: server.URL}, dir, newLoopbackTransport(t))
 			if err == nil || path != "" || downloaded {
 				t.Fatalf("accepted bad response: %q, %v, %v", path, downloaded, err)
 			}
@@ -311,7 +323,8 @@ func TestResolveRedirectAndCancel(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	path, _, err := Resolve(context.Background(), Item{URL: server.URL + "/redirect"}, t.TempDir())
+	loopbackTransport := newLoopbackTransport(t)
+	path, _, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/redirect"}, t.TempDir(), loopbackTransport)
 	if err != nil || filepath.Ext(path) != ".jpg" {
 		t.Fatalf("redirect: %q, %v", path, err)
 	}
@@ -320,7 +333,7 @@ func TestResolveRedirectAndCancel(t *testing.T) {
 	dir := t.TempDir()
 	finished := make(chan error, 1)
 	go func() {
-		_, _, err := Resolve(ctx, Item{URL: server.URL + "/slow"}, dir)
+		_, _, err := ResolveWithTransport(ctx, Item{URL: server.URL + "/slow"}, dir, loopbackTransport)
 		finished <- err
 	}()
 	select {
@@ -370,7 +383,7 @@ func TestResolveValidationAndSafeName(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	path, _, err := Resolve(context.Background(), Item{URL: server.URL + "/%2E%2E%2F%2E%2E%2F%3F.jpg"}, dir)
+	path, _, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/%2E%2E%2F%2E%2E%2F%3F.jpg"}, dir, newLoopbackTransport(t))
 	if err != nil || filepath.Dir(path) != dir || !strings.HasSuffix(path, ".png") {
 		t.Fatalf("unsafe name: %q, %v", path, err)
 	}
@@ -412,8 +425,7 @@ func TestResolveWithSharedTransportPreservesOriginals(test *testing.T) {
 	defer server.Close()
 
 	dir := filepath.Join(test.TempDir(), "downloads")
-	transport := NewTransport()
-	defer transport.CloseIdleConnections()
+	transport := newLoopbackTransport(test)
 
 	first, firstSaved, err := ResolveWithTransport(context.Background(), Item{URL: server.URL + "/batch.png"}, dir, transport)
 	if err != nil || !firstSaved {
@@ -488,5 +500,97 @@ func TestResolveBlocksPublicToLocalOrPrivateRedirect(t *testing.T) {
 		if localHits.Load() != 0 {
 			t.Fatalf("redirect to %s reached local target", redirectURL)
 		}
+	}
+}
+
+func TestResolveBlocksFirstHopPrivateLoopbackAndDNSRebinding(t *testing.T) {
+	var localHits atomic.Int32
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localHits.Add(1)
+		_, _ = w.Write(imageBytes(t, "png"))
+	}))
+	defer localServer.Close()
+
+	for _, blockedURL := range []string{
+		localServer.URL + "/secret.png",
+		"http://localhost/secret.png",
+		"http://sub.localhost/secret.png",
+		"http://127.0.0.1/secret.png",
+		"http://[::1]/secret.png",
+		"http://[::ffff:127.0.0.1]/secret.png",
+		"http://0.0.0.0/secret.png",
+		"http://0.0.0.1/secret.png",
+		"http://10.0.0.1/secret.png",
+		"http://100.100.100.200/latest/meta-data",
+		"http://169.254.169.254/latest/meta-data",
+		"http://172.16.0.1/secret.png",
+		"http://192.168.1.1/admin",
+		"http://[64:ff9b::7f00:1]/secret.png",
+		"http://[fe80::1]/secret.png",
+		"http://[fd00::1]/secret.png",
+	} {
+		dir := t.TempDir()
+		path, saved, err := Resolve(context.Background(), Item{URL: blockedURL}, dir)
+		if err == nil || saved || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+			t.Fatalf("first-hop %s must be blocked: path=%q saved=%v err=%v", blockedURL, path, saved, err)
+		}
+		assertFileCount(t, dir, 0)
+	}
+	if localHits.Load() != 0 {
+		t.Fatalf("default Resolve reached loopback server %d times", localHits.Load())
+	}
+
+	// Verify dial-layer DNS resolution rejects private/dual-record responses and
+	// dials validated literal public IPs directly (preventing DNS rebinding TOCTOU).
+	payload := imageBytes(t, "png")
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect-rebind" {
+			http.Redirect(w, r, "http://rebind.example.test/secret.png", http.StatusFound)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer origin.Close()
+	originAddr := origin.Listener.Addr().String()
+
+	for _, dnsRecords := range [][]netip.Addr{
+		{netip.MustParseAddr("127.0.0.1")},
+		{netip.MustParseAddr("100.100.100.200")},
+		{netip.MustParseAddr("169.254.169.254")},
+		{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("127.0.0.1")},
+	} {
+		var dialedAddrs []string
+		transport := newTransport(
+			func(_ context.Context, _, host string) ([]netip.Addr, error) {
+				if host == "cdn.example.test" {
+					return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+				}
+				return dnsRecords, nil
+			},
+			func(ctx context.Context, network, addr string) (net.Conn, error) {
+				dialedAddrs = append(dialedAddrs, addr)
+				if addr == "93.184.216.34:80" {
+					return (&net.Dialer{}).DialContext(ctx, network, originAddr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, localServer.Listener.Addr().String())
+			},
+		)
+		dir := t.TempDir()
+		if path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://rebind.example.test/secret.png"}, dir, transport); err == nil || saved || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+			t.Fatalf("DNS rebinding %v on first hop not blocked: %q %v %v", dnsRecords, path, saved, err)
+		}
+		if len(dialedAddrs) != 0 {
+			t.Fatalf("blocked DNS response still dialed %v", dialedAddrs)
+		}
+		if path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://cdn.example.test/redirect-rebind"}, dir, transport); err == nil || saved || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+			t.Fatalf("DNS rebinding %v on redirect hop not blocked: %q %v %v", dnsRecords, path, saved, err)
+		}
+		if len(dialedAddrs) != 1 || dialedAddrs[0] != "93.184.216.34:80" {
+			t.Fatalf("expected literal public IP dial only once, got %v", dialedAddrs)
+		}
+		transport.CloseIdleConnections()
+	}
+	if localHits.Load() != 0 {
+		t.Fatalf("DNS rebinding reached local server %d times", localHits.Load())
 	}
 }

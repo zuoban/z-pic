@@ -36,6 +36,10 @@ type batchOutputSequence = nameseq.Sequence
 const maxBatchOutputCandidates = 10000
 
 func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string) (string, error) {
+	return planner.resolveCandidate(outputDir, sourcePath, relPath, false)
+}
+
+func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPath string, numberedOnly bool) (string, error) {
 	ctx := planner.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -92,7 +96,11 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 	if planner.sequences == nil {
 		planner.sequences = make(map[string]batchOutputSequence)
 	}
-	sequence := planner.sequences[candidate]
+	seqKey := candidate
+	if numberedOnly {
+		seqKey += "\x00numbered"
+	}
+	sequence := planner.sequences[seqKey]
 	for index := 0; index < maxBatchOutputCandidates; index++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -102,16 +110,19 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 			break
 		}
 		path := candidate
-		if index == 1 {
+		if numberedOnly {
+			if index >= 1 {
+				path = fmt.Sprintf("%s-%d%s", stem, index+1, ext)
+			}
+		} else if index == 1 {
 			path = stem + "-compressed" + ext
-		}
-		if index > 1 {
+		} else if index > 1 {
 			path = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
 		}
 		if planner.used[path] {
 			if sequence == nil {
 				sequence = make(batchOutputSequence)
-				planner.sequences[candidate] = sequence
+				planner.sequences[seqKey] = sequence
 			}
 			sequence[index] = index + 1
 			continue
@@ -132,7 +143,7 @@ func (planner *batchOutputPlanner) resolve(outputDir, sourcePath, relPath string
 }
 
 func (s *application) openOutputDir() {
-	if s.batch == nil || s.batch.outputDir == "" {
+	if s.modalOpen() || s.batch == nil || s.batch.outputDir == "" {
 		return
 	}
 	if err := mygo.Shell.OpenPath(s.batch.outputDir); err != nil {
@@ -153,7 +164,7 @@ func (s *application) openBatchPreview(index int) {
 	s.busy, s.phase, s.cancel = true, "正在加载图片预览", cancel
 	s.setMessage("", false)
 	go func() {
-		selected, err := readSelection(ctx, item.path)
+		selected, err := s.readSelectionWithBudget(ctx, item.path, nil)
 		var result *compress.Result
 		var outputPreview *ui.Bitmap
 		if err == nil && item.status == batchDone {
@@ -171,7 +182,7 @@ func (s *application) openBatchPreview(index int) {
 				result.Data = selected.data
 			} else if item.savedPath != "" {
 				var saved *selectedImage
-				saved, err = readSelectionWithPreview(ctx, item.savedPath, selected)
+				saved, err = s.readSelectionWithBudget(ctx, item.savedPath, selected)
 				if err == nil {
 					outputPreview = saved.preview
 					result.Data = saved.data

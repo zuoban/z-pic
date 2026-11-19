@@ -1443,3 +1443,69 @@ func TestHiddenTitleBarKeepsToolbarClearOfWindowControls(t *testing.T) {
 		})
 	}
 }
+
+func TestMainWindowBusyDropsQueueWhileDialogsBlockAndDisableActions(t *testing.T) {
+	root := t.TempDir()
+	selectedPath := filepath.Join(root, "selected.jpg")
+	droppedPath := filepath.Join(root, "dropped.jpg")
+	savedPath := filepath.Join(root, "saved.jpg")
+	writeTestJPEG(t, selectedPath, 80, 60, 95)
+	writeTestJPEG(t, droppedPath, 100, 80, 95)
+	writeTestJPEG(t, savedPath, 80, 60, 75)
+
+	selected, err := readSelection(context.Background(), selectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := make(chan func(), 16)
+	app := newApplication()
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.downloadDir = filepath.Join(root, "downloads")
+	app.completeSelection(context.Background(), selected, nil)
+	app.result = &compress.Result{SourcePath: selectedPath, Format: "jpeg", Width: 80, Height: 60, OriginalSize: 4096, OutputSize: 2048, Data: []byte("out")}
+	app.lastSavedPath = savedPath
+	app.setMessage("已保存："+savedPath, false)
+
+	for _, guard := range []string{"settings", "overwrite", "batch-overwrite"} {
+		app.settingsOpen = guard == "settings"
+		app.confirmOverwrite = guard == "overwrite"
+		app.confirmBatchOverwrite = guard == "batch-overwrite"
+		app.dropFiles([]string{droppedPath})
+		if len(app.dropQueue) != 0 || app.batch != nil || app.file != selected {
+			t.Fatalf("%s dialog must ignore main-window file drops without queueing", guard)
+		}
+		if guard == "settings" {
+			tt := ui.NewTester(app.view, 880, 660)
+			for _, label := range []string{"更换图片", "定位文件", "另存副本"} {
+				btn, ok := tt.AccessByRole(ui.RoleButton, label)
+				if !ok || !btn.Disabled {
+					t.Fatalf("%q must be disabled while settings dialog is open: %+v", label, btn)
+				}
+			}
+		} else if guard == "overwrite" {
+			tt := ui.NewTester(app.view, 880, 660)
+			if _, ok := tt.AccessByRole(ui.RoleAlertDialog, "确认覆盖原图？"); !ok {
+				t.Fatal("overwrite dialog must remain open after ignored file drop")
+			}
+		}
+	}
+	app.settingsOpen, app.confirmOverwrite, app.confirmBatchOverwrite = false, false, false
+
+	app.busy, app.phase = true, "正在压缩图片"
+	app.dropFiles([]string{droppedPath})
+	if len(app.dropQueue) != 1 || app.dropImporting || app.file != selected || app.batch != nil {
+		t.Fatalf("busy main-window drop must queue without discarding active selection: queue=%d batch=%+v", len(app.dropQueue), app.batch)
+	}
+	tt := ui.NewTester(app.view, 880, 660)
+	if !tt.HasText("已暂存 1 次拖入，当前操作结束后入队") {
+		t.Fatal("main window must surface pending drop count during busy work")
+	}
+
+	app.busy, app.phase = false, ""
+	app.startNextDropImport()
+	waitForDropImports(t, app, updates)
+	if app.batch == nil || len(app.batch.items) != 2 ||
+		app.batch.items[0].path != selectedPath || app.batch.items[1].path != droppedPath {
+		t.Fatalf("queued main-window drop must promote both sources into batch queue: %+v", app.batch)
+	}
+}

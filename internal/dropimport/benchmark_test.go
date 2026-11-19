@@ -71,8 +71,7 @@ func BenchmarkResolve1000Images(bench *testing.B) {
 				items[index] = Item{URL: server.URL + path}
 			}
 			root := sub.TempDir()
-			transport := NewTransport()
-			defer transport.CloseIdleConnections()
+			transport := newLoopbackTransport(sub)
 			sub.ReportAllocs()
 			sub.ResetTimer()
 			for iteration := 0; iteration < sub.N; iteration++ {

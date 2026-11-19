@@ -85,6 +85,7 @@ type application struct {
 	readClipboardImages   func() (transfer.Data, error)
 	clipboardToast        *ui.Toast
 	clipboardImporting    bool
+	clipboardOutcome      clipboardImportOutcome
 	floatingWindow        *mygo.Window
 	floatingOpen          bool
 	floating              floatingState
@@ -115,8 +116,12 @@ func (s *application) setMessage(message string, failed bool) {
 	s.message, s.failed = message, failed
 }
 
+func (s *application) dialogOpen() bool {
+	return s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
+}
+
 func (s *application) modalOpen() bool {
-	return s.busy || s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
+	return s.busy || s.dialogOpen()
 }
 
 func (s *application) update(fn func()) {
@@ -174,8 +179,36 @@ func (s *application) chooseFile() {
 	}()
 }
 
+func fileDropData(paths []string) (transfer.Data, bool) {
+	cleaned := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || strings.ContainsRune(path, 0) {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				continue
+			}
+			path = abs
+		}
+		cleaned = append(cleaned, path)
+	}
+	if len(cleaned) == 0 {
+		return transfer.Data{}, false
+	}
+	data, err := transfer.FileData(cleaned...)
+	return data, err == nil
+}
+
 func (s *application) dropFiles(paths []string) {
-	if s.modalOpen() {
+	if s.closed || s.dialogOpen() || len(paths) == 0 {
+		return
+	}
+	if s.busy || len(s.dropQueue) > 0 {
+		if data, ok := fileDropData(paths); ok {
+			s.receiveDrop(data)
+		}
 		return
 	}
 	s.openPaths(paths)
@@ -211,7 +244,7 @@ func (s *application) load(path string) {
 	s.busy, s.phase, s.cancel = true, "正在读取图片", cancel
 	s.setMessage("", false)
 	go func() {
-		selected, err := readSelection(ctx, path)
+		selected, err := s.readSelectionWithBudget(ctx, path, nil)
 		s.update(func() {
 			defer cancel()
 			s.completeSelection(ctx, selected, err)
@@ -229,6 +262,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 		return
 	}
 	s.batch = nil
+	s.prepareThumbnailCache()
 	s.file, s.preview, s.result = selected, selected.preview, nil
 	s.lastSavedPath = ""
 	s.comparison = comparisonView{split: 50}
@@ -241,6 +275,10 @@ func readSelection(ctx context.Context, path string) (*selectedImage, error) {
 }
 
 func readSelectionWithPreview(ctx context.Context, path string, reusable *selectedImage) (*selectedImage, error) {
+	return (*application)(nil).readSelectionWithBudget(ctx, path, reusable)
+}
+
+func (s *application) readSelectionWithBudget(ctx context.Context, path string, reusable *selectedImage) (*selectedImage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -279,7 +317,14 @@ func readSelectionWithPreview(ctx context.Context, path string, reusable *select
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	preview, err := ui.DecodeBitmap(data)
+	release, err := s.acquirePreviewMemory(ctx, compress.ImageInfo{
+		Path: path, Format: format, Width: config.Width, Height: config.Height, Size: int64(len(data)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	preview, err := decodePreviewBitmap(ctx, data, format)
+	release()
 	if err != nil {
 		return nil, fmt.Errorf("无法生成预览：%w", err)
 	}
@@ -291,6 +336,22 @@ func readSelectionWithPreview(ctx context.Context, path string, reusable *select
 		path: path, format: format, width: width, height: height,
 		size: int64(len(data)), data: data, preview: preview,
 	}, nil
+}
+
+func decodePreviewBitmap(ctx context.Context, data []byte, format string) (*ui.Bitmap, error) {
+	if format == "webp" {
+		if orient := compress.WebPOrientation(data); orient > 1 {
+			decoded, _, err := image.Decode(bytes.NewReader(data))
+			if err != nil {
+				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return ui.NewBitmap(compress.NormalizeOrientation(decoded, orient)), nil
+		}
+	}
+	return ui.DecodeBitmap(data)
 }
 
 func (s *application) invalidateResult() {
@@ -325,7 +386,7 @@ func (s *application) startCompression() {
 	if s.modalOpen() || s.batch != nil || s.file == nil {
 		return
 	}
-	path, data, sourcePreview, options := s.file.path, s.file.data, s.file.preview, s.compressionOptions()
+	file, options := *s.file, s.compressionOptions()
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
 	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
@@ -333,16 +394,24 @@ func (s *application) startCompression() {
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 	go func() {
-		result, decoded, err := compress.BytesWithPreview(ctx, data, path, options)
+		release, err := s.acquireImageMemory(ctx, compress.ImageInfo{
+			Path: file.path, Format: file.format, Width: file.width, Height: file.height, Size: file.size,
+		}, false)
+		var result *compress.Result
 		var preview *ui.Bitmap
 		if err == nil {
-			if result.Unchanged && sourcePreview != nil {
-				preview = sourcePreview
-			} else if decoded != nil {
-				preview = ui.NewBitmap(decoded)
-			} else {
-				preview, err = ui.DecodeBitmap(result.Data)
+			var decoded image.Image
+			result, decoded, err = compress.BytesWithPreview(ctx, file.data, file.path, options)
+			if err == nil {
+				if result.Unchanged && file.preview != nil {
+					preview = file.preview
+				} else if decoded != nil {
+					preview = ui.NewBitmap(decoded)
+				} else {
+					preview, err = decodePreviewBitmap(ctx, result.Data, result.Format)
+				}
 			}
+			release()
 		}
 		if err == nil {
 			err = ctx.Err()

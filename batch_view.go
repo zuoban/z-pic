@@ -38,14 +38,14 @@ func (s *application) batchListPanel(c *ui.Context) {
 			ui.Text(c, headerText).
 				FontSize(16).FontWeight(600).FontFeatures("tnum").
 				SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(140).Tooltip(headerText)
-			quietButton(c, "batch-add-files", "添加图片", 32, s.busy).
+			quietButton(c, "batch-add-files", "添加图片", 32, s.modalOpen()).
 				KeyShortcuts(ui.Cmd, ui.KeyO).
 				Tooltip("添加更多图片 · " + shortcutLabel("O")).
 				OnClick(s.chooseFile)
-			quietButton(c, "batch-add-folder", "添加文件夹", 32, s.busy).
+			quietButton(c, "batch-add-folder", "添加文件夹", 32, s.modalOpen()).
 				Tooltip("从文件夹添加图片").
 				OnClick(s.chooseFolder)
-			quietButton(c, "batch-clear", "清空", 32, s.busy).
+			quietButton(c, "batch-clear", "清空", 32, s.modalOpen()).
 				Tooltip("清空当前批量队列").
 				OnClick(s.clearBatch)
 		})
@@ -129,15 +129,15 @@ func (s *application) batchListPanel(c *ui.Context) {
 				}
 				actions := func() {
 					if invalidCount > 0 {
-						quietButton(c, "batch-remove-invalid", "移除无效项", 28, s.busy).
+						quietButton(c, "batch-remove-invalid", "移除无效项", 28, s.modalOpen()).
 							Tooltip(fmt.Sprintf("从队列移除 %d 张无法处理的图片", invalidCount)).
 							OnClick(s.removeInvalidBatchItems)
 					}
 					if retryFailed > 0 {
-						quietButton(c, "batch-remove-failed", "移除失败项", 28, s.busy).
+						quietButton(c, "batch-remove-failed", "移除失败项", 28, s.modalOpen()).
 							Tooltip("从队列移除全部失败的图片").
 							OnClick(s.removeFailedBatchItems)
-						quietButton(c, "batch-retry-failed", "重试失败项", 28, s.busy).
+						quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
 							Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
 							OnClick(s.retryFailedBatchItems)
 					}
@@ -470,19 +470,19 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		})
 		actions := func() {
 			if item.status == batchFailed && !item.invalidInput {
-				quietButton(c, "batch-retry-item", "重试", 32, s.busy).
+				quietButton(c, "batch-retry-item", "重试", 32, s.modalOpen()).
 					Tooltip("重新压缩此失败图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if outPath := batchItemOutputPath(item); outPath != "" {
-				quietButton(c, "batch-reveal-item", "定位文件", 32, s.busy).
+				quietButton(c, "batch-reveal-item", "定位文件", 32, s.modalOpen()).
 					Tooltip("在文件夹中显示输出文件").
 					OnClick(func() { s.revealFileInFolder(outPath) })
 			}
-			quietButton(c, "batch-preview", "预览", 32, s.busy || item.invalidInput).
+			quietButton(c, "batch-preview", "预览", 32, s.modalOpen() || item.invalidInput).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
-			quietButton(c, "batch-remove", "移除", 32, s.busy).
+			quietButton(c, "batch-remove", "移除", 32, s.modalOpen()).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}
@@ -518,7 +518,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 	}
 	panel.Children(func() {
 		ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			quietButton(c, "batch-back", "返回列表", 32, s.busy).
+			quietButton(c, "batch-back", "返回列表", 32, s.modalOpen()).
 				KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
 				OnClick(s.closeBatchPreview)
 			visible := s.filteredBatchIndices()
@@ -528,11 +528,11 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 			}
 			ui.Textf(c, "%d / %d", posCurrent, posTotal).
 				FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Grow(1)
-			quietButton(c, "batch-prev", "上一张", 32, s.busy || !s.hasAdjacentBatchPreview(-1)).
+			quietButton(c, "batch-prev", "上一张", 32, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
 				Tooltip("上一张 · " + shortcutLabel("[")).
 				OnClick(func() { s.stepBatchPreview(-1) })
-			quietButton(c, "batch-next", "下一张", 32, s.busy || !s.hasAdjacentBatchPreview(1)).
+			quietButton(c, "batch-next", "下一张", 32, s.modalOpen() || !s.hasAdjacentBatchPreview(1)).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketRight).
 				Tooltip("下一张 · " + shortcutLabel("]")).
 				OnClick(func() { s.stepBatchPreview(1) })
@@ -587,11 +587,11 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				if previewItem != nil {
 					actions := func() {
 						if outPath := batchItemOutputPath(*previewItem); outPath != "" {
-							quietButton(c, "batch-preview-reveal", "定位文件", 32, s.busy).
+							quietButton(c, "batch-preview-reveal", "定位文件", 32, s.modalOpen()).
 								Tooltip("在文件夹中显示输出文件").
 								OnClick(func() { s.revealFileInFolder(outPath) })
 						}
-						quietButton(c, "batch-preview-remove", "移除", 32, s.busy).
+						quietButton(c, "batch-preview-remove", "移除", 32, s.modalOpen()).
 							Tooltip("从批量队列移除此图片").
 							OnClick(func() { s.removeBatchItem(previewIdx) })
 					}
@@ -633,7 +633,7 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 			MaxLines(2).Tooltip(s.message)
 	}
 	if showOutput {
-		primaryAction(c, "batch-open-output", "打开输出文件夹", s.busy).Height(36).
+		primaryAction(c, "batch-open-output", "打开输出文件夹", s.modalOpen()).Height(36).
 			OnClick(s.openOutputDir)
 	}
 	if s.batch.previewOpen && s.result != nil {
@@ -681,7 +681,7 @@ func (s *application) batchOutputCard(c *ui.Context) {
 				ui.Text(c, dirText).FontSize(12).TextColor(dirColor).
 					SingleLine().TruncateMiddle().Width(0).Grow(1).Tooltip(dirTooltip)
 				if s.output.Mode == presetSaveAsk {
-					quietButton(c, "batch-output-dir", btnLabel, 32, s.busy).
+					quietButton(c, "batch-output-dir", btnLabel, 32, s.modalOpen()).
 						OnClick(s.chooseOutputDir)
 				}
 			})

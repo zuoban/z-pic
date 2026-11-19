@@ -27,6 +27,9 @@ func BytesWithPreview(ctx context.Context, data []byte, sourcePath string, optio
 		if err != nil {
 			return nil, nil, fmt.Errorf("无法生成预览：%w", err)
 		}
+		if result.Format == "webp" {
+			preview = normalizeOrientation(preview, webpOrientation(result.Data))
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err

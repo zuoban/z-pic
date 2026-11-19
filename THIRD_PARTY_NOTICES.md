@@ -11,7 +11,7 @@ temporarily at runtime. No commercial pngquant license is included.
 | libimagequant | pngquant's pinned submodule (`6e980576…`) | GPL-3.0-or-later | `licenses/libimagequant-COPYRIGHT.txt` |
 | libwebp / cwebp | 1.6.0 | BSD-3-Clause and upstream patent grant | `licenses/libwebp-COPYING`, `licenses/libwebp-PATENTS`, `licenses/libwebp-AUTHORS` |
 | Rust runtime / standard library | Rust 1.96.0 build | MIT / Apache-2.0 and bundled notices | `licenses/rust-*` |
-| Transitive Rust and native dependencies | frozen Cargo.lock versions | See dependency licenses | `licenses/pngtools-dependency-licenses.txt` and source archive |
+| Transitive Rust and native dependencies | frozen Cargo.lock versions | See dependency licenses | `licenses/pngtools-dependency-licenses.txt` and repository source archive |
 
 Oxipng official source: https://github.com/oxipng/oxipng, tag `v10.2.1`,
 commit `36f3ef8aac65ecf1761739ea2f2e530281f1312b`.
@@ -24,23 +24,25 @@ offers commercial licensing separately; this distribution uses its GPL terms.
 
 The tools are provided WITHOUT WARRANTY; see their complete license terms.
 The complete frozen tool sources, vendored dependencies, and offline build
-instructions accompany this distribution in `licenses/pngtools-source.tar.gz`.
-They are included to permit inspection, modification, and rebuilding of the
-shipped executables. No upstream source patches were applied.
+instructions accompany the source repository and release distribution in
+`scripts/sources/pngtools-source.tar.gz` (kept outside the `.app` runtime
+bundle to avoid shipping ~39 MB of source archives inside the executable app).
+They permit inspection, modification, and rebuilding of the shipped executables.
+No upstream source patches were applied.
 `scripts/prepare-pngtools.sh` rebuilds the assets using those sources;
 `scripts/PNGTOOLS.md` documents preparation, runtime flags, and platform limits.
 The archive also includes a copy of those build instructions and script.
 
-Retain this notice, the full `licenses/` directory (including the corresponding
-source archive), and the relevant license terms when distributing the bundled
-tools. Binary hashes and exact build/compiler pins are recorded alongside
-each target's assets in `internal/pngtools/assets/<goos>_<goarch>/manifest.json`.
+Retain this notice, the `licenses/` directory, and equivalent access to
+`scripts/sources/pngtools-source.tar.gz` when distributing the bundled tools.
+Binary hashes and exact build/compiler pins are recorded alongside each
+target's assets in `internal/pngtools/assets/<goos>_<goarch>/manifest.json`.
 
 ## WebP encoder
 
 The separately embedded cwebp executable is built from libwebp 1.6.0, upstream
 commit `4fa21912338357f89e4fd51cf2368325b59e9bd9`. Its unmodified official source
-archive accompanies this distribution at `licenses/libwebp-1.6.0.tar.gz`:
+archive is tracked in the repository at `scripts/sources/libwebp-1.6.0.tar.gz`:
 https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz
 
 Source SHA-256: `e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564`.

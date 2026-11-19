@@ -7,7 +7,7 @@ utilities. The checked-in assets were built with Rust 1.96.0. On macOS the scrip
 uses deployment target 11.0, verifies only Apple system dylibs are linked,
 and ad hoc signs and verifies each **tool**; it does not build or sign the app.
 
-The default build is offline. It extracts `licenses/pngtools-source.tar.gz`,
+The default build is offline. It extracts `scripts/sources/pngtools-source.tar.gz`,
 which includes exact upstream sources, frozen Cargo.lock files, all vendored
 Cargo dependencies, license files, and relative Cargo source configuration.
 For an already extracted copy, set `PNGTOOLS_SOURCE_DIR` to the extracted

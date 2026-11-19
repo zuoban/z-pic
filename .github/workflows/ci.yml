@@ -38,3 +38,43 @@ jobs:
         run: bash scripts/prepare-pngtools.sh --verify
       - name: Build application
         run: go build ./...
+
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet and build native target
+        run: |
+          go vet ./...
+          go build ./...
+      - name: Run tests on Linux
+        if: matrix.goos == 'linux'
+        run: go test -race ./...
+      - name: Run backend tests and compile UI tests on Windows
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          go test ./internal/...
+          go test -c -o /dev/null .
+      - name: Verify cross-architecture builds
+        shell: bash
+        run: |
+          for target in darwin/amd64 linux/arm64 windows/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+          done
