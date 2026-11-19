@@ -36,21 +36,14 @@ func TestMetadataScanObservesCancellation(t *testing.T) {
 	for range 64 {
 		appendChunk("teST")
 	}
-	appendChunk("caBX")
+	appendChunk("sBIT")
 	data = append(data, original[33:]...)
-	for name, run := range map[string]func(context.Context, []byte) ([]byte, error){
-		"optimize": Optimize,
-		"quantize": Quantize,
-	} {
-		t.Run(name, func(t *testing.T) {
-			base, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			ctx := &cancelDuringMetadata{Context: base, cancel: cancel}
-			out, err := run(ctx, data)
-			if out != nil || !errors.Is(err, context.Canceled) {
-				t.Fatalf("metadata scan ignored cancellation: output=%d err=%v checks=%d", len(out), err, ctx.checks)
-			}
-		})
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &cancelDuringMetadata{Context: base, cancel: cancel}
+	out, err := Optimize(ctx, data)
+	if out != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("metadata scan ignored cancellation: output=%d err=%v checks=%d", len(out), err, ctx.checks)
 	}
 }
 

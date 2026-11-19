@@ -340,6 +340,57 @@ func TestPNGQualityGateRefusalRemainsUsable(t *testing.T) {
 	}
 }
 
+func pngHasChunk(data []byte, target string) bool {
+	for offset := 8; offset <= len(data)-12; {
+		chunkSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		if chunkSize < 0 || chunkSize > len(data)-offset-12 {
+			return false
+		}
+		if string(data[offset+4:offset+8]) == target {
+			return true
+		}
+		offset += chunkSize + 12
+	}
+	return false
+}
+
+func TestPNGCompressesWithCaBXAndIDOT(t *testing.T) {
+	base := pngScreenshotFixture(t)
+	for _, chunkName := range []string{"caBX", "iDOT"} {
+		t.Run(chunkName, func(t *testing.T) {
+			input := insertPNGChunk(base, chunkName, bytes.Repeat([]byte("m"), 2048))
+			result, err := Bytes(context.Background(), input, "sample.png", Options{
+				Quality: 92,
+				PNG:     PNGOptions{MinQuality: 85, MaxQuality: 100, Colors: 256, Speed: 1},
+			})
+			if err != nil {
+				t.Fatalf("Bytes failed with %s: %v", chunkName, err)
+			}
+			assertPNGResult(t, result, input, 320, 192)
+			if result.Unchanged || result.OutputSize >= result.OriginalSize {
+				t.Fatalf("PNG with %s did not shrink: %d -> %d", chunkName, result.OriginalSize, result.OutputSize)
+			}
+			if pngHasChunk(result.Data, chunkName) {
+				t.Fatalf("compressed PNG retained invalidated %s chunk", chunkName)
+			}
+			losslessFallback, err := Bytes(context.Background(), input, "sample.png", Options{
+				Quality: 100,
+				PNG:     PNGOptions{MinQuality: 100, MaxQuality: 100, Colors: 256, Speed: 1},
+			})
+			if err != nil {
+				t.Fatalf("Bytes lossless fallback failed with %s: %v", chunkName, err)
+			}
+			assertPNGResult(t, losslessFallback, input, 320, 192)
+			if losslessFallback.Unchanged || losslessFallback.OutputSize >= losslessFallback.OriginalSize {
+				t.Fatalf("PNG with %s did not shrink on Oxipng fallback: %d -> %d", chunkName, losslessFallback.OriginalSize, losslessFallback.OutputSize)
+			}
+			if pngHasChunk(losslessFallback.Data, chunkName) {
+				t.Fatalf("Oxipng fallback retained invalidated %s chunk", chunkName)
+			}
+		})
+	}
+}
+
 func TestPNGNoSavingsReturnsOptimizedOriginal(t *testing.T) {
 	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
 	img.SetNRGBA(0, 0, color.NRGBA{R: 17, G: 29, B: 71, A: 128})

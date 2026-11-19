@@ -50,9 +50,9 @@ func pngThreadCount() string {
 // It preserves decoded samples (including invisible RGB and 16-bit samples).
 // Representation may change losslessly. Metadata is retained; transformations
 // are disabled only when sBIT, bKGD, or hIST depends on the representation.
-// ICC profiles may be losslessly recompressed.
-// Signed/offset-dependent caBX and iDOT chunks preclude changing the file, so
-// those inputs are returned untouched. The returned bytes may alias data.
+// ICC profiles may be losslessly recompressed. Byte-dependent caBX and iDOT
+// chunks are automatically stripped by Oxipng when rewriting the file so they
+// are not left invalid. The returned bytes may alias data.
 func Optimize(ctx context.Context, data []byte) ([]byte, error) {
 	return OptimizeWithThreads(ctx, data, 0)
 }
@@ -62,12 +62,9 @@ func OptimizeWithThreads(ctx context.Context, data []byte, threads int) ([]byte,
 	if err := checkInput(ctx, data); err != nil {
 		return nil, err
 	}
-	immutable, representationMetadata, err := chunkConstraints(ctx, data)
+	representationMetadata, err := hasRepresentationMetadata(ctx, data)
 	if err != nil {
 		return nil, err
-	}
-	if immutable {
-		return data, nil
 	}
 	threadStr := effectivePNGThreads(threads)
 	args := []string{"-o", "2", "--threads", threadStr}
@@ -86,8 +83,8 @@ func Quantize(ctx context.Context, data []byte) ([]byte, error) {
 // and speed. All-zero options select defaults. Exit codes 98 and 99
 // return the original bytes, discarding any partial stdout. Successful output
 // that does not save space also returns the original bytes. This is lossy;
-// signed/offset-dependent caBX and iDOT inputs are returned untouched, as in
-// Optimize. Callers run Optimize afterwards and validate the final output.
+// unsafe-to-copy chunks such as caBX and iDOT are dropped when rewriting the
+// quantized PNG. Callers run Optimize afterwards and validate the final output.
 func QuantizeWithOptions(ctx context.Context, data []byte, options QuantizeOptions) ([]byte, error) {
 	return QuantizeWithThreads(ctx, data, options, 0)
 }
@@ -102,13 +99,6 @@ func QuantizeWithThreads(ctx context.Context, data []byte, options QuantizeOptio
 	}
 	if err := options.Validate(); err != nil {
 		return nil, err
-	}
-	immutable, _, err := chunkConstraints(ctx, data)
-	if err != nil {
-		return nil, err
-	}
-	if immutable {
-		return data, nil
 	}
 	return invokeWithThreads(ctx, "pngquant", []string{
 		fmt.Sprintf("--quality=%d-%d", options.MinQuality, options.MaxQuality),
@@ -128,25 +118,25 @@ func checkInput(ctx context.Context, data []byte) error {
 }
 
 // The caller validates PNG structure. Still bound every slice here so a bad
-// direct call cannot panic while looking for byte-dependent metadata.
-func chunkConstraints(ctx context.Context, data []byte) (immutable, representationMetadata bool, err error) {
+// direct call cannot panic while looking for representation-dependent metadata.
+func hasRepresentationMetadata(ctx context.Context, data []byte) (bool, error) {
 	for offset := 8; offset <= len(data)-12; {
 		if err := ctx.Err(); err != nil {
-			return false, false, err
+			return false, err
 		}
 		size := uint64(binary.BigEndian.Uint32(data[offset:]))
 		if size > uint64(len(data)-offset-12) {
-			return false, false, nil
+			return false, nil
 		}
 		switch string(data[offset+4 : offset+8]) {
-		case "caBX", "iDOT":
-			immutable = true
 		case "sBIT", "bKGD", "hIST":
-			representationMetadata = true
+			return true, nil
+		case "IEND":
+			return false, ctx.Err()
 		}
 		offset += int(size) + 12
 	}
-	return immutable, representationMetadata, ctx.Err()
+	return false, ctx.Err()
 }
 
 func invoke(ctx context.Context, name string, args []string, data []byte) ([]byte, error) {

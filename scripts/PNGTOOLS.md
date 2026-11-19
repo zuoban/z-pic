@@ -57,8 +57,9 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
   Other inputs permit normal lossless representation/palette/interlace changes.
   Never passes `--alpha`, `--scale16`, or a stripping option. Metadata can move
   to a valid chunk position; ICC data may be losslessly recompressed.
-  `caBX`/`iDOT` inputs return unchanged because changing file bytes invalidates
-  their signatures/offsets (confirmed in upstream `src/png/mod.rs`).
+  Oxipng automatically strips byte-dependent `caBX` and `iDOT` chunks when
+  rewriting the file (confirmed in upstream `src/png/mod.rs`) so invalidated
+  signatures or offsets are never left in compressed output.
 - pngquant default: `--quality=65-85 --speed=3 --skip-if-larger --output - 256 -`.
   The selected image-quality level supplies `--quality=<min>-<max>`,
   `--speed=<speed>`, and the positional color cap. Valid ranges: minimum
@@ -67,7 +68,8 @@ Runtime commands (stdin/stdout contain raw PNG bytes):
   configurations fail before execution. The UI adjusts all PNG parameters with
   image quality; presets and legacy custom values are documented in README.md.
   There is no separate lossless mode.
-  Like Optimize, quantization returns `caBX`/`iDOT` files unchanged.
+  Unsafe-to-copy chunks such as `caBX` and `iDOT` are dropped when writing the
+  quantized output.
   Exit 98/99 discards stdout and returns the exact original input without error.
   Caller then runs Optimize and validates dimensions/output PNG.
 

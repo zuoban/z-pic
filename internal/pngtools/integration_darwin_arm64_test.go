@@ -55,6 +55,20 @@ func metadata(data []byte) [][]byte {
 	return out
 }
 
+func hasChunk(data []byte, target string) bool {
+	for offset := 8; offset <= len(data)-12; {
+		chunkSize := int(binary.BigEndian.Uint32(data[offset:]))
+		if chunkSize < 0 || chunkSize > len(data)-offset-12 {
+			return false
+		}
+		if string(data[offset+4:offset+8]) == target {
+			return true
+		}
+		offset += chunkSize + 12
+	}
+	return false
+}
+
 func TestEmbeddedLosslessSamplesAndMetadata(t *testing.T) {
 	requireBundle(t)
 	t.Setenv("PATH", "")
@@ -119,18 +133,55 @@ func TestEmbeddedLosslessSamplesAndMetadata(t *testing.T) {
 			}
 		})
 	}
-	for _, name := range []string{"caBX", "iDOT"} {
-		data := withChunks(encodePNG(t, nrgba), chunk(name, []byte("immutable")))
-		out, err := Optimize(context.Background(), data)
-		if err != nil || !bytes.Equal(out, data) {
-			t.Fatalf("%s was changed: %v", name, err)
-		}
-		out, err = QuantizeWithOptions(context.Background(), data, QuantizeOptions{
-			MinQuality: 0, MaxQuality: 100, Colors: 16, Speed: 10,
+	for _, chunkName := range []string{"caBX", "iDOT"} {
+		t.Run("strip-"+chunkName, func(t *testing.T) {
+			textChunk := chunk("tEXt", []byte("Comment\x00keep me"))
+			data := withChunks(encodePNG(t, nrgba), chunk(chunkName, bytes.Repeat([]byte("x"), 256)), textChunk)
+			out, err := Optimize(context.Background(), data)
+			if err != nil {
+				t.Fatalf("Optimize failed with %s: %v", chunkName, err)
+			}
+			if len(out) >= len(data) {
+				t.Fatalf("Optimize did not shrink %s PNG: %d -> %d", chunkName, len(data), len(out))
+			}
+			if hasChunk(out, chunkName) {
+				t.Fatalf("Optimize retained invalidated %s chunk", chunkName)
+			}
+			if !hasChunk(out, "tEXt") {
+				t.Fatalf("Optimize dropped unrelated tEXt chunk alongside %s", chunkName)
+			}
+			before, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := png.Decode(bytes.NewReader(out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for y := 0; y < 30; y++ {
+				for x := 0; x < 40; x++ {
+					if color.NRGBA64Model.Convert(before.At(x, y)) != color.NRGBA64Model.Convert(after.At(x, y)) {
+						t.Fatalf("Optimize sample changed at (%d,%d) with %s", x, y, chunkName)
+					}
+				}
+			}
+			quantized, err := QuantizeWithOptions(context.Background(), data, QuantizeOptions{
+				MinQuality: 0, MaxQuality: 100, Colors: 16, Speed: 10,
+			})
+			if err != nil {
+				t.Fatalf("Quantize failed with %s: %v", chunkName, err)
+			}
+			if len(quantized) >= len(data) {
+				t.Fatalf("Quantize did not shrink %s PNG: %d -> %d", chunkName, len(data), len(quantized))
+			}
+			if hasChunk(quantized, chunkName) {
+				t.Fatalf("Quantize retained invalidated %s chunk", chunkName)
+			}
+			decoded, err := png.Decode(bytes.NewReader(quantized))
+			if err != nil || decoded.Bounds() != nrgba.Bounds() {
+				t.Fatalf("Quantize produced invalid PNG for %s: %v", chunkName, err)
+			}
 		})
-		if err != nil || !bytes.Equal(out, data) {
-			t.Fatalf("quantization changed %s: %v", name, err)
-		}
 	}
 	if _, err := Optimize(context.Background(), []byte("broken PNG")); err == nil {
 		t.Fatal("invalid PNG accepted")
