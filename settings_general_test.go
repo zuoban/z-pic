@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"

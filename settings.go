@@ -3,13 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
 )
