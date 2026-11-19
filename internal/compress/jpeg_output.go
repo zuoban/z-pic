@@ -156,6 +156,45 @@ func jpegCompatibleICCSegments(data []byte, outputComponents int) ([][]byte, int
 	return segments, totalBytes
 }
 
+// buildJPEGICCSegments packages raw ICC profile bytes into APP2 ICC_PROFILE
+// marker segments compatible with outputComponents (1 for grayscale, 3 for RGB/YCbCr).
+func buildJPEGICCSegments(icc []byte, outputComponents int) ([][]byte, int) {
+	if len(icc) == 0 || len(icc) > maxJPEGICCBytes || (outputComponents != 1 && outputComponents != 3) {
+		return nil, 0
+	}
+	headerLen := min(len(icc), 40)
+	if !compatibleICCColorSpace(icc[:headerLen], len(icc), outputComponents) {
+		return nil, 0
+	}
+	const maxChunkPayload = 65533 - 14 // 65535 - 2(len) - 12("ICC_PROFILE\x00") - 2(seq,count)
+	count := (len(icc) + maxChunkPayload - 1) / maxChunkPayload
+	if count < 1 || count > 255 {
+		return nil, 0
+	}
+	segments := make([][]byte, 0, count)
+	totalBytes := 0
+	for i := range count {
+		start := i * maxChunkPayload
+		end := min(start+maxChunkPayload, len(icc))
+		chunk := icc[start:end]
+		segLen := 2 + len(jpegICCSignature) + 2 + len(chunk)
+		seg := make([]byte, 2+segLen)
+		seg[0] = 0xff
+		seg[1] = 0xe2
+		binary.BigEndian.PutUint16(seg[2:4], uint16(segLen))
+		copy(seg[4:16], jpegICCSignature)
+		seg[16] = byte(i + 1)
+		seg[17] = byte(count)
+		copy(seg[18:], chunk)
+		segments = append(segments, seg)
+		totalBytes += len(seg)
+	}
+	if totalBytes > maxJPEGICCBytes {
+		return nil, 0
+	}
+	return segments, totalBytes
+}
+
 func compatibleICCColorSpace(header []byte, payloadBytes, outputComponents int) bool {
 	if len(header) >= 40 && string(header[36:40]) == "acsp" {
 		if payloadBytes < 128 {

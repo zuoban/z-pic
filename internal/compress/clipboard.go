@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"zpic/internal/contextio"
+	"zpic/internal/heictools"
 )
 
 type pngEncoderPool struct {
@@ -49,6 +50,34 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	}
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片超过 64 MiB 限制")
+	}
+	if heictools.SniffFTYP(data) {
+		if _, err := heictools.InspectBytes(ctx, data); err != nil {
+			return nil, err
+		}
+		if !heictools.Available() {
+			return nil, heictools.ErrUnsupportedPlatform
+		}
+		pngBytes, err := heictools.DecodePNG(ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		orient := pngOrientation(pngBytes)
+		if orient == 1 && len(pngBytes) <= maxInputSize {
+			return pngBytes, nil
+		}
+		decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes)))
+		if err != nil {
+			return nil, fmt.Errorf("无法解码图片：%w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		decoded, err = orientForJPEGEncode(ctx, decoded, orient)
+		if err != nil {
+			return nil, err
+		}
+		return encodeClipboardPNG(ctx, decoded, maxInputSize)
 	}
 	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {

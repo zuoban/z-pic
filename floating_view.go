@@ -599,7 +599,11 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 			floatingIcon(c, "photo", 40, chromeMutedColor(c))
 			if s.floatingImageCount() == 0 {
 				ui.Text(c, "拖入图片").FontSize(14).FontWeight(500)
-				ui.Text(c, "本地或网页图片 · JPEG / PNG / WebP").FontSize(12).TextColor(chromeMetadataColor(c))
+				formats := "本地或网页图片 · JPEG / PNG / WebP"
+				if compress.SupportsHEIC() {
+					formats = "本地或网页图片 · JPEG / PNG / WebP / HEIC"
+				}
+				ui.Text(c, formats).FontSize(12).TextColor(chromeMetadataColor(c))
 			} else {
 				ui.Text(c, "没有符合筛选条件的图片").FontSize(14)
 				quietButton(c, "floating-reset-filter", "显示全部", 32, false).

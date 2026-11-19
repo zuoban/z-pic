@@ -32,7 +32,7 @@ func (s *application) pasteImages() {
 	read := s.readClipboardImages
 	if read == nil {
 		read = func() (transfer.Data, error) {
-			return mygo.Clipboard.Read(transfer.FileList, transfer.URIList, transfer.PNG, "image/jpeg", "image/webp")
+			return mygo.Clipboard.Read(transfer.FileList, transfer.URIList, transfer.PNG, "image/jpeg", "image/webp", "image/heic", "image/heif")
 		}
 	}
 	data, err := read()

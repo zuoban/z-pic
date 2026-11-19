@@ -109,7 +109,7 @@ func planBatchOutputs(ctx context.Context, tasks []batchTask, outputDir string, 
 		if outputDir != "" {
 			output.Mode = presetSaveFixed
 		}
-		path, err := output.copyPathForFormatWithPlanner(task.path, outputDir, task.relPath, task.outputFormat, planner)
+		path, err := output.copyPathForResolvedFormatWithPlanner(task.path, outputDir, task.relPath, task.sourceFormat, task.outputFormat, task.lossless, planner)
 		if err != nil {
 			failures[task.index] = err
 		} else {
@@ -154,7 +154,7 @@ func (s *application) runBatchTasksWithBackup(
 	if outputMode == batchOutputFolder {
 		options.SkipOverwriteSnapshot = true
 		destinations, outputErrors = planBatchOutputs(ctx, tasks, outputDir, usedPaths)
-	} else if options.OutputFormat == compress.OutputFormatWebP {
+	} else {
 		var copyTasks []batchTask
 		for _, task := range tasks {
 			if !task.output.replacesFile(task.sourceFormat, task.outputFormat) {

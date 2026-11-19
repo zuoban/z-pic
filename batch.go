@@ -58,6 +58,7 @@ type batchItem struct {
 	sourceDir    string
 	sourceBase   string
 	prefixedDir  bool
+	sourceFormat string
 	format       string
 	width        int
 	height       int
@@ -69,6 +70,13 @@ type batchItem struct {
 	invalidInput bool
 	savedPath    string
 	errMsg       string
+}
+
+func (item batchItem) effectiveSourceFormat() string {
+	if item.sourceFormat != "" {
+		return item.sourceFormat
+	}
+	return item.format
 }
 
 type batchState struct {
@@ -145,6 +153,7 @@ type batchTask struct {
 	relPath      string
 	sourceFormat string
 	outputFormat compress.OutputFormat
+	lossless     bool
 	output       presetSaveOptions
 }
 
@@ -399,6 +408,9 @@ func resetBatchItemState(item *batchItem) bool {
 		return false
 	}
 	hadProcessed := item.status != batchPending
+	if item.sourceFormat != "" {
+		item.format = item.sourceFormat
+	}
 	item.status = batchPending
 	item.outputSize = 0
 	item.unchanged = false
@@ -640,7 +652,7 @@ func (s *application) batchRunWillOverwriteAny(mode batchRunMode, singleIndex in
 	}
 	for i, item := range s.batch.items {
 		if itemMatchesBatchRunMode(i, item, mode, singleIndex) &&
-			s.output.replacesFile(item.format, s.outputFormat) {
+			s.output.replacesFile(item.effectiveSourceFormat(), s.outputFormat) {
 			return true
 		}
 	}
@@ -659,8 +671,9 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 				index:        i,
 				path:         item.path,
 				relPath:      item.relPath,
-				sourceFormat: item.format,
+				sourceFormat: item.effectiveSourceFormat(),
 				outputFormat: s.outputFormat,
+				lossless:     s.lossless,
 				output:       s.output,
 			})
 		}

@@ -1,6 +1,7 @@
 package compress
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"sync"
 
 	"zpic/internal/contextio"
+	"zpic/internal/heictools"
 )
 
 var jpegInspectBufPool = sync.Pool{
@@ -39,7 +41,12 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 	return info, nil
 }
 
-// InspectReader validates static JPEG/PNG/WebP headers on an already-open
+// InspectBytes validates static JPEG/PNG/WebP/HEIC headers in memory.
+func InspectBytes(ctx context.Context, data []byte) (ImageInfo, error) {
+	return InspectReader(ctx, bytes.NewReader(data), int64(len(data)))
+}
+
+// InspectReader validates static JPEG/PNG/WebP/HEIC headers on an already-open
 // seekable stream of known byte length without reopening the path.
 func InspectReader(ctx context.Context, r io.ReadSeeker, size int64) (ImageInfo, error) {
 	if err := ctx.Err(); err != nil {
@@ -154,6 +161,15 @@ func inspectStream(ctx context.Context, f io.ReadSeeker, size int64) (string, in
 			return "", 0, 0, err
 		}
 		return "jpeg", width, height, nil
+	case n >= 12 && heictools.SniffFTYP(head[:n]):
+		heicInfo, err := heictools.Inspect(ctx, f, size)
+		if err != nil {
+			return "", 0, 0, err
+		}
+		if !heictools.Available() {
+			return "", 0, 0, heictools.ErrUnsupportedPlatform
+		}
+		return "heic", heicInfo.Width, heicInfo.Height, nil
 	case n >= 6 && (string(head[:6]) == "GIF87a" || string(head[:6]) == "GIF89a"):
 		return "", 0, 0, fmt.Errorf("不支持 gif 图片，仅支持静态 JPEG/PNG/WebP")
 	default:

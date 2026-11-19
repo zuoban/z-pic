@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
+	"zpic/internal/compress"
 	"zpic/internal/dropimport"
 )
 
@@ -330,7 +331,11 @@ func (s *application) startNextDropImport() {
 				s.clipboardOutcome = clipboardOutcomeFailed
 				s.dropMessage = s.dropImportErrors
 				if s.dropMessage == "" {
-					s.dropMessage = "请拖入本地 JPEG/PNG/WebP 图片或网页图片。"
+					if compress.SupportsHEIC() {
+						s.dropMessage = "请拖入本地 JPEG/PNG/WebP/HEIC 图片或网页图片。"
+					} else {
+						s.dropMessage = "请拖入本地 JPEG/PNG/WebP 图片或网页图片。"
+					}
 				}
 				s.dropFailed = true
 				s.rememberDropFailure(s.dropMessage)

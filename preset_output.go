@@ -81,18 +81,57 @@ func (o presetSaveOptions) replacesOriginal() bool {
 }
 
 func (o presetSaveOptions) replacesFile(sourceFormat string, targetFormat compress.OutputFormat) bool {
+	if sourceFormat == "heic" {
+		return false
+	}
 	if targetFormat == compress.OutputFormatWebP && sourceFormat != "" && sourceFormat != "webp" {
 		return false
 	}
 	return o.replacesOriginal()
 }
 
+func outputExtensionForFormat(format string) string {
+	switch format {
+	case "jpeg":
+		return ".jpg"
+	case "png":
+		return ".png"
+	case "webp":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
 func replaceFilenameExtension(name string, targetFormat compress.OutputFormat) string {
-	if targetFormat != compress.OutputFormatWebP {
-		return name
+	return replaceFilenameExtensionFor(name, "", targetFormat, false)
+}
+
+func replaceFilenameExtensionFor(name, sourceFormat string, targetFormat compress.OutputFormat, lossless bool) string {
+	if targetFormat == compress.OutputFormatWebP {
+		ext := filepath.Ext(name)
+		return strings.TrimSuffix(name, ext) + ".webp"
 	}
 	ext := filepath.Ext(name)
-	return strings.TrimSuffix(name, ext) + ".webp"
+	isHEIC := sourceFormat == "heic" || (sourceFormat == "" && (strings.EqualFold(ext, ".heic") || strings.EqualFold(ext, ".heif")))
+	if isHEIC {
+		resolved := compress.ResolveOutputFormat("heic", targetFormat, lossless)
+		if newExt := outputExtensionForFormat(resolved); newExt != "" {
+			return strings.TrimSuffix(name, ext) + newExt
+		}
+	}
+	return name
+}
+
+func replaceFilenameWithConcreteFormat(name, sourceFormat, resultFormat string) string {
+	if resultFormat == "" || (sourceFormat != "" && resultFormat == sourceFormat) {
+		return name
+	}
+	if newExt := outputExtensionForFormat(resultFormat); newExt != "" {
+		ext := filepath.Ext(name)
+		return strings.TrimSuffix(name, ext) + newExt
+	}
+	return name
 }
 
 func (s *application) applyPresetOutput(o presetSaveOptions) {
@@ -127,6 +166,10 @@ func (o presetSaveOptions) copyPathWithPlanner(source, root, rel string, planner
 }
 
 func (o presetSaveOptions) copyPathForFormatWithPlanner(source, root, rel string, targetFormat compress.OutputFormat, planner *batchOutputPlanner) (string, error) {
+	return o.copyPathForResolvedFormatWithPlanner(source, root, rel, "", targetFormat, false, planner)
+}
+
+func (o presetSaveOptions) copyPathForResolvedFormatWithPlanner(source, root, rel, sourceFormat string, targetFormat compress.OutputFormat, lossless bool, planner *batchOutputPlanner) (string, error) {
 	if err := o.validate(); err != nil {
 		return "", err
 	}
@@ -159,7 +202,7 @@ func (o presetSaveOptions) copyPathForFormatWithPlanner(source, root, rel string
 		root = subfolder
 	}
 	rel = sanitizeRelPath(rel, filepath.Base(source))
-	rel = replaceFilenameExtension(rel, targetFormat)
+	rel = replaceFilenameExtensionFor(rel, sourceFormat, targetFormat, lossless)
 	numberedOnly := false
 	if o.UseSuffix {
 		suffix := o.Suffix
@@ -195,8 +238,12 @@ func (s *application) savePresetResult() {
 		return
 	}
 	result := s.result
+	lossless := s.lossless
+	if sourceFormat == "heic" && result.Format != "" {
+		lossless = result.Format == "png"
+	}
 	save := func(root string) {
-		path, err := o.copyPathForFormatWithPlanner(result.SourcePath, root, filepath.Base(result.SourcePath), targetFormat, &batchOutputPlanner{used: make(map[string]bool)})
+		path, err := o.copyPathForResolvedFormatWithPlanner(result.SourcePath, root, filepath.Base(result.SourcePath), sourceFormat, targetFormat, lossless, &batchOutputPlanner{used: make(map[string]bool)})
 		if err == nil {
 			err = os.MkdirAll(filepath.Dir(path), 0o755)
 		}

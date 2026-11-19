@@ -81,10 +81,14 @@ func presetOutputName(options presetSaveOptions, filename string) string {
 }
 
 func presetOutputNameForFormat(options presetSaveOptions, filename string, targetFormat compress.OutputFormat) string {
+	return presetOutputNameForResolved(options, filename, "", targetFormat, false)
+}
+
+func presetOutputNameForResolved(options presetSaveOptions, filename, sourceFormat string, targetFormat compress.OutputFormat, lossless bool) string {
 	if options.Mode == presetSaveOriginal {
 		filename = filepath.Base(filename)
 	}
-	filename = replaceFilenameExtension(filename, targetFormat)
+	filename = replaceFilenameExtensionFor(filename, sourceFormat, targetFormat, lossless)
 	ext := filepath.Ext(filename)
 	name := strings.TrimSuffix(filename, ext)
 	if options.UseSuffix {
@@ -302,7 +306,11 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			s.editQualityLevel(int(math.Round(value)))
 		}
 		if preset.lossless {
-			ui.Text(c, "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化。").
+			note := "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化。"
+			if compress.SupportsHEIC() {
+				note = "PNG 仅执行 Oxipng 像素无损优化，WebP 无损，JPEG 无损优化，HEIC 输出无损 PNG。"
+			}
+			ui.Text(c, note).
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		} else {
 			ui.Row(c).Children(func() {
@@ -349,7 +357,14 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 				s.editor.message = ""
 			}
 			if preset.outputFormat == compress.OutputFormatWebP {
-				ui.Text(c, "将 JPEG / PNG 转换为 .webp；原文件不会被覆盖。").
+				note := "将 JPEG / PNG 转换为 .webp；原文件不会被覆盖。"
+				if compress.SupportsHEIC() {
+					note = "将 JPEG / PNG / HEIC 转换为 .webp；原文件不会被覆盖。"
+				}
+				ui.Text(c, note).
+					FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+			} else if compress.SupportsHEIC() {
+				ui.Text(c, "JPEG / PNG / WebP 保持原格式；HEIC 将自动转为 JPEG（无损时转为 PNG）。").
 					FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 			}
 		})

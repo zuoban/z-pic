@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/transfer"
-
-	"zpic/internal/compress"
 )
 
 func (s *application) cleanupDragStaging() {
@@ -40,21 +38,18 @@ func (s *application) isDragStagedPath(path string) bool {
 
 func (s *application) singleDragFilename() string {
 	ext := ".jpg"
-	targetFormat := compress.OutputFormatKeep
+	resultFormat := ""
 	if s.result != nil {
-		switch s.result.Format {
-		case "png":
-			ext = ".png"
-		case "webp":
-			ext = ".webp"
-			targetFormat = compress.OutputFormatWebP
+		resultFormat = s.result.Format
+		if mapped := outputExtensionForFormat(resultFormat); mapped != "" {
+			ext = mapped
 		}
 	}
 	name := "compressed" + ext
 	if s.file != nil && s.file.path != "" {
 		base := filepath.Base(s.file.path)
 		if base != "" && base != "." && base != string(filepath.Separator) {
-			name = replaceFilenameExtension(base, targetFormat)
+			name = replaceFilenameWithConcreteFormat(base, s.file.format, resultFormat)
 			if s.output.UseSuffix {
 				suffix := s.output.Suffix
 				if suffix == "" {

@@ -332,7 +332,11 @@ func (s *application) previewPanel(c *ui.Context) {
 								OnClick(s.chooseFolder)
 						})
 						ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "JPEG · PNG · WebP").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
+							formats := "JPEG · PNG · WebP"
+							if compress.SupportsHEIC() {
+								formats = "JPEG · PNG · WebP · HEIC"
+							}
+							ui.Text(c, formats).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
 							ui.Text(c, "单张最大 64 MiB · 3200 万像素").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
 						})
 					})
@@ -661,20 +665,28 @@ func (s *application) presetOverview(c *ui.Context) {
 func (s *application) singleOutputSummary(c *ui.Context) {
 	t := c.Theme()
 	replaces := s.singleReplacesOriginal()
+	sourceFormat := ""
+	name := "example.png"
+	if s.file != nil {
+		sourceFormat = s.file.format
+		name = filepath.Base(s.file.path)
+	}
+	resolvedFmt := compress.ResolveOutputFormat(sourceFormat, s.outputFormat, s.lossless)
+	if s.result != nil && s.result.Format != "" {
+		resolvedFmt = s.result.Format
+	}
 	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
 		description, color := presetSaveDescription(s.output), t.Text
 		if replaces {
 			color = t.Danger
-		} else if s.output.replacesOriginal() && s.outputFormat == compress.OutputFormatWebP {
-			description = "在原文件夹保存 .webp 副本"
+		} else if s.output.replacesOriginal() && resolvedFmt != "" && resolvedFmt != sourceFormat {
+			if ext := outputExtensionForFormat(resolvedFmt); ext != "" {
+				description = "在原文件夹保存 " + ext + " 副本"
+			}
 		}
 		ui.Text(c, description).FontSize(13).FontWeight(500).TextColor(color).MaxLines(2).Tooltip(description)
-		name := "example.png"
-		if s.file != nil {
-			name = filepath.Base(s.file.path)
-		}
-		outputFilenamePreviewForFormat(c, s.output, name, s.outputFormat, replaces)
+		outputFilenamePreviewForResolved(c, s.output, name, sourceFormat, s.outputFormat, s.lossless, replaces)
 	})
 }
 
@@ -781,10 +793,14 @@ func outputFilenamePreview(c *ui.Context, options presetSaveOptions, filename st
 }
 
 func outputFilenamePreviewForFormat(c *ui.Context, options presetSaveOptions, filename string, targetFormat compress.OutputFormat, replaces bool) {
+	outputFilenamePreviewForResolved(c, options, filename, "", targetFormat, false, replaces)
+}
+
+func outputFilenamePreviewForResolved(c *ui.Context, options presetSaveOptions, filename, sourceFormat string, targetFormat compress.OutputFormat, lossless, replaces bool) {
 	if replaces {
 		return
 	}
-	example := presetOutputNameForFormat(options, filename, targetFormat)
+	example := presetOutputNameForResolved(options, filename, sourceFormat, targetFormat, lossless)
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Text(c, "文件示例").FontSize(12).TextColor(metadataColor(c))
 		ui.Text(c, example).FontSize(12).FontFeatures("tnum").SingleLine().TruncateMiddle().

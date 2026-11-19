@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"image"
 	"io"
 	"net"
 	"net/http"
@@ -25,34 +24,16 @@ import (
 
 // InspectBytes validates in-memory image bytes before touching the filesystem.
 func inspectInMemory(ctx context.Context, payload []byte) (string, error) {
-	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(payload)))
-	if err != nil {
-		return "", fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+	return compress.VerifyImageData(ctx, payload)
+}
+
+func hasSupportedHeader(header []byte) bool {
+	if bytes.HasPrefix(header, []byte("\xff\xd8\xff")) ||
+		bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) ||
+		(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
+		return true
 	}
-	if format != "jpeg" && format != "png" && format != "webp" {
-		return "", fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
-	}
-	const maxPixels = 32_000_000
-	if config.Width <= 0 || config.Height <= 0 || uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
-		return "", fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")
-	}
-	if format == "png" {
-		if err := compress.ValidatePNG(ctx, payload); err != nil {
-			return "", err
-		}
-	}
-	if format == "webp" {
-		if err := compress.ValidateWebP(ctx, payload); err != nil {
-			return "", err
-		}
-	}
-	if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(payload))); err != nil {
-		return "", fmt.Errorf("图片数据损坏：%w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return format, nil
+	return compress.SupportsHEIC() && compress.SniffHEICHeader(header)
 }
 
 // Remote and byte inputs are saved
@@ -415,10 +396,8 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 		if err != nil && err != io.EOF {
 			return nil, err
 		}
-		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
-			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
-			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
-			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		if !hasSupportedHeader(header) {
+			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC")
 		}
 		reader = buffered
 	} else {
@@ -429,10 +408,8 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 			return nil, fmt.Errorf("图片超过 64 MiB 限制")
 		}
 		header := item.Data[:min(12, len(item.Data))]
-		if !bytes.HasPrefix(header, []byte("\xff\xd8\xff")) &&
-			!bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")) &&
-			!(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
-			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		if !hasSupportedHeader(header) {
+			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC")
 		}
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -477,15 +454,9 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 	}
 	format := prevalidatedFormat
 	if format == "" {
-		info, err := compress.InspectReader(ctx, temp, size)
+		info, err := compress.VerifyImageReader(ctx, temp, size)
 		if err != nil {
 			return nil, err
-		}
-		if _, err := temp.Seek(0, io.SeekStart); err != nil {
-			return nil, err
-		}
-		if _, _, err := image.Decode(contextio.NewReader(ctx, temp)); err != nil {
-			return nil, fmt.Errorf("图片数据损坏：%w", err)
 		}
 		format = info.Format
 	}
@@ -498,10 +469,13 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 	}
 	tempClosed = true
 	extension := ".png"
-	if format == "jpeg" {
+	switch format {
+	case "jpeg":
 		extension = ".jpg"
-	} else if format == "webp" {
+	case "webp":
 		extension = ".webp"
+	case "heic":
+		extension = ".heic"
 	}
 	keepTemp = true
 	return &StagedItem{tempName: tempName, name: name, extension: extension}, nil

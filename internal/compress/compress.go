@@ -18,6 +18,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"zpic/internal/contextio"
+	"zpic/internal/heictools"
 	"zpic/internal/imageinput"
 	"zpic/internal/jpegtools"
 	"zpic/internal/pngtools"
@@ -172,43 +173,72 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片文件超过 64 MiB 限制")
 	}
-	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
-	if err != nil {
-		return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP：%w", err)
-	}
-	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP", format)
-	}
-	// Divide before multiplying so a malicious header cannot overflow.
-	if config.Width <= 0 || config.Height <= 0 ||
-		uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
-		return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
-	}
-	if format == "png" {
-		if err := ValidatePNG(ctx, data); err != nil {
+	var (
+		config       image.Config
+		format       string
+		err          error
+		pixelSource  = data
+		sourceOrient = 1
+	)
+	if heictools.SniffFTYP(data) {
+		if _, err = heictools.InspectBytes(ctx, data); err != nil {
 			return nil, err
 		}
-	}
-	if format == "webp" {
-		if err := ValidateWebP(ctx, data); err != nil {
+		if !heictools.Available() {
+			return nil, heictools.ErrUnsupportedPlatform
+		}
+		pixelSource, err = heictools.DecodePNG(ctx, data)
+		if err != nil {
+			if cancelErr := ctx.Err(); cancelErr != nil {
+				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
+			}
 			return nil, err
+		}
+		config, _, err = image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
+		if err != nil {
+			return nil, fmt.Errorf("HEIC 解码输出无效：%w", err)
+		}
+		if config.Width <= 0 || config.Height <= 0 ||
+			uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
+			return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
+		}
+		format = "heic"
+		sourceOrient = pngOrientation(pixelSource)
+	} else {
+		config, format, err = image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
+		if err != nil {
+			return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP/HEIC：%w", err)
+		}
+		if format != "jpeg" && format != "png" && format != "webp" {
+			return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP/HEIC", format)
+		}
+		// Divide before multiplying so a malicious header cannot overflow.
+		if config.Width <= 0 || config.Height <= 0 ||
+			uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
+			return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
+		}
+		if format == "png" {
+			if err := ValidatePNG(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+		if format == "webp" {
+			if err := ValidateWebP(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+		if format == "jpeg" {
+			sourceOrient = jpegOrientation(data)
+		} else if format == "webp" {
+			sourceOrient = webpOrientation(data)
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", err)
 	}
 	sourceFormat := format
-	targetFormat := format
-	if options.OutputFormat == OutputFormatWebP {
-		targetFormat = "webp"
-	}
+	targetFormat := ResolveOutputFormat(sourceFormat, options.OutputFormat, options.Lossless)
 	width, height := config.Width, config.Height
-	sourceOrient := 1
-	if sourceFormat == "jpeg" {
-		sourceOrient = jpegOrientation(data)
-	} else if sourceFormat == "webp" {
-		sourceOrient = webpOrientation(data)
-	}
 	if sourceOrient >= 5 && sourceOrient <= 8 {
 		width, height = height, width
 	}
@@ -224,7 +254,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			(sourceFormat == "webp" && sourceOrient > 1 && options.Metadata != MetadataKeepAll)
 		if needsWebPReencodeFromPixels {
 			var decoded image.Image
-			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
+			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
 			if cancelErr := ctx.Err(); cancelErr != nil {
 				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
 			}
@@ -254,6 +284,8 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 						icc = extractPNGICCProfile(data)
 					case "webp":
 						icc = extractWebPICCProfile(data)
+					case "heic":
+						icc = extractPNGICCProfile(pixelSource)
 					}
 					if len(icc) > 0 {
 						encoded = injectWebPICC(encoded, icc, width, height)
@@ -366,7 +398,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				encoded = data
 			}
 		} else {
-			img, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
+			img, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
 			if cancelErr := ctx.Err(); cancelErr != nil {
 				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
 			}
@@ -376,6 +408,12 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			img, err = orientForJPEGEncode(ctx, img, sourceOrient)
 			if err != nil {
 				return nil, fmt.Errorf("调整图片方向已取消：%w", err)
+			}
+			if converting {
+				img, err = flattenAlphaForJPEG(ctx, img)
+				if err != nil {
+					return nil, fmt.Errorf("处理图片透明度已取消：%w", err)
+				}
 			}
 			if needsResize {
 				img, _, err = resizeImage(ctx, img, options.MaxDimension)
@@ -394,19 +432,25 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			var iccSegments [][]byte
 			var iccBytes int
 			if options.Metadata != MetadataStrip {
-				iccSegments, iccBytes = jpegCompatibleICCSegments(data, outputComponents)
+				if sourceFormat == "heic" {
+					if icc := extractPNGICCProfile(pixelSource); len(icc) > 0 {
+						iccSegments, iccBytes = buildJPEGICCSegments(icc, outputComponents)
+					}
+				} else {
+					iccSegments, iccBytes = jpegCompatibleICCSegments(data, outputComponents)
+				}
 			}
-			mustStrip := options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
+			mustStrip := !converting && options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
 			limit := len(data) - iccBytes
 			stopOnDiscard := true
-			if needsResize || mustStrip {
+			if converting || needsResize || mustStrip {
 				limit = maxInputSize - iccBytes + 1
 				stopOnDiscard = false
 				forcedOutput = true
 			}
 			if jpegtools.Available() {
 				if limit <= 2 {
-					if needsResize || mustStrip {
+					if converting || needsResize || mustStrip {
 						return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
 					}
 					encoded = data
@@ -425,7 +469,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 						encoded = data
 					} else if err == nil {
 						if len(rawOut)+iccBytes > maxInputSize {
-							if needsResize || mustStrip {
+							if converting || needsResize || mustStrip {
 								return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
 							}
 							encoded = data
@@ -450,7 +494,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				}
 				if err == nil {
 					if output.discarded {
-						if needsResize || mustStrip {
+						if converting || needsResize || mustStrip {
 							return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
 						}
 						encoded = data
@@ -461,25 +505,27 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 		}
 	default: // png
-		pngInput := data
+		pngInput := pixelSource
 		pngConfig := config
-		if needsResize {
+		needsPNGReencode := needsResize || (converting && sourceOrient > 1)
+		if needsPNGReencode {
 			var decoded image.Image
-			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
+			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
 			if cancelErr := ctx.Err(); cancelErr != nil {
 				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
 			}
 			if err != nil {
 				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 			}
+			oriented := normalizeOrientation(decoded, sourceOrient)
 			var resized image.Image
-			resized, _, err = resizeImage(ctx, decoded, options.MaxDimension)
+			resized, _, err = resizeImage(ctx, oriented, options.MaxDimension)
 			if err != nil {
 				return nil, fmt.Errorf("缩放图片已取消：%w", err)
 			}
 			var colorChunks [][]byte
 			if options.Metadata != MetadataStrip {
-				colorChunks = extractPNGColorChunks(data)
+				colorChunks = extractPNGColorChunks(pixelSource)
 			}
 			pngInput, err = encodeResizedPNG(ctx, resized, colorChunks)
 			if err != nil {
@@ -490,8 +536,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			pngConfig = image.Config{Width: width, Height: height}
 			forcedOutput = true
 		}
+		if converting {
+			forcedOutput = true
+		}
 		var stripped bool
-		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, needsResize)
+		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, converting || needsResize)
+		if err == nil && len(encoded) > maxInputSize {
+			err = fmt.Errorf("输出超过 64 MiB 限制")
+		}
 		if stripped {
 			forcedOutput = true
 		}

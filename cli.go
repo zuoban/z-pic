@@ -74,7 +74,11 @@ func runCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer)
 }
 
 func printRootCLIHelp(w io.Writer) {
-	fmt.Fprintf(w, `Z Pic %s — 本地静态图片压缩工具（JPEG / PNG / WebP）
+	formats := "JPEG / PNG / WebP"
+	if compress.SupportsHEIC() {
+		formats = "JPEG / PNG / WebP / HEIC"
+	}
+	fmt.Fprintf(w, `Z Pic %s — 本地静态图片压缩工具（%s）
 
 用法:
   z-pic [图片或文件夹 ...]           启动桌面界面（可选直接加载文件）
@@ -90,7 +94,7 @@ func printRootCLIHelp(w io.Writer) {
   z-pic compress --dry-run --json ./photos
 
 运行 "z-pic help <命令>" 查看具体选项。
-`, appVersion)
+`, appVersion, formats)
 }
 
 func runCLIHelp(args []string, stdout, stderr io.Writer) int {
@@ -307,21 +311,25 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 }
 
 func printCompressCLIHelp(w io.Writer) {
+	formats := "JPEG / PNG / WebP"
+	if compress.SupportsHEIC() {
+		formats = "JPEG / PNG / WebP / HEIC"
+	}
 	fmt.Fprintf(w, `用法: z-pic compress [选项] <图片或文件夹 ...>
 
-无界面批量压缩静态 JPEG / PNG / WebP 图片（默认递归扫描目录）。
+无界面批量压缩静态 %s 图片（默认递归扫描目录）。
 默认不会覆盖原文件，会在原目录生成带 "-zpic" 后缀的防冲突副本。
 
 选项:
   -p, --preset <name>      使用已保存预设作为基础参数
       --settings <path>    指定设置 JSON 文件路径
   -q, --quality <1-100>    JPEG / WebP 质量并联动调整 PNG 量化参数
-      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 使用 MozJPEG 无损优化）
-      --format <keep|webp> 输出格式（keep 保持原格式，webp 转为 WebP）
+      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 使用 MozJPEG 无损优化，HEIC 输出 PNG）
+      --format <keep|webp> 输出格式（keep 保持原格式 / HEIC 转为 JPEG 或 PNG，webp 转为 WebP）
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
   -o, --output <path>      输出文件路径（单图）或输出目录（批量/多图）
-      --in-place           仅在体积减小时覆盖同格式原图（转 WebP 时另存为 .webp）
+      --in-place           仅在体积减小时覆盖同格式原图（格式转换时在原目录另存副本）
       --trash              覆盖前将原图移入系统废纸篓（仅与 --in-place 一起使用）
       --suffix <text>      副本文件名后缀（默认 -zpic）
       --no-recursive       只扫描指定目录的顶层
@@ -329,7 +337,7 @@ func printCompressCLIHelp(w io.Writer) {
   -j, --jobs <N>           并发任务数（0 表示自动）
       --json               以 JSON 格式输出完整报告
       --quiet              静默模式（仅输出错误）
-`, compress.MinResizeDimension, compress.MaxResizeDimension)
+`, formats, compress.MinResizeDimension, compress.MaxResizeDimension)
 }
 
 type cliFileReport struct {
@@ -592,7 +600,11 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 1
 	}
 	if len(scan.items) == 0 {
-		fmt.Fprintln(stderr, "未找到可处理的 JPEG、PNG 或 WebP 图片。")
+		if compress.SupportsHEIC() {
+			fmt.Fprintln(stderr, "未找到可处理的 JPEG、PNG、WebP 或 HEIC 图片。")
+		} else {
+			fmt.Fprintln(stderr, "未找到可处理的 JPEG、PNG 或 WebP 图片。")
+		}
 		return 2
 	}
 
@@ -616,10 +628,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			if singleInputIsFile && !isExistingDir && isSupportedImageExt(outputPath) {
 				item := scan.items[0]
 				if !item.invalidInput {
-					effectiveFmt := item.format
-					if opts.OutputFormat == compress.OutputFormatWebP {
-						effectiveFmt = "webp"
-					}
+					effectiveFmt := compress.ResolveOutputFormat(item.effectiveSourceFormat(), opts.OutputFormat, opts.Lossless)
 					if !expectedExtMatchesFormat(filepath.Ext(outputPath), effectiveFmt) {
 						fmt.Fprintf(stderr, "参数错误：输出文件扩展名 %q 与目标格式 %s 不匹配。\n", filepath.Ext(outputPath), strings.ToUpper(effectiveFmt))
 						return 2
@@ -674,8 +683,9 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			index:        i,
 			path:         item.path,
 			relPath:      item.relPath,
-			sourceFormat: item.format,
+			sourceFormat: item.effectiveSourceFormat(),
 			outputFormat: opts.OutputFormat,
+			lossless:     opts.Lossless,
 			output:       saveOpts,
 		})
 	}
@@ -688,7 +698,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		} else if !inPlace {
 			opts.SkipOverwriteSnapshot = true
 			destinations, planErrors = planBatchOutputs(ctx, tasks, outputDir, nil)
-		} else if opts.OutputFormat == compress.OutputFormatWebP {
+		} else {
 			var copyTasks []batchTask
 			for _, task := range tasks {
 				if !task.output.replacesFile(task.sourceFormat, task.outputFormat) {

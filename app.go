@@ -166,6 +166,13 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 	})
 }
 
+func supportedFileFilter() mygo.FileFilter {
+	if compress.SupportsHEIC() {
+		return mygo.FileFilter{Name: "JPEG / PNG / WebP / HEIC 图片", Extensions: []string{"jpg", "jpeg", "png", "webp", "heic", "heif"}}
+	}
+	return mygo.FileFilter{Name: "JPEG / PNG / WebP 图片", Extensions: []string{"jpg", "jpeg", "png", "webp"}}
+}
+
 func (s *application) chooseFile() {
 	if s.modalOpen() {
 		return
@@ -177,9 +184,7 @@ func (s *application) chooseFile() {
 			Title:       "选择要压缩的图片",
 			ButtonLabel: "选择图片",
 			Multiple:    true,
-			Filters: []mygo.FileFilter{
-				{Name: "JPEG / PNG / WebP 图片", Extensions: []string{"jpg", "jpeg", "png", "webp"}},
-			},
+			Filters:     []mygo.FileFilter{supportedFileFilter()},
 		})
 		s.update(func() {
 			s.busy, s.phase = false, ""
@@ -331,31 +336,48 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 		selected.path = path
 		return &selected, nil
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, errors.New("无法识别图片，文件可能已经损坏")
-	}
-	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, errors.New("目前仅支持 JPEG、PNG 和 WebP 图片")
-	}
-	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
-		return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
-	}
-	if format == "png" {
-		if err := compress.ValidatePNG(ctx, data); err != nil {
-			return nil, err
+	var (
+		format string
+		width  int
+		height int
+	)
+	if compress.SniffHEICHeader(data) {
+		info, inspectErr := compress.InspectBytes(ctx, data)
+		if inspectErr != nil {
+			return nil, inspectErr
 		}
-	}
-	if format == "webp" {
-		if err := compress.ValidateWebP(ctx, data); err != nil {
-			return nil, err
+		format, width, height = info.Format, info.Width, info.Height
+	} else {
+		config, fmtName, decErr := image.DecodeConfig(bytes.NewReader(data))
+		if decErr != nil {
+			return nil, errors.New("无法识别图片，文件可能已经损坏")
 		}
+		if fmtName != "jpeg" && fmtName != "png" && fmtName != "webp" {
+			if compress.SupportsHEIC() {
+				return nil, errors.New("目前仅支持 JPEG、PNG、WebP 和 HEIC 图片")
+			}
+			return nil, errors.New("目前仅支持 JPEG、PNG 和 WebP 图片")
+		}
+		if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
+			return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
+		}
+		if fmtName == "png" {
+			if err := compress.ValidatePNG(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+		if fmtName == "webp" {
+			if err := compress.ValidateWebP(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+		format, width, height = fmtName, config.Width, config.Height
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	release, err := s.acquirePreviewMemory(ctx, compress.ImageInfo{
-		Path: path, Format: format, Width: config.Width, Height: config.Height, Size: int64(len(data)),
+		Path: path, Format: format, Width: width, Height: height, Size: int64(len(data)),
 	})
 	if err != nil {
 		return nil, err
@@ -368,7 +390,7 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	width, height := preview.Size()
+	width, height = preview.Size()
 	return &selectedImage{
 		path: path, format: format, width: width, height: height,
 		size: int64(len(data)), data: data, preview: preview,
@@ -376,6 +398,13 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 }
 
 func decodePreviewBitmap(ctx context.Context, data []byte, format string) (*ui.Bitmap, error) {
+	if format == "heic" {
+		decoded, err := compress.DecodePreviewImage(ctx, data)
+		if err != nil {
+			return nil, err
+		}
+		return ui.NewBitmap(decoded), nil
+	}
 	if format == "webp" {
 		if orient := compress.WebPOrientation(data); orient > 1 {
 			decoded, _, err := image.Decode(bytes.NewReader(data))

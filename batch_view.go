@@ -725,20 +725,40 @@ func (s *application) batchOutputCard(c *ui.Context) {
 				}
 			})
 			name := "example.png"
+			sourceFormat := ""
 			if s.batch.selected >= 0 && s.batch.selected < len(s.batch.items) {
-				name = s.batch.items[s.batch.selected].relPath
+				selected := s.batch.items[s.batch.selected]
+				name = selected.relPath
+				sourceFormat = selected.effectiveSourceFormat()
 			}
-			outputFilenamePreviewForFormat(c, s.output, name, s.outputFormat, false)
+			outputFilenamePreviewForResolved(c, s.output, name, sourceFormat, s.outputFormat, s.lossless, false)
 		} else {
 			warning := "缩小后的文件将直接替换原图，未减小则跳过，无法撤销。"
 			if s.backupToTrash {
 				warning = "缩小后的文件会先将原图移入废纸篓再替换，未减小则跳过。"
 			}
+			hasHEIC := false
+			for _, item := range s.batch.items {
+				if item.effectiveSourceFormat() == "heic" {
+					hasHEIC = true
+					break
+				}
+			}
 			if s.outputFormat == compress.OutputFormatWebP {
 				if s.backupToTrash {
-					warning = "原 WebP 缩小后会先移入废纸篓再替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+					warning = "原 WebP 缩小后会先移入废纸篓再替换，其他格式将在原文件夹另存为 .webp。"
 				} else {
-					warning = "原 WebP 缩小后将直接替换，JPEG / PNG 将在原文件夹另存为 .webp。"
+					warning = "原 WebP 缩小后将直接替换，其他格式将在原文件夹另存为 .webp。"
+				}
+			} else if hasHEIC {
+				targetExt := ".jpg"
+				if s.lossless {
+					targetExt = ".png"
+				}
+				if s.backupToTrash {
+					warning = "同格式图片会先移入废纸篓再替换；HEIC 将在原文件夹另存为 " + targetExt + "。"
+				} else {
+					warning = "同格式图片缩小后直接替换；HEIC 将在原文件夹另存为 " + targetExt + "。"
 				}
 			}
 			ui.Text(c, warning).
