@@ -545,3 +545,24 @@ func TestComparisonZoomedDragPansWithoutMovingSplit(test *testing.T) {
 			pannedOffset, appState.comparison.offset)
 	}
 }
+
+func TestComparisonZeroWidthViewportStopsRequestingAnimationFrames(t *testing.T) {
+	s := testComparisonApplication()
+	tester := ui.NewTester(s.view, 0, 0)
+	for range 4 {
+		tester.Frame()
+	}
+	if tester.FramePending() {
+		t.Fatal("zero-width preview must not loop AnimationFrame continuously")
+	}
+	tester.SetSize(880, 660)
+	for range 4 {
+		tester.Frame()
+	}
+	if s.comparison.viewport.W <= 0 || s.comparison.viewport.H <= 0 {
+		t.Fatalf("viewport must recover after resize: %+v", s.comparison.viewport)
+	}
+	if tester.FramePending() {
+		t.Fatal("recovered preview must settle without pending animation frames")
+	}
+}

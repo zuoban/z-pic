@@ -133,6 +133,9 @@ func TestThumbnailJPEGOrientation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, ok := result.(*image.RGBA); !ok {
+				t.Fatalf("oriented thumbnail must return concrete *image.RGBA, got %T", result)
+			}
 			width, height := 40, 24
 			if orientation >= 5 {
 				width, height = height, width
@@ -275,6 +278,14 @@ func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
 	bounds := image.Rect(4, 6, 20, 18)
 	nrgbaParent := image.NewNRGBA(parent)
 	rgbaParent := image.NewRGBA(parent)
+	ycbcrParent := image.NewYCbCr(parent, image.YCbCrSubsampleRatio420)
+	for i := range ycbcrParent.Y {
+		ycbcrParent.Y[i] = uint8(i*29 + 17)
+	}
+	for i := range ycbcrParent.Cb {
+		ycbcrParent.Cb[i] = uint8(i*43 + 70)
+		ycbcrParent.Cr[i] = uint8(i*31 + 110)
+	}
 	for row := parent.Min.Y; row < parent.Max.Y; row++ {
 		for column := parent.Min.X; column < parent.Max.X; column++ {
 			a := uint8((column*31 + row*19) & 0xff)
@@ -294,6 +305,7 @@ func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
 	}{
 		{"SubNRGBA", nrgbaParent.SubImage(bounds)},
 		{"SubRGBA", rgbaParent.SubImage(bounds)},
+		{"SubYCbCr", ycbcrParent.SubImage(bounds)},
 	} {
 		for _, edge := range []int{7, 64} {
 			fastThumb, err := thumbnailRaster(context.Background(), tc.img, edge)

@@ -240,3 +240,41 @@ func TestCompleteBatchScanReportsCapacityWithNoAddedItems(t *testing.T) {
 		}
 	}
 }
+
+func TestScanBatchPathsCaseVariantsMatchFilesystemIdentity(t *testing.T) {
+	root := t.TempDir()
+	upper := filepath.Join(root, "Photo.jpg")
+	lower := filepath.Join(root, "photo.jpg")
+	writeTestJPEG(t, upper, 8, 4, 80)
+
+	if isSameDiskEntry(upper, lower) {
+		// Case-insensitive filesystem (e.g. default macOS APFS / Windows NTFS):
+		// both spellings refer to the same file and must deduplicate.
+		scan, err := scanBatchPaths(context.Background(), []string{upper, lower}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(scan.items) != 1 || scan.duplicates != 1 {
+			t.Fatalf("case-insensitive duplicate must be deduplicated: items=%d duplicates=%d", len(scan.items), scan.duplicates)
+		}
+		existing := map[string]bool{scan.items[0].absPath: true}
+		appended, err := scanBatchPaths(context.Background(), []string{lower}, existing, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(appended.items) != 0 || appended.duplicates != 1 {
+			t.Fatalf("append with differing case must deduplicate: items=%d duplicates=%d", len(appended.items), appended.duplicates)
+		}
+		return
+	}
+
+	// Case-sensitive filesystem: distinct files with differing case must both be kept.
+	writeTestJPEG(t, lower, 12, 6, 80)
+	scan, err := scanBatchPaths(context.Background(), []string{upper, lower}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scan.items) != 2 || scan.duplicates != 0 {
+		t.Fatalf("case-sensitive distinct files must both be kept: items=%d duplicates=%d", len(scan.items), scan.duplicates)
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 const (
@@ -19,16 +21,76 @@ const (
 	floatingExpandedHeight = 360
 )
 
+type floatingSyncSnapshot struct {
+	batch           *batchState
+	batchLen        int
+	batchPending    int
+	batchDone       int
+	batchFailed     int
+	batchOrigTotal  int64
+	batchOutTotal   int64
+	batchFirstPath  string
+	batchLastPath   string
+	file            *selectedImage
+	result          *compress.Result
+	lastSavedPath   string
+	overwritten     bool
+	busy            bool
+	canceling       bool
+	phase           string
+	dialogOpen      bool
+	dropQueueLen    int
+	dropImporting   bool
+	dropMessage     string
+	dropFailed      bool
+	dropFailuresLen int
+}
+
 type floatingState struct {
-	expanded bool
-	listView bool
-	filter   int
-	sort     int
-	cursor   int
-	selected string
-	paths    []string
-	grid     ui.GridState
-	list     ui.ListState
+	expanded   bool
+	listView   bool
+	filter     int
+	sort       int
+	cursor     int
+	selected   string
+	paths      []string
+	grid       ui.GridState
+	list       ui.ListState
+	lastSynced floatingSyncSnapshot
+	synced     bool
+}
+
+func (s *application) floatingSyncSnapshot() floatingSyncSnapshot {
+	snap := floatingSyncSnapshot{
+		batch:           s.batch,
+		file:            s.file,
+		result:          s.result,
+		lastSavedPath:   s.lastSavedPath,
+		overwritten:     s.overwritten,
+		busy:            s.busy,
+		canceling:       s.canceling,
+		phase:           s.phase,
+		dialogOpen:      s.dialogOpen(),
+		dropQueueLen:    len(s.dropQueue),
+		dropImporting:   s.dropImporting,
+		dropMessage:     s.dropMessage,
+		dropFailed:      s.dropFailed,
+		dropFailuresLen: len(s.dropFailures),
+	}
+	if s.batch != nil {
+		total, pending, done, failed, origTotal, outTotal, _ := s.batchStats()
+		snap.batchLen = total
+		snap.batchPending = pending
+		snap.batchDone = done
+		snap.batchFailed = failed
+		snap.batchOrigTotal = origTotal
+		snap.batchOutTotal = outTotal
+		if len(s.batch.items) > 0 {
+			snap.batchFirstPath = s.batch.items[0].path
+			snap.batchLastPath = s.batch.items[len(s.batch.items)-1].path
+		}
+	}
+	return snap
 }
 
 func floatingPanelBounds(current, area mygo.Rectangle, expanded bool) mygo.Rectangle {
@@ -121,11 +183,20 @@ func (s *application) floatingIndices() []int {
 }
 
 func (s *application) prepareFloatingSelection(indices []int) {
-	paths := make([]string, len(indices))
-	for position, index := range indices {
-		paths[position] = s.floatingImage(index).path
+	same := len(indices) == len(s.floating.paths)
+	if same {
+		for position, index := range indices {
+			if s.floatingImage(index).path != s.floating.paths[position] {
+				same = false
+				break
+			}
+		}
 	}
-	if !slices.Equal(paths, s.floating.paths) {
+	if !same {
+		paths := make([]string, len(indices))
+		for position, index := range indices {
+			paths[position] = s.floatingImage(index).path
+		}
 		s.floating.cursor = slices.Index(paths, s.floating.selected)
 		if s.floating.cursor < 0 && len(paths) > 0 {
 			s.floating.cursor = 0
@@ -133,9 +204,9 @@ func (s *application) prepareFloatingSelection(indices []int) {
 		s.floating.list.Choose(s.floating.cursor)
 		s.floating.paths = paths
 	}
-	if s.floating.cursor >= 0 && s.floating.cursor < len(paths) {
-		s.floating.selected = paths[s.floating.cursor]
-	} else if len(paths) == 0 {
+	if s.floating.cursor >= 0 && s.floating.cursor < len(s.floating.paths) {
+		s.floating.selected = s.floating.paths[s.floating.cursor]
+	} else if len(s.floating.paths) == 0 {
 		s.floating.selected = ""
 	}
 }

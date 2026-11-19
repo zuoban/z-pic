@@ -99,6 +99,29 @@ func TestParseFileListSchemeBoundaries(test *testing.T) {
 	}
 }
 
+func TestFileURIPathWindowsAndPOSIX(test *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		goos    string
+		uriPath string
+		want    string
+	}{
+		{"windows drive slash", "windows", "/C:/Users/Alice/pic.png", `C:\Users\Alice\pic.png`},
+		{"windows lowercase drive", "windows", "/d:/photos/a b.jpg", `d:\photos\a b.jpg`},
+		{"windows escaped backslash", "windows", `/C:\Users\pic.png`, `C:\Users\pic.png`},
+		{"windows drive-relative stays rooted", "windows", "/C:relative.png", `\C:relative.png`},
+		{"windows posix root stays non-drive", "windows", "/tmp/a.png", `\tmp\a.png`},
+		{"darwin keeps leading slash", "darwin", "/C:/Users/pic.png", "/C:/Users/pic.png"},
+		{"linux keeps leading slash", "linux", "/tmp/a.png", "/tmp/a.png"},
+	} {
+		test.Run(tc.name, func(test *testing.T) {
+			if got := fileURIPath(tc.uriPath, tc.goos); got != tc.want {
+				test.Fatalf("fileURIPath(%q, %q) = %q, want %q", tc.uriPath, tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseHTMLKeepsProviderOrderAndFallbacks(test *testing.T) {
 	fallback := []byte("fallback image")
 	for _, scenario := range []struct {

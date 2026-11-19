@@ -437,3 +437,34 @@ func TestFloatingDownloadedURLCacheIsBounded(t *testing.T) {
 		t.Fatal("newest URL was not retained")
 	}
 }
+
+func TestMainViewInvalidatesFloatingOnlyWhenStateChanges(t *testing.T) {
+	app := testComparisonApplication()
+	invalidations := 0
+	app.onFloatingInvalidate = func() { invalidations++ }
+
+	tester := ui.NewTester(app.view, 880, 660)
+	// Initial frames sync once and then stay idle across repeated renders and pointer moves.
+	if invalidations != 1 {
+		t.Fatalf("expected 1 initial floating sync, got %d", invalidations)
+	}
+	for range 5 {
+		tester.Frame()
+	}
+	tester.Move(200, 200)
+	tester.Move(320, 260)
+	if invalidations != 1 {
+		t.Fatalf("steady main-window renders/hovers must not repaint floating window: got %d", invalidations)
+	}
+
+	// Changing floating-visible state (e.g. opening settings modal) must invalidate once.
+	app.settingsOpen = true
+	tester.Frame()
+	if invalidations != 2 {
+		t.Fatalf("state change must trigger floating invalidation once, got %d", invalidations)
+	}
+	tester.Frame()
+	if invalidations != 2 {
+		t.Fatalf("unchanged follow-up frame must not re-invalidate floating window, got %d", invalidations)
+	}
+}

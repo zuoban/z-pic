@@ -139,10 +139,24 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 	}
 	seen := make(map[string]bool, len(existing))
 	maps.Copy(seen, existing)
+	seenFold := make(map[string][]string, len(existing))
+	for existingPath, ok := range existing {
+		if ok {
+			fold := strings.ToLower(existingPath)
+			seenFold[fold] = append(seenFold[fold], existingPath)
+		}
+	}
 	resolvedParents := make(map[string]batchParentPath)
 
 	uniqueDirs := make(map[string]bool, len(existingDirs))
 	maps.Copy(uniqueDirs, existingDirs)
+	uniqueDirFold := make(map[string][]string, len(existingDirs))
+	for dirPath, ok := range existingDirs {
+		if ok {
+			fold := strings.ToLower(dirPath)
+			uniqueDirFold[fold] = append(uniqueDirFold[fold], dirPath)
+		}
+	}
 	directoryRoots := make([]string, len(inputs))
 	for i, input := range inputs {
 		if err := ctx.Err(); err != nil {
@@ -156,7 +170,21 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 				return out, err
 			}
 			directoryRoots[i] = resolved
-			uniqueDirs[canonicalBatchKeyWithParents(resolved, resolvedParents)] = true
+			dirKey := canonicalBatchKeyWithParents(resolved, resolvedParents)
+			if !uniqueDirs[dirKey] {
+				dirFold := strings.ToLower(dirKey)
+				duplicateDir := false
+				for _, candidate := range uniqueDirFold[dirFold] {
+					if candInfo, statErr := os.Stat(candidate); statErr == nil && os.SameFile(info, candInfo) {
+						duplicateDir = true
+						break
+					}
+				}
+				if !duplicateDir {
+					uniqueDirs[dirKey] = true
+					uniqueDirFold[dirFold] = append(uniqueDirFold[dirFold], dirKey)
+				}
+			}
 		}
 	}
 	prefixRoot := len(uniqueDirs) > 1
@@ -170,11 +198,21 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 			out.duplicates++
 			return nil
 		}
+		foldKey := strings.ToLower(absPath)
+		if candidates := seenFold[foldKey]; len(candidates) > 0 {
+			for _, candidate := range candidates {
+				if isSameDiskEntry(absPath, candidate) {
+					out.duplicates++
+					return nil
+				}
+			}
+		}
 		if existingCount+len(out.items) >= maxBatchFiles {
 			out.truncated = true
 			return errBatchLimit
 		}
 		seen[absPath] = true
+		seenFold[foldKey] = append(seenFold[foldKey], absPath)
 		relPath = sanitizeRelPath(relPath, filepath.Base(path))
 		info, err := compress.Inspect(ctx, path)
 		if err != nil {
@@ -346,6 +384,18 @@ func canonicalBatchKeyWithParents(path string, resolvedParents map[string]batchP
 		return filepath.Clean(abs)
 	}
 	return filepath.Join(dir, filepath.Base(abs))
+}
+
+func isSameDiskEntry(first, second string) bool {
+	firstInfo, err := os.Lstat(first)
+	if err != nil {
+		return false
+	}
+	secondInfo, err := os.Lstat(second)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(firstInfo, secondInfo)
 }
 
 func canonicalDirWithParents(dir string, resolvedParents map[string]batchParentPath) (string, bool) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -23,12 +24,56 @@ func resolveBatchOutputPath(outputDir, sourcePath, relPath string, used map[stri
 }
 
 type batchOutputPlanner struct {
-	ctx         context.Context
-	used        map[string]bool
-	sequences   map[string]batchOutputSequence
-	parents     map[string]batchParentPath
-	lastRoot    string
-	lastRootAbs string
+	ctx             context.Context
+	used            map[string]bool
+	usedFolded      map[string]bool
+	sequences       map[string]batchOutputSequence
+	parents         map[string]batchParentPath
+	lastRoot        string
+	lastRootAbs     string
+	caseInsensitive *bool
+}
+
+func (planner *batchOutputPlanner) isCaseInsensitive() bool {
+	if planner.caseInsensitive != nil {
+		return *planner.caseInsensitive
+	}
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+}
+
+func (planner *batchOutputPlanner) pathKey(path string) string {
+	if planner.isCaseInsensitive() {
+		return strings.ToLower(path)
+	}
+	return path
+}
+
+func (planner *batchOutputPlanner) ensureReservationMaps() {
+	if planner.used == nil {
+		planner.used = make(map[string]bool)
+	}
+	if planner.isCaseInsensitive() && planner.usedFolded == nil {
+		planner.usedFolded = make(map[string]bool, len(planner.used))
+		for reserved, ok := range planner.used {
+			if ok {
+				planner.usedFolded[strings.ToLower(reserved)] = true
+			}
+		}
+	}
+}
+
+func (planner *batchOutputPlanner) isReserved(path string) bool {
+	if planner.used[path] {
+		return true
+	}
+	return planner.usedFolded != nil && planner.usedFolded[strings.ToLower(path)]
+}
+
+func (planner *batchOutputPlanner) reserve(path string) {
+	planner.used[path] = true
+	if planner.usedFolded != nil {
+		planner.usedFolded[strings.ToLower(path)] = true
+	}
 }
 
 type batchOutputSequence = nameseq.Sequence
@@ -77,9 +122,11 @@ func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPa
 	sourceCanon := canonicalBatchKeyWithParents(sourceAbs, planner.parents)
 	sourceCanonDir, sourceCanonBase := filepath.Split(sourceCanon)
 	candCanonDir, _ := filepath.Split(canonicalBatchKeyWithParents(candidate, planner.parents))
-	sameSourceDir := candCanonDir == sourceCanonDir
+	sameSourceDir := planner.pathKey(candCanonDir) == planner.pathKey(sourceCanonDir)
+	sourceAbsKey := planner.pathKey(sourceAbs)
+	sourceCanonBaseKey := planner.pathKey(sourceCanonBase)
 	canUse := func(path string) (bool, error) {
-		if path == sourceAbs || (sameSourceDir && filepath.Base(path) == sourceCanonBase) {
+		if planner.pathKey(path) == sourceAbsKey || (sameSourceDir && planner.pathKey(filepath.Base(path)) == sourceCanonBaseKey) {
 			return false, nil
 		}
 		_, statErr := os.Lstat(path)
@@ -90,13 +137,11 @@ func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPa
 	}
 	ext := filepath.Ext(candidate)
 	stem := strings.TrimSuffix(candidate, ext)
-	if planner.used == nil {
-		planner.used = make(map[string]bool)
-	}
+	planner.ensureReservationMaps()
 	if planner.sequences == nil {
 		planner.sequences = make(map[string]batchOutputSequence)
 	}
-	seqKey := candidate
+	seqKey := planner.pathKey(candidate)
 	if numberedOnly {
 		seqKey += "\x00numbered"
 	}
@@ -119,7 +164,7 @@ func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPa
 		} else if index > 1 {
 			path = fmt.Sprintf("%s-compressed-%d%s", stem, index, ext)
 		}
-		if planner.used[path] {
+		if planner.isReserved(path) {
 			if sequence == nil {
 				sequence = make(batchOutputSequence)
 				planner.sequences[seqKey] = sequence
@@ -132,7 +177,7 @@ func (planner *batchOutputPlanner) resolveCandidate(outputDir, sourcePath, relPa
 			return "", fmt.Errorf("无法检查输出路径：%w", err)
 		}
 		if ok {
-			planner.used[path] = true
+			planner.reserve(path)
 			if sequence != nil {
 				sequence[index] = index + 1
 			}

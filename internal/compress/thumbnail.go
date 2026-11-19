@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 
 	"zpic/internal/contextio"
@@ -68,15 +69,19 @@ func ThumbnailWithAcquire(ctx context.Context, path string, maxEdge int, acquire
 	if err != nil {
 		return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 	}
+	orientation := 1
 	switch format {
 	case "jpeg":
-		decoded = normalizeOrientation(decoded, jpegOrientation(data))
+		orientation = jpegOrientation(data)
 	case "webp":
-		decoded = normalizeOrientation(decoded, webpOrientation(data))
+		orientation = webpOrientation(data)
 	}
 	output, err := thumbnailRaster(ctx, decoded, maxEdge)
 	if err != nil {
 		return nil, err
+	}
+	if orientation >= 2 && orientation <= 8 {
+		output = orientRGBA(output, orientation)
 	}
 	return output, nil
 }
@@ -128,6 +133,7 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 	rgbaSource, isRGBA := source.(*image.RGBA)
 	nrgbaSource, isNRGBA := source.(*image.NRGBA)
 	rgba64Source, hasRGBA64 := source.(image.RGBA64Image)
+	ycbcrSource, isYCbCr := source.(*image.YCbCr)
 	for row := 0; row < height; row++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -187,6 +193,39 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 				out[1] = thumbnailChannel(g00, g10, g01, g11, sample.fractionX, fractionY)
 				out[2] = thumbnailChannel(b00, b10, b01, b11, sample.fractionX, fractionY)
 				out[3] = thumbnailChannel(a00, a10, a01, a11, sample.fractionX, fractionY)
+			}
+			continue
+		}
+		if isYCbCr {
+			outRow := row * output.Stride
+			for column := range width {
+				if column%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
+				sample := samplesX[column]
+				y00 := ycbcrSource.Y[ycbcrSource.YOffset(sample.left, topY)]
+				c00 := ycbcrSource.COffset(sample.left, topY)
+				r00, g00, b00, _ := (color.YCbCr{Y: y00, Cb: ycbcrSource.Cb[c00], Cr: ycbcrSource.Cr[c00]}).RGBA()
+
+				y10 := ycbcrSource.Y[ycbcrSource.YOffset(sample.right, topY)]
+				c10 := ycbcrSource.COffset(sample.right, topY)
+				r10, g10, b10, _ := (color.YCbCr{Y: y10, Cb: ycbcrSource.Cb[c10], Cr: ycbcrSource.Cr[c10]}).RGBA()
+
+				y01 := ycbcrSource.Y[ycbcrSource.YOffset(sample.left, bottomY)]
+				c01 := ycbcrSource.COffset(sample.left, bottomY)
+				r01, g01, b01, _ := (color.YCbCr{Y: y01, Cb: ycbcrSource.Cb[c01], Cr: ycbcrSource.Cr[c01]}).RGBA()
+
+				y11 := ycbcrSource.Y[ycbcrSource.YOffset(sample.right, bottomY)]
+				c11 := ycbcrSource.COffset(sample.right, bottomY)
+				r11, g11, b11, _ := (color.YCbCr{Y: y11, Cb: ycbcrSource.Cb[c11], Cr: ycbcrSource.Cr[c11]}).RGBA()
+
+				out := output.Pix[outRow+column*4 : outRow+column*4+4 : outRow+column*4+4]
+				out[0] = thumbnailChannel(r00, r10, r01, r11, sample.fractionX, fractionY)
+				out[1] = thumbnailChannel(g00, g10, g01, g11, sample.fractionX, fractionY)
+				out[2] = thumbnailChannel(b00, b10, b01, b11, sample.fractionX, fractionY)
+				out[3] = 0xff
 			}
 			continue
 		}
@@ -295,6 +334,32 @@ func copyThumbnailRaster(ctx context.Context, output *image.RGBA, source image.I
 		}
 		return ctx.Err()
 	}
+	if ycbcr, ok := source.(*image.YCbCr); ok {
+		for row := range height {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			sy := bounds.Min.Y + row
+			dstRow := row * output.Stride
+			for column := range width {
+				if column%256 == 0 {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+				sx := bounds.Min.X + column
+				yi := ycbcr.YOffset(sx, sy)
+				ci := ycbcr.COffset(sx, sy)
+				r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yi], Cb: ycbcr.Cb[ci], Cr: ycbcr.Cr[ci]}).RGBA()
+				out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+				out[0] = uint8((r + 128) / 257)
+				out[1] = uint8((g + 128) / 257)
+				out[2] = uint8((b + 128) / 257)
+				out[3] = 0xff
+			}
+		}
+		return ctx.Err()
+	}
 	rgba64Source, hasRGBA64 := source.(image.RGBA64Image)
 	for row := 0; row < height; row++ {
 		for column := 0; column < width; column++ {
@@ -324,4 +389,30 @@ func thumbnailChannel(topLeft, topRight, bottomLeft, bottomRight uint32, fractio
 	top := float64(topLeft)*(1-fractionX) + float64(topRight)*fractionX
 	bottom := float64(bottomLeft)*(1-fractionX) + float64(bottomRight)*fractionX
 	return uint8(math.Round((top*(1-fractionY) + bottom*fractionY) / 257))
+}
+
+func orientRGBA(src *image.RGBA, orientation int) *image.RGBA {
+	if orientation < 2 || orientation > 8 {
+		return src
+	}
+	oriented := orientedImage{Image: src, orientation: orientation}
+	bounds := oriented.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	originX, originY := oriented.mapCoords(0, 0)
+	nextX, nextY := oriented.mapCoords(1, 0)
+	stepX, stepY := nextX-originX, nextY-originY
+	minX, minY := src.Rect.Min.X, src.Rect.Min.Y
+	for row := range height {
+		mx, my := oriented.mapCoords(0, row)
+		dstRow := row * dst.Stride
+		for col := range width {
+			srcOff := (my-minY)*src.Stride + (mx-minX)*4
+			dstOff := dstRow + col*4
+			copy(dst.Pix[dstOff:dstOff+4], src.Pix[srcOff:srcOff+4])
+			mx += stepX
+			my += stepY
+		}
+	}
+	return dst
 }

@@ -11,6 +11,7 @@ import (
 	"iter"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/egoist/mygo/transfer"
@@ -266,7 +267,7 @@ func localItems(ctx context.Context, text string) ([]Item, error) {
 			if parsed.User != nil || (parsed.Host != "" && parsed.Host != "localhost") || parsed.RawQuery != "" || parsed.Fragment != "" {
 				continue
 			}
-			path = filepath.FromSlash(parsed.Path)
+			path = fileURIPath(parsed.Path, runtime.GOOS)
 		}
 		if filepath.IsAbs(path) && !strings.ContainsRune(path, 0) {
 			if len(result) == maxItems {
@@ -276,6 +277,21 @@ func localItems(ctx context.Context, text string) ([]Item, error) {
 		}
 	}
 	return result, nil
+}
+
+func fileURIPath(uriPath, goos string) string {
+	if goos == "windows" {
+		if len(uriPath) >= 4 && uriPath[0] == '/' &&
+			isASCIIAlpha(uriPath[1]) && uriPath[2] == ':' && (uriPath[3] == '/' || uriPath[3] == '\\') {
+			uriPath = uriPath[1:]
+		}
+		return strings.ReplaceAll(uriPath, "/", `\`)
+	}
+	return filepath.FromSlash(uriPath)
+}
+
+func isASCIIAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 func httpURL(raw string) (*url.URL, error) {

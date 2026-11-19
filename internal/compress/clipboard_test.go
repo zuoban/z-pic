@@ -50,12 +50,15 @@ func TestClipboardPNGPreservesPixelsAndOrientation(t *testing.T) {
 			bounds := want.Bounds()
 			for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
 				for column := bounds.Min.X; column < bounds.Max.X; column++ {
-					wantColor := color.NRGBA64Model.Convert(want.At(column, row))
-					gotColor := color.NRGBA64Model.Convert(got.At(column, row))
+					wantColor := expectedClipboardNRGBA(want.At(column, row))
+					gotColor := color.NRGBAModel.Convert(got.At(column, row)).(color.NRGBA)
 					if wantColor != gotColor {
 						t.Fatalf("pixel (%d,%d) = %v, want %v", column, row, gotColor, wantColor)
 					}
 				}
+			}
+			if format != "png" && data[24] != 8 {
+				t.Fatalf("expected 8-bit PNG IHDR bit depth for %s, got %d", name, data[24])
 			}
 			if format == "png" && !bytes.Equal(data, input) {
 				t.Fatal("PNG clipboard data must preserve the original encoding")
@@ -93,16 +96,18 @@ func TestWebPEXIFOrientationAcrossClipboardThumbnailAndPreview(t *testing.T) {
 		if gotPNG.Bounds() != image.Rect(0, 0, 64, 96) {
 			t.Fatalf("clipboard PNG bounds = %v, want 64x96", gotPNG.Bounds())
 		}
+		if pngOut[24] != 8 {
+			t.Fatalf("expected 8-bit PNG IHDR bit depth for oriented WebP, got %d", pngOut[24])
+		}
 		for y := 0; y < 96; y += 7 {
 			for x := 0; x < 64; x += 7 {
-				wantC := color.NRGBA64Model.Convert(want.At(x, y))
-				gotC := color.NRGBA64Model.Convert(gotPNG.At(x, y))
+				wantC := expectedClipboardNRGBA(want.At(x, y))
+				gotC := color.NRGBAModel.Convert(gotPNG.At(x, y)).(color.NRGBA)
 				if wantC != gotC {
 					t.Fatalf("clipboard pixel (%d,%d) = %v, want %v", x, y, gotC, wantC)
 				}
 			}
 		}
-
 		thumb, err := Thumbnail(context.Background(), writeFixture(t, "oriented.webp", orientedWebP), 48)
 		if err != nil {
 			t.Fatalf("Thumbnail failed: %v", err)
@@ -144,7 +149,23 @@ func TestClipboardPNGRejectsAnimatedContainers(t *testing.T) {
 	}
 }
 
-func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches16BitModelAndHonorsCancel(t *testing.T) {
+func expectedClipboardNRGBA(c color.Color) color.NRGBA {
+	switch v := c.(type) {
+	case color.YCbCr:
+		r, g, b := color.YCbCrToRGB(v.Y, v.Cb, v.Cr)
+		return color.NRGBA{R: r, G: g, B: b, A: 0xff}
+	case color.NYCbCrA:
+		if v.A == 0 {
+			return color.NRGBA{}
+		}
+		r, g, b := color.YCbCrToRGB(v.Y, v.Cb, v.Cr)
+		return color.NRGBA{R: r, G: g, B: b, A: v.A}
+	default:
+		return color.NRGBAModel.Convert(c).(color.NRGBA)
+	}
+}
+
+func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches8BitModelAndHonorsCancel(t *testing.T) {
 	for _, ratio := range []image.YCbCrSubsampleRatio{
 		image.YCbCrSubsampleRatio420,
 		image.YCbCrSubsampleRatio422,
@@ -166,14 +187,17 @@ func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches16BitModelAndHonorsCancel(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(encoded) < 25 || encoded[24] != 8 || encoded[25] != 2 {
+				t.Fatalf("expected 8-bit RGB PNG header, got bitDepth=%d colorType=%d", encoded[24], encoded[25])
+			}
 			got, err := png.Decode(bytes.NewReader(encoded))
 			if err != nil {
 				t.Fatal(err)
 			}
-			for y := 0; y < bounds.Dy(); y++ {
-				for x := 0; x < bounds.Dx(); x++ {
-					wantC := color.NRGBA64Model.Convert(ycbcr.At(bounds.Min.X+x, bounds.Min.Y+y))
-					gotC := color.NRGBA64Model.Convert(got.At(x, y))
+			for y := range bounds.Dy() {
+				for x := range bounds.Dx() {
+					wantC := expectedClipboardNRGBA(ycbcr.At(bounds.Min.X+x, bounds.Min.Y+y))
+					gotC := color.NRGBAModel.Convert(got.At(x, y)).(color.NRGBA)
 					if wantC != gotC {
 						t.Fatalf("YCbCr (%v, %v) mismatch at (%d,%d): got %v, want %v", ratio, bounds, x, y, gotC, wantC)
 					}
@@ -195,14 +219,17 @@ func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches16BitModelAndHonorsCancel(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(encodedNY) < 25 || encodedNY[24] != 8 || encodedNY[25] != 6 {
+		t.Fatalf("expected 8-bit RGBA PNG header, got bitDepth=%d colorType=%d", encodedNY[24], encodedNY[25])
+	}
 	gotNY, err := png.Decode(bytes.NewReader(encodedNY))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for y := 0; y < ny.Bounds().Dy(); y++ {
-		for x := 0; x < ny.Bounds().Dx(); x++ {
-			want := color.NRGBA64Model.Convert(ny.At(ny.Bounds().Min.X+x, ny.Bounds().Min.Y+y))
-			got := color.NRGBA64Model.Convert(gotNY.At(x, y))
+	for y := range ny.Bounds().Dy() {
+		for x := range ny.Bounds().Dx() {
+			want := expectedClipboardNRGBA(ny.At(ny.Bounds().Min.X+x, ny.Bounds().Min.Y+y))
+			got := color.NRGBAModel.Convert(gotNY.At(x, y)).(color.NRGBA)
 			if want != got {
 				t.Fatalf("NYCbCrA mismatch at (%d,%d): got %v, want %v", x, y, got, want)
 			}

@@ -116,17 +116,17 @@ func encodeClipboardPNG(ctx context.Context, decoded image.Image, limit int) ([]
 	return output.buffer.Bytes(), nil
 }
 
-// encodeYCbCrClipboardPNG streams 16-bit RGB PNG scanlines directly from planar
+// encodeYCbCrClipboardPNG streams 8-bit RGB PNG scanlines directly from planar
 // YCbCr samples without boxing pixels through image.Image.At() or allocating a
-// full-resolution intermediate RGBA64 buffer.
+// full-resolution intermediate buffer.
 func encodeYCbCrClipboardPNG(ctx context.Context, src *image.YCbCr, limit int) ([]byte, error) {
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("无法生成剪贴板图片：尺寸无效")
 	}
-	const bpp = 6
-	return stream16BitPNG(ctx, width, height, 2, bpp, limit, func(row int, raw []byte) {
+	const bpp = 3
+	return stream8BitPNG(ctx, width, height, 2, bpp, limit, func(row int, raw []byte) {
 		if src.SubsampleRatio == image.YCbCrSubsampleRatio420 && bounds.Min.X == 0 && bounds.Min.Y == 0 {
 			yRow := src.Y[row*src.YStride : row*src.YStride+width]
 			cOff := (row >> 1) * src.CStride
@@ -136,36 +136,28 @@ func encodeYCbCrClipboardPNG(ctx context.Context, src *image.YCbCr, limit int) (
 			for ; col+1 < width; col += 2 {
 				ci := col >> 1
 				cb, cr := cbRow[ci], crRow[ci]
-				r0, g0, b0, _ := (color.YCbCr{Y: yRow[col], Cb: cb, Cr: cr}).RGBA()
-				r1, g1, b1, _ := (color.YCbCr{Y: yRow[col+1], Cb: cb, Cr: cr}).RGBA()
-				p := raw[col*6 : col*6+12 : col*6+12]
-				p[0], p[1] = uint8(r0>>8), uint8(r0)
-				p[2], p[3] = uint8(g0>>8), uint8(g0)
-				p[4], p[5] = uint8(b0>>8), uint8(b0)
-				p[6], p[7] = uint8(r1>>8), uint8(r1)
-				p[8], p[9] = uint8(g1>>8), uint8(g1)
-				p[10], p[11] = uint8(b1>>8), uint8(b1)
+				r0, g0, b0 := color.YCbCrToRGB(yRow[col], cb, cr)
+				r1, g1, b1 := color.YCbCrToRGB(yRow[col+1], cb, cr)
+				p := raw[col*3 : col*3+6 : col*3+6]
+				p[0], p[1], p[2] = r0, g0, b0
+				p[3], p[4], p[5] = r1, g1, b1
 			}
 			if col < width {
 				ci := col >> 1
-				r0, g0, b0, _ := (color.YCbCr{Y: yRow[col], Cb: cbRow[ci], Cr: crRow[ci]}).RGBA()
-				p := raw[col*6 : col*6+6 : col*6+6]
-				p[0], p[1] = uint8(r0>>8), uint8(r0)
-				p[2], p[3] = uint8(g0>>8), uint8(g0)
-				p[4], p[5] = uint8(b0>>8), uint8(b0)
+				r0, g0, b0 := color.YCbCrToRGB(yRow[col], cbRow[ci], crRow[ci])
+				p := raw[col*3 : col*3+3 : col*3+3]
+				p[0], p[1], p[2] = r0, g0, b0
 			}
 			return
 		}
 		sy := bounds.Min.Y + row
-		for col := 0; col < width; col++ {
+		for col := range width {
 			sx := bounds.Min.X + col
 			yi := src.YOffset(sx, sy)
 			ci := src.COffset(sx, sy)
-			r, g, b, _ := (color.YCbCr{Y: src.Y[yi], Cb: src.Cb[ci], Cr: src.Cr[ci]}).RGBA()
-			p := raw[col*6 : col*6+6 : col*6+6]
-			p[0], p[1] = uint8(r>>8), uint8(r)
-			p[2], p[3] = uint8(g>>8), uint8(g)
-			p[4], p[5] = uint8(b>>8), uint8(b)
+			r, g, b := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
+			p := raw[col*3 : col*3+3 : col*3+3]
+			p[0], p[1], p[2] = r, g, b
 		}
 	})
 }
@@ -179,29 +171,27 @@ func encodeNYCbCrAClipboardPNG(ctx context.Context, src *image.NYCbCrA, limit in
 	if src.Opaque() {
 		return encodeYCbCrClipboardPNG(ctx, &src.YCbCr, limit)
 	}
-	const bpp = 8
-	return stream16BitPNG(ctx, width, height, 6, bpp, limit, func(row int, raw []byte) {
+	const bpp = 4
+	return stream8BitPNG(ctx, width, height, 6, bpp, limit, func(row int, raw []byte) {
 		sy := bounds.Min.Y + row
-		for col := 0; col < width; col++ {
+		for col := range width {
 			sx := bounds.Min.X + col
+			ai := src.AOffset(sx, sy)
+			a := src.A[ai]
+			p := raw[col*4 : col*4+4 : col*4+4]
+			if a == 0 {
+				p[0], p[1], p[2], p[3] = 0, 0, 0, 0
+				continue
+			}
 			yi := src.YOffset(sx, sy)
 			ci := src.COffset(sx, sy)
-			ai := src.AOffset(sx, sy)
-			c := color.NYCbCrA{
-				YCbCr: color.YCbCr{Y: src.Y[yi], Cb: src.Cb[ci], Cr: src.Cr[ci]},
-				A:     src.A[ai],
-			}
-			nrgba := color.NRGBA64Model.Convert(c).(color.NRGBA64)
-			p := raw[col*8 : col*8+8 : col*8+8]
-			p[0], p[1] = uint8(nrgba.R>>8), uint8(nrgba.R)
-			p[2], p[3] = uint8(nrgba.G>>8), uint8(nrgba.G)
-			p[4], p[5] = uint8(nrgba.B>>8), uint8(nrgba.B)
-			p[6], p[7] = uint8(nrgba.A>>8), uint8(nrgba.A)
+			r, g, b := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
+			p[0], p[1], p[2], p[3] = r, g, b, a
 		}
 	})
 }
 
-func stream16BitPNG(
+func stream8BitPNG(
 	ctx context.Context,
 	width, height int,
 	colorType byte,
@@ -218,13 +208,12 @@ func stream16BitPNG(
 	copy(ihdr[4:8], "IHDR")
 	binary.BigEndian.PutUint32(ihdr[8:12], uint32(width))
 	binary.BigEndian.PutUint32(ihdr[12:16], uint32(height))
-	ihdr[16] = 16
+	ihdr[16] = 8
 	ihdr[17] = colorType
 	binary.BigEndian.PutUint32(ihdr[21:25], crc32.ChecksumIEEE(ihdr[4:21]))
 	if _, err := output.Write(ihdr[:]); err != nil {
 		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
 	}
-
 	idat := idatChunkWriter{dst: &output}
 	zw := clipboardZlibWriters.Get().(*zlib.Writer)
 	zw.Reset(&idat)

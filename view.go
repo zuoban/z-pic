@@ -144,7 +144,7 @@ func (s *application) view(c *ui.Context) {
 		s.startNextBatchThumbnail()
 	}
 	s.startNextDropImport()
-	s.invalidateFloatingWindow()
+	s.syncFloatingWindowIfChanged()
 }
 
 func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobile bool, pending, done int, canRun bool) {

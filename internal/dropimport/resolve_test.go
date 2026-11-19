@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -592,5 +594,121 @@ func TestResolveBlocksFirstHopPrivateLoopbackAndDNSRebinding(t *testing.T) {
 	}
 	if localHits.Load() != 0 {
 		t.Fatalf("DNS rebinding reached local server %d times", localHits.Load())
+	}
+}
+
+func TestResolveBlocksSSRFViaProxyAndDirectProxyAddressBypass(t *testing.T) {
+	payload := imageBytes(t, "png")
+	var proxyHits atomic.Int32
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		if r.URL.Path == "/redirect-private" {
+			http.Redirect(w, r, "http://internal.example.test/secret.png", http.StatusFound)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer proxyServer.Close()
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyHostPort := "proxy.internal:" + proxyURL.Port()
+	namedProxyURL, err := url.Parse("http://" + proxyHostPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lookup := func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		switch host {
+		case "cdn.example.test":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		case "internal.example.test":
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+		case "dual.example.test":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("10.0.0.5")}, nil
+		case "proxy.internal":
+			return []netip.Addr{netip.MustParseAddr("10.0.0.8")}, nil
+		default:
+			return nil, fmt.Errorf("unexpected host %s", host)
+		}
+	}
+	var dialed []string
+	baseDial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		if strings.EqualFold(addr, proxyHostPort) {
+			return (&net.Dialer{}).DialContext(ctx, network, proxyServer.Listener.Addr().String())
+		}
+		return nil, fmt.Errorf("unexpected dial %s", addr)
+	}
+	proxyLookup := func(req *http.Request) (*url.URL, error) {
+		// Simulate NO_PROXY for proxy.internal itself.
+		if strings.EqualFold(req.URL.Hostname(), "proxy.internal") {
+			return nil, nil
+		}
+		return namedProxyURL, nil
+	}
+	transport := newTransportWithProxy(lookup, baseDial, proxyLookup)
+	defer transport.CloseIdleConnections()
+
+	// 1. Public host through proxy succeeds.
+	dir := t.TempDir()
+	savedPath, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://cdn.example.test/ok.png"}, dir, transport)
+	if err != nil || !saved || savedPath == "" {
+		t.Fatalf("public host via proxy must succeed: path=%q saved=%v err=%v", savedPath, saved, err)
+	}
+	if proxyHits.Load() != 1 {
+		t.Fatalf("expected 1 proxy hit, got %d", proxyHits.Load())
+	}
+
+	// 2. Host resolving to private/loopback IP must be blocked before contacting proxy.
+	for _, blocked := range []string{
+		"http://internal.example.test/secret.png",
+		"http://dual.example.test/secret.png",
+	} {
+		path, ok, err := ResolveWithTransport(context.Background(), Item{URL: blocked}, dir, transport)
+		if err == nil || ok || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+			t.Fatalf("private DNS host %s via proxy must be blocked: path=%q saved=%v err=%v", blocked, path, ok, err)
+		}
+	}
+	if proxyHits.Load() != 1 {
+		t.Fatalf("blocked private hosts reached proxy: hits=%d", proxyHits.Load())
+	}
+
+	// 3. Redirect through proxy to a DNS name resolving to private IP must be blocked.
+	if path, ok, err := ResolveWithTransport(context.Background(), Item{URL: "http://cdn.example.test/redirect-private"}, dir, transport); err == nil || ok || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+		t.Fatalf("redirect to private DNS host via proxy must be blocked: path=%q saved=%v err=%v", path, ok, err)
+	}
+	if proxyHits.Load() != 2 {
+		t.Fatalf("redirect target must not contact proxy: hits=%d", proxyHits.Load())
+	}
+
+	// 4. Direct request to the proxy's own internal host:port (via NO_PROXY) must NOT bypass SSRF.
+	beforeDials := len(dialed)
+	directProxyURL := "http://" + proxyHostPort + "/admin.png"
+	if path, ok, err := ResolveWithTransport(context.Background(), Item{URL: directProxyURL}, dir, transport); err == nil || ok || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+		t.Fatalf("direct request to proxy address must be blocked: path=%q saved=%v err=%v", path, ok, err)
+	}
+	if len(dialed) != beforeDials {
+		t.Fatalf("direct request to proxy address bypassed dial filter: dialed=%v", dialed[beforeDials:])
+	}
+
+	// 5. Even standalone http.Client{Transport} without Resolver context must block direct hit to proxy.internal.
+	client := &http.Client{Transport: transport}
+	resp, err := client.Get("http://cdn.example.test/ok.png")
+	if err != nil {
+		t.Fatalf("standalone public request via proxy failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	beforeDials = len(dialed)
+	resp, err = client.Get(directProxyURL)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "本地或内网") {
+		t.Fatalf("standalone direct request to proxy address must be blocked, got err=%v", err)
+	}
+	if len(dialed) != beforeDials {
+		t.Fatalf("standalone direct request bypassed dial filter: dialed=%v", dialed[beforeDials:])
 	}
 }

@@ -65,7 +65,34 @@ func Resolve(ctx context.Context, item Item, dir string) (path string, downloade
 type (
 	lookupNetIPFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 	dialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+	proxyLookupFunc func(req *http.Request) (*url.URL, error)
 )
+
+type proxyDialContextKey struct{}
+
+type proxyDialTarget struct {
+	mu   sync.RWMutex
+	addr string
+}
+
+func (t *proxyDialTarget) set(addr string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.addr = addr
+	t.mu.Unlock()
+}
+
+func (t *proxyDialTarget) matches(addr string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	matched := t.addr != "" && t.addr == addr
+	t.mu.RUnlock()
+	return matched
+}
 
 func NewTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
@@ -73,18 +100,56 @@ func NewTransport() *http.Transport {
 }
 
 func newTransport(lookup lookupNetIPFunc, baseDial dialContextFunc) *http.Transport {
+	return newTransportWithProxy(lookup, baseDial, http.ProxyFromEnvironment)
+}
+
+func newTransportWithProxy(lookup lookupNetIPFunc, baseDial dialContextFunc, proxyLookup proxyLookupFunc) *http.Transport {
 	var proxyMu sync.RWMutex
 	var allowedProxyAddrs map[string]struct{}
 
+	isAllowedProxy := func(addr string) bool {
+		proxyMu.RLock()
+		_, ok := allowedProxyAddrs[strings.ToLower(addr)]
+		proxyMu.RUnlock()
+		return ok
+	}
+
 	proxyFunc := func(req *http.Request) (*url.URL, error) {
-		if isLocalOrPrivateHost(req.URL.Hostname()) {
-			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", req.URL.Hostname())
+		target, hasTarget := req.Context().Value(proxyDialContextKey{}).(*proxyDialTarget)
+		if hasTarget {
+			target.set("")
 		}
-		proxyURL, err := http.ProxyFromEnvironment(req)
-		if err != nil || proxyURL == nil {
-			return proxyURL, err
+		host := req.URL.Hostname()
+		if isLocalOrPrivateHost(host) {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
 		}
-		if proxyAddr := urlDialAddr(proxyURL); proxyAddr != "" {
+		var proxyURL *url.URL
+		var err error
+		if proxyLookup != nil {
+			proxyURL, err = proxyLookup(req)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL == nil {
+			if !hasTarget {
+				if reqAddr := urlDialAddr(req.URL); reqAddr != "" && isAllowedProxy(reqAddr) {
+					if _, err := resolveAllowedIPs(req.Context(), lookup, host); err != nil {
+						return nil, err
+					}
+				}
+			}
+			return nil, nil
+		}
+		// DialContext connects to the proxy rather than the origin when a proxy is active,
+		// so resolve and validate the target host here for both first-hop and redirects.
+		if _, err := resolveAllowedIPs(req.Context(), lookup, host); err != nil {
+			return nil, err
+		}
+		proxyAddr := urlDialAddr(proxyURL)
+		if hasTarget {
+			target.set(proxyAddr)
+		} else if proxyAddr != "" {
 			proxyMu.Lock()
 			if allowedProxyAddrs == nil {
 				allowedProxyAddrs = make(map[string]struct{})
@@ -93,13 +158,6 @@ func newTransport(lookup lookupNetIPFunc, baseDial dialContextFunc) *http.Transp
 			proxyMu.Unlock()
 		}
 		return proxyURL, nil
-	}
-
-	isAllowedProxy := func(addr string) bool {
-		proxyMu.RLock()
-		_, ok := allowedProxyAddrs[addr]
-		proxyMu.RUnlock()
-		return ok
 	}
 
 	return &http.Transport{
@@ -117,7 +175,7 @@ func newTransport(lookup lookupNetIPFunc, baseDial dialContextFunc) *http.Transp
 }
 
 func urlDialAddr(u *url.URL) string {
-	host := u.Hostname()
+	host := strings.ToLower(u.Hostname())
 	if host == "" {
 		return ""
 	}
@@ -137,38 +195,50 @@ func urlDialAddr(u *url.URL) string {
 	return net.JoinHostPort(host, port)
 }
 
+func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string) ([]netip.Addr, error) {
+	trimmed := strings.TrimSuffix(host, ".")
+	if isLocalHostName(trimmed) {
+		return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+	}
+	if ip, parseErr := netip.ParseAddr(trimmed); parseErr == nil {
+		if isDisallowedIP(ip) {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+		}
+		return []netip.Addr{ip.Unmap()}, nil
+	}
+	ips, err := lookup(ctx, "ip", trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("无法解析域名：%s", host)
+	}
+	allowed := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		if isDisallowedIP(ip) {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+		}
+		allowed = append(allowed, ip.Unmap())
+	}
+	return allowed, nil
+}
+
 func newSafeDialContext(lookup lookupNetIPFunc, baseDial dialContextFunc, isAllowedProxy func(string) bool) dialContextFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if isAllowedProxy != nil && isAllowedProxy(addr) {
+		if target, hasTarget := ctx.Value(proxyDialContextKey{}).(*proxyDialTarget); hasTarget {
+			if target.matches(strings.ToLower(addr)) {
+				return baseDial(ctx, network, addr)
+			}
+		} else if isAllowedProxy != nil && isAllowedProxy(addr) {
 			return baseDial(ctx, network, addr)
 		}
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		trimmed := strings.TrimSuffix(host, ".")
-		if isLocalHostName(trimmed) {
-			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
-		}
-		if ip, parseErr := netip.ParseAddr(trimmed); parseErr == nil {
-			if isDisallowedIP(ip) {
-				return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
-			}
-			return baseDial(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
-		}
-		ips, err := lookup(ctx, "ip", trimmed)
+		allowed, err := resolveAllowedIPs(ctx, lookup, host)
 		if err != nil {
 			return nil, err
-		}
-		if len(ips) == 0 {
-			return nil, fmt.Errorf("无法解析域名：%s", host)
-		}
-		allowed := make([]netip.Addr, 0, len(ips))
-		for _, ip := range ips {
-			if isDisallowedIP(ip) {
-				return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
-			}
-			allowed = append(allowed, ip.Unmap())
 		}
 		var lastErr error
 		for _, ip := range allowed {
@@ -285,6 +355,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			defer transport.CloseIdleConnections()
 		}
 		client := resolver.httpClient(transport)
+		reqCtx := context.WithValue(ctx, proxyDialContextKey{}, &proxyDialTarget{})
 		request := (&http.Request{
 			Method:     http.MethodGet,
 			URL:        parsed,
@@ -292,7 +363,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, item Item) (path string, 
 			ProtoMajor: 1,
 			ProtoMinor: 1,
 			Host:       parsed.Host,
-		}).WithContext(ctx)
+		}).WithContext(reqCtx)
 		response, err := client.Do(request)
 		if err != nil {
 			return "", false, fmt.Errorf("图片下载失败：%w", err)

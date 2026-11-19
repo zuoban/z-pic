@@ -87,6 +87,7 @@ type application struct {
 	clipboardImporting    bool
 	clipboardOutcome      clipboardImportOutcome
 	floatingWindow        *mygo.Window
+	onFloatingInvalidate  func()
 	floatingOpen          bool
 	floating              floatingState
 	dropQueue             []transfer.Data

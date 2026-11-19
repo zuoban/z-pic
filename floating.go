@@ -25,6 +25,7 @@ func (s *application) setFloatingOpen(open bool) {
 	if !open {
 		s.floatingOpen = false
 		s.floating.expanded = false
+		s.floating.synced = false
 		s.thumbnails.floatingWanted = nil
 		if window := s.floatingWindow; window != nil {
 			window.Close()
@@ -56,17 +57,49 @@ func (s *application) setFloatingOpen(open bool) {
 		s.floatingWindow = nil
 		s.floatingOpen = false
 		s.floating.expanded = false
+		s.floating.synced = false
 		s.thumbnails.floatingWanted = nil
 		if !s.closed && s.window != nil {
 			s.window.Invalidate()
 		}
 	})
+	s.floating.lastSynced = s.floatingSyncSnapshot()
+	s.floating.synced = true
 	s.floatingWindow.ShowInactive()
 }
 
 func (s *application) invalidateFloatingWindow() {
-	if s.floatingWindow != nil && !s.closed {
+	if s.closed {
+		return
+	}
+	if s.floatingWindow == nil && s.onFloatingInvalidate == nil {
+		return
+	}
+	s.floating.lastSynced = s.floatingSyncSnapshot()
+	s.floating.synced = true
+	if s.floatingWindow != nil {
 		s.floatingWindow.Invalidate()
+	}
+	if s.onFloatingInvalidate != nil {
+		s.onFloatingInvalidate()
+	}
+}
+
+func (s *application) syncFloatingWindowIfChanged() {
+	if s.closed || (s.floatingWindow == nil && s.onFloatingInvalidate == nil) {
+		return
+	}
+	snapshot := s.floatingSyncSnapshot()
+	if s.floating.synced && snapshot == s.floating.lastSynced {
+		return
+	}
+	s.floating.lastSynced = snapshot
+	s.floating.synced = true
+	if s.floatingWindow != nil {
+		s.floatingWindow.Invalidate()
+	}
+	if s.onFloatingInvalidate != nil {
+		s.onFloatingInvalidate()
 	}
 }
 

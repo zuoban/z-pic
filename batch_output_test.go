@@ -222,3 +222,48 @@ func TestPlanBatchOutputsCancelsWithinCollisionSearch(t *testing.T) {
 		t.Fatalf("canceled collision search reserved output: paths=%v failures=%v used=%v", paths, failures, used)
 	}
 }
+
+func TestBatchOutputPlannerHandlesCaseInsensitiveCollisions(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := t.TempDir()
+	sourceA := filepath.Join(sourceDir, "Photo.jpg")
+	sourceB := filepath.Join(sourceDir, "photo.jpg")
+	caseInsensitive := true
+	used := map[string]bool{
+		filepath.Join(root, "Existing.jpg"): true,
+	}
+	planner := &batchOutputPlanner{
+		used:            used,
+		sequences:       make(map[string]batchOutputSequence),
+		caseInsensitive: &caseInsensitive,
+	}
+	first, err := planner.resolve(root, sourceA, "Photo.jpg")
+	if err != nil || first != filepath.Join(root, "Photo.jpg") {
+		t.Fatalf("first = %q, %v; want Photo.jpg", first, err)
+	}
+	second, err := planner.resolve(root, sourceB, "photo.jpg")
+	if err != nil || second != filepath.Join(root, "photo-compressed.jpg") {
+		t.Fatalf("second = %q, %v; want photo-compressed.jpg", second, err)
+	}
+	third, err := planner.resolve(root, sourceB, "PHOTO.JPG")
+	if err != nil || third != filepath.Join(root, "PHOTO-compressed-2.JPG") {
+		t.Fatalf("third = %q, %v; want PHOTO-compressed-2.JPG", third, err)
+	}
+	// Must also collide with pre-seeded case-differing reservations in used.
+	fourth, err := planner.resolve(root, sourceB, "existing.jpg")
+	if err != nil || fourth != filepath.Join(root, "existing-compressed.jpg") {
+		t.Fatalf("fourth = %q, %v; want existing-compressed.jpg", fourth, err)
+	}
+	// Exact-cased keys must still be recorded in caller's used map.
+	for _, reserved := range []string{first, second, third, fourth} {
+		if !used[reserved] {
+			t.Fatalf("reserved path %q missing from caller used map", reserved)
+		}
+	}
+	// Source file with differing case in the same directory must not be overwritten.
+	sameDirSource := filepath.Join(root, "Camera.jpg")
+	fifth, err := planner.resolve(root, sameDirSource, "camera.jpg")
+	if err != nil || fifth != filepath.Join(root, "camera-compressed.jpg") {
+		t.Fatalf("case-differing source collision = %q, %v; want camera-compressed.jpg", fifth, err)
+	}
+}

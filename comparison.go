@@ -21,6 +21,7 @@ type comparisonView struct {
 	scale             float64
 	offset            ui.Point
 	viewport          ui.Rect
+	viewportProbed    bool
 	panning           bool
 	panSuppressSlider bool
 	panFrozenSplit    float64
@@ -283,7 +284,11 @@ func (s *application) previewCanvas(c *ui.Context) {
 		Disabled(s.previewLocked()).DimDisabled(false)
 	previousBounds := s.comparison.viewport
 	s.comparison.viewport = canvas.Bounds()
-	if s.comparison.viewport != previousBounds || s.comparison.viewport.W <= 0 {
+	needsProbe := !s.comparison.viewportProbed && s.comparison.viewport.W <= 0
+	if needsProbe {
+		s.comparison.viewportProbed = true
+	}
+	if s.comparison.viewport != previousBounds || needsProbe {
 		c.AnimationFrame()
 	}
 	s.clampPreviewOffset()
