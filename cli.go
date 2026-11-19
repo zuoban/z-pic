@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,10 +14,26 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/egoist/mygo"
+
 	"zpic/internal/compress"
 )
 
-const appVersion = "0.1.0"
+//go:embed mygo.json
+var mygoConfigJSON []byte
+
+var appVersion = loadAppVersion()
+var cliTrashItem = mygo.Shell.TrashItem
+
+func loadAppVersion() string {
+	var config struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(mygoConfigJSON, &config); err != nil || config.Version == "" {
+		return "0.1.0"
+	}
+	return config.Version
+}
 
 func shouldRunCLI(args []string) bool {
 	if len(args) == 0 {
@@ -290,9 +307,9 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 }
 
 func printCompressCLIHelp(w io.Writer) {
-	fmt.Fprintln(w, `用法: z-pic compress [选项] <图片或文件夹 ...>
+	fmt.Fprintf(w, `用法: z-pic compress [选项] <图片或文件夹 ...>
 
-无界面批量压缩静态 JPEG / PNG / WebP 图片（支持递归目录扫描）。
+无界面批量压缩静态 JPEG / PNG / WebP 图片（默认递归扫描目录）。
 默认不会覆盖原文件，会在原目录生成带 "-zpic" 后缀的防冲突副本。
 
 选项:
@@ -301,15 +318,18 @@ func printCompressCLIHelp(w io.Writer) {
   -q, --quality <1-100>    JPEG / WebP 质量并联动调整 PNG 量化参数
       --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 不二次压缩）
       --format <keep|webp> 输出格式（keep 保持原格式，webp 转为 WebP）
-      --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 16–16384）
+      --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
   -o, --output <path>      输出文件路径（单图）或输出目录（批量/多图）
-      --in-place           仅在体积减小时原子覆盖同格式原图（转 WebP 时另存为 .webp）
+      --in-place           仅在体积减小时覆盖同格式原图（转 WebP 时另存为 .webp）
+      --trash              覆盖前将原图移入系统废纸篓（仅与 --in-place 一起使用）
       --suffix <text>      副本文件名后缀（默认 -zpic）
+      --no-recursive       只扫描指定目录的顶层
       --dry-run            仅在内存中试算压缩结果，不写入磁盘
   -j, --jobs <N>           并发任务数（0 表示自动）
       --json               以 JSON 格式输出完整报告
-      --quiet              静默模式（仅输出错误）`)
+      --quiet              静默模式（仅输出错误）
+`, compress.MinResizeDimension, compress.MaxResizeDimension)
 }
 
 type cliFileReport struct {
@@ -326,6 +346,7 @@ type cliFileReport struct {
 	SavedPercent  float64 `json:"saved_percent"`
 	Unchanged     bool    `json:"unchanged,omitempty"`
 	Overwritten   bool    `json:"overwritten,omitempty"`
+	BackedUp      bool    `json:"backed_up,omitempty"`
 	Error         string  `json:"error,omitempty"`
 }
 
@@ -417,7 +438,9 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		metadataFlag string
 		outputPath   string
 		inPlace      bool
+		useTrash     bool
 		suffix       string
+		noRecursive  bool
 		dryRun       bool
 		jobs         int
 		jsonOut      bool
@@ -435,7 +458,9 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.StringVar(&outputPath, "output", "", "output file or directory")
 	fs.StringVar(&outputPath, "o", "", "output file or directory")
 	fs.BoolVar(&inPlace, "in-place", false, "overwrite source files in place when smaller")
+	fs.BoolVar(&useTrash, "trash", false, "move source files to the Trash before overwriting")
 	fs.StringVar(&suffix, "suffix", "", "copy filename suffix")
+	fs.BoolVar(&noRecursive, "no-recursive", false, "scan only the top level of input directories")
 	fs.BoolVar(&dryRun, "dry-run", false, "estimate compression without writing files")
 	fs.IntVar(&jobs, "jobs", 0, "worker concurrency")
 	fs.IntVar(&jobs, "j", 0, "worker concurrency")
@@ -455,6 +480,10 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			return 0
 		}
 		fmt.Fprintf(stderr, "参数错误：%v\n", err)
+		return 2
+	}
+	if useTrash && !inPlace {
+		fmt.Fprintln(stderr, "参数冲突：--trash 仅可与 --in-place 一起使用。")
 		return 2
 	}
 	inputs := fs.Args()
@@ -482,17 +511,25 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 2
 	}
 
+	var cfg appSettings
+	if presetName != "" || setFlags["settings"] {
+		var err error
+		cfg, _, err = loadCLISettings(settingsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "读取设置失败：%v\n", err)
+			return 2
+		}
+		if inPlace && !setFlags["trash"] {
+			useTrash = cfg.backupToTrash
+		}
+	}
+
 	opts := compress.Options{
 		Quality: 80,
 		PNG:     compress.DefaultPNGOptions(),
 	}
 	var basePreset *compressionPreset
 	if presetName != "" {
-		cfg, _, err := loadCLISettings(settingsPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "读取预设失败：%v\n", err)
-			return 2
-		}
 		for i := range cfg.presets {
 			if cfg.presets[i].name == presetName {
 				p := cfg.presets[i]
@@ -549,7 +586,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		opts.Metadata = parsed
 	}
 
-	scan, err := scanBatchPaths(ctx, inputs, nil, 0)
+	scan, err := scanBatchPathsWithOptions(ctx, inputs, nil, nil, 0, !noRecursive)
 	if err != nil {
 		fmt.Fprintf(stderr, "扫描输入失败：%v\n", err)
 		return 1
@@ -742,13 +779,20 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 					entry.Unchanged = true
 					entry.Output = task.path
 				} else {
-					if err := res.Overwrite(); err != nil {
+					var err error
+					if useTrash {
+						err = res.OverwriteWithBackup(cliTrashItem)
+					} else {
+						err = res.Overwrite()
+					}
+					if err != nil {
 						entry.Status = "failed"
 						entry.Error = err.Error()
 						files[task.index] = entry
 						return
 					}
 					entry.Overwritten = true
+					entry.BackedUp = useTrash
 					entry.Output = task.path
 				}
 			}

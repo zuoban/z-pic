@@ -55,10 +55,14 @@ func (s *application) singleDragFilename() string {
 		base := filepath.Base(s.file.path)
 		if base != "" && base != "." && base != string(filepath.Separator) {
 			name = replaceFilenameExtension(base, targetFormat)
-			if s.output.UseSuffix && s.output.Suffix != "" {
+			if s.output.UseSuffix {
+				suffix := s.output.Suffix
+				if suffix == "" {
+					suffix = defaultFilenameSuffix
+				}
 				fileExt := filepath.Ext(name)
 				stem := strings.TrimSuffix(name, fileExt)
-				name = stem + s.output.Suffix + fileExt
+				name = stem + suffix + fileExt
 			}
 		}
 	}
@@ -103,6 +107,12 @@ func (s *application) stageSingleDragFile() string {
 	abs, err := filepath.Abs(staged)
 	if err != nil {
 		abs = staged
+	}
+	if s.dragStagedPath != "" && s.dragStagedPath != abs {
+		oldSlot := filepath.Dir(s.dragStagedPath)
+		if oldSlot != s.dragTempDir && s.isDragStagedPath(oldSlot) {
+			_ = os.RemoveAll(oldSlot)
+		}
 	}
 	s.dragStagedResult = s.result
 	s.dragStagedPath = abs

@@ -92,7 +92,13 @@ func resizeImage(ctx context.Context, img image.Image, maxDim int) (image.Image,
 	if !changed {
 		return img, false, nil
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	dstBounds := image.Rect(0, 0, dstW, dstH)
+	var dst xdraw.Image
+	if _, isGray := img.(*image.Gray); isGray {
+		dst = image.NewGray(dstBounds)
+	} else {
+		dst = image.NewRGBA(dstBounds)
+	}
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, xdraw.Src, nil)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err

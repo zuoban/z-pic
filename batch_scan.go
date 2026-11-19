@@ -152,6 +152,10 @@ func scanBatchPaths(ctx context.Context, inputs []string, existing map[string]bo
 }
 
 func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, existingDirs map[string]bool, existingCount int) (batchScanResult, error) {
+	return scanBatchPathsWithOptions(ctx, inputs, existing, existingDirs, existingCount, true)
+}
+
+func scanBatchPathsWithOptions(ctx context.Context, inputs []string, existing, existingDirs map[string]bool, existingCount int, recursive bool) (batchScanResult, error) {
 	var out batchScanResult
 	if err := ctx.Err(); err != nil {
 		return out, err
@@ -308,6 +312,9 @@ func scanBatchPathsWithDirs(ctx context.Context, inputs []string, existing, exis
 				return nil
 			}
 			if d.IsDir() {
+				if !recursive && p != walkRoot {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			if !isSupportedImageExt(name) {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 )
 
 func TestAssetChecksum(t *testing.T) {
-	data, err := tools.ReadFile("assets/darwin_arm64/manifest.json")
+	data, err := os.ReadFile("assets/darwin_arm64/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,13 +32,16 @@ func TestAssetChecksum(t *testing.T) {
 	if manifest.Version != "1.6.0" || manifest.SourceSHA256 != "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564" {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
-	asset, err := tools.ReadFile("assets/darwin_arm64/cwebp")
+	asset, err := os.ReadFile("assets/darwin_arm64/cwebp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(asset)
 	if hex.EncodeToString(digest[:]) != manifest.SHA256 {
 		t.Fatal("asset checksum mismatch")
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" && !bytes.Equal(bundledTool(), asset) {
+		t.Fatal("embedded cwebp differs from the checked-in asset")
 	}
 }
 

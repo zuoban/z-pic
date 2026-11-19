@@ -42,6 +42,22 @@ func TestCLIDispatchAndStartupPathFiltering(t *testing.T) {
 	}
 }
 
+func TestCLIVersionMatchesMygoConfig(t *testing.T) {
+	data, err := os.ReadFile("mygo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Version == "" || appVersion != config.Version {
+		t.Fatalf("appVersion = %q, mygo.json version = %q", appVersion, config.Version)
+	}
+}
+
 func TestCLIVersionAndHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := runCLIContext(context.Background(), []string{"version", "--json"}, &stdout, &stderr); code != 0 {
@@ -60,8 +76,10 @@ func TestCLIVersionAndHelp(t *testing.T) {
 	if code := runCLIContext(context.Background(), []string{"help", "compress"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help compress exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "--in-place") || !strings.Contains(stdout.String(), "--dry-run") {
-		t.Fatalf("compress help missing key flags: %s", stdout.String())
+	for _, want := range []string{"--in-place", "--dry-run", "--trash", "--no-recursive", "64–16384"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("compress help missing %q: %s", want, stdout.String())
+		}
 	}
 }
 
@@ -281,6 +299,124 @@ func TestCLICompressSingleCopyExplicitFileDirectoryDryRunAndInPlace(t *testing.T
 			t.Fatalf("missing nested output: %v", err)
 		}
 	})
+}
+
+func TestCLICompressTrashRequiresInPlace(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runCLIContext(context.Background(), []string{"compress", "--trash", "photo.jpg"}, &stdout, &stderr)
+	if code != 2 || strings.TrimSpace(stderr.String()) != "参数冲突：--trash 仅可与 --in-place 一起使用。" {
+		t.Fatalf("--trash without --in-place: exit=%d, stderr=%q", code, stderr.String())
+	}
+}
+
+func TestCLICompressTrashBackup(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	if err := saveFullSettings(settingsPath, appSettings{
+		presets:       defaultPresets(),
+		selected:      "均衡",
+		backupToTrash: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ZPIC_CONFIG_FILE", settingsPath)
+
+	originalTrashItem := cliTrashItem
+	defer func() { cliTrashItem = originalTrashItem }()
+	for _, tc := range []struct {
+		name       string
+		args       []string
+		wantBackup bool
+	}{
+		{name: "explicit trash", args: []string{"--trash"}, wantBackup: true},
+		{name: "inherits from settings", args: []string{"--settings", settingsPath}, wantBackup: true},
+		{name: "inherits from preset settings", args: []string{"--preset", "均衡"}, wantBackup: true},
+		{name: "explicit false overrides settings", args: []string{"--settings", settingsPath, "--trash=false"}},
+		{name: "in-place alone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "hero.jpg")
+			backup := filepath.Join(dir, "backup.jpg")
+			original := writeTestJPEG(t, src, 160, 120, 100)
+			trashCalls := 0
+			cliTrashItem = func(path string) error {
+				trashCalls++
+				if path != src {
+					t.Fatalf("trash path = %q, want %q", path, src)
+				}
+				if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, original) {
+					t.Fatalf("trash callback must see the original image: %v", err)
+				}
+				return os.Rename(path, backup)
+			}
+
+			args := append([]string{"compress", "--in-place", "-q", "35", "--json", src}, tc.args...)
+			var stdout, stderr bytes.Buffer
+			if code := runCLIContext(context.Background(), args, &stdout, &stderr); code != 0 {
+				t.Fatalf("compress exited %d: stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+			}
+			var report cliCompressReport
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Files) != 1 || !report.Files[0].Overwritten || report.Files[0].BackedUp != tc.wantBackup {
+				t.Fatalf("unexpected overwrite report: %+v", report)
+			}
+			if tc.wantBackup {
+				if data, err := os.ReadFile(backup); trashCalls != 1 || err != nil || !bytes.Equal(data, original) {
+					t.Errorf("expected one backup containing original bytes: calls=%d, err=%v", trashCalls, err)
+				}
+			} else if trashCalls != 0 {
+				t.Errorf("unexpected trash calls: %d", trashCalls)
+			}
+			if data, err := os.ReadFile(src); err != nil || len(data) >= len(original) || int64(len(data)) != report.Files[0].OutputBytes {
+				t.Errorf("expected compressed image at source: before=%d, after=%d, err=%v", len(original), len(data), err)
+			}
+		})
+	}
+}
+
+func TestCLICompressRejectsInvalidSettingsWithoutPreset(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"compress", "--in-place", "--settings", settingsPath, filepath.Join(dir, "hero.jpg")}
+	code := runCLIContext(context.Background(), args, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "读取设置失败") {
+		t.Fatalf("invalid --settings without --preset: exit=%d, stderr=%q", code, stderr.String())
+	}
+}
+
+func TestCLICompressNoRecursive(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	topImage := filepath.Join(root, "top.jpg")
+	writeTestJPEG(t, topImage, 160, 120, 100)
+	writeTestJPEG(t, filepath.Join(nested, "nested.jpg"), 160, 120, 100)
+	outDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"compress", "--no-recursive", "-q", "50", "-o", outDir, "--json", root}
+	if code := runCLIContext(context.Background(), args, &stdout, &stderr); code != 0 {
+		t.Fatalf("compress exited %d: stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var report cliCompressReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Total != 1 || report.Succeeded != 1 || len(report.Files) != 1 || report.Files[0].Input != topImage {
+		t.Fatalf("expected only the top-level image in the report: %+v", report)
+	}
+	entries, err := os.ReadDir(outDir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "top.jpg" || entries[0].IsDir() {
+		t.Fatalf("expected only top.jpg in output directory: entries=%v, err=%v", entries, err)
+	}
 }
 
 func TestCLICompressPresetAndValidationErrors(t *testing.T) {

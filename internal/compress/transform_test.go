@@ -199,6 +199,30 @@ func TestJPEGMetadataResizeLosslessAndSkipSnapshot(t *testing.T) {
 	}
 }
 
+func TestGrayscaleJPEGResizePreservesICC(t *testing.T) {
+	img := image.NewGray(image.Rect(0, 0, 128, 96))
+	for i := range img.Pix {
+		img.Pix[i] = uint8(i * 29)
+	}
+	icc := makeICCHeaderPayload("GRAY")
+	data := makeJPEGWithICCAndOrient(t, img, icc, 0)
+
+	res, err := Bytes(context.Background(), data, "gray.jpg", Options{Quality: 80, MaxDimension: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Width != 64 || res.Height != 48 || res.Unchanged {
+		t.Fatalf("expected resized 64x48 JPEG, got %dx%d unchanged=%v", res.Width, res.Height, res.Unchanged)
+	}
+	if components := jpegSOFComponents(res.Data); components != 1 {
+		t.Fatalf("resized JPEG has %d components, want 1", components)
+	}
+	segments, size := jpegICCSegments(res.Data)
+	if len(segments) != 1 || !bytes.Equal(segments[0], makeICCAPP2Segment(1, 1, icc)) {
+		t.Fatalf("resized JPEG did not retain the GRAY ICC profile: %d segments, %d bytes", len(segments), size)
+	}
+}
+
 func TestNativeLosslessMetadataConvertAndResize(t *testing.T) {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		t.Skip("bundled native PNG/WebP tools currently ship only for darwin/arm64")

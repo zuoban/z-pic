@@ -16,6 +16,81 @@ import (
 	"zpic/internal/compress"
 )
 
+func TestNewDesktopApplicationRestoresSettings(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv("ZPIC_CONFIG_FILE", settingsPath)
+	downloadDir := t.TempDir()
+	batchOutputDir := t.TempDir()
+	presets := []compressionPreset{{
+		name:    "启动测试预设",
+		quality: 57,
+		png:     compress.PNGOptions{MinQuality: 45, MaxQuality: 65, Colors: 128, Speed: 5},
+	}}
+	if err := saveFullSettings(settingsPath, appSettings{
+		presets:        presets,
+		selected:       presets[0].name,
+		batchOutputDir: batchOutputDir,
+		theme:          themeDark,
+		autoCompress:   true,
+		backupToTrash:  true,
+		downloadDir:    downloadDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newDesktopApplication()
+	if app.settingsFile != settingsPath || app.settingsError != "" {
+		t.Fatalf("startup settings: path=%q, error=%q", app.settingsFile, app.settingsError)
+	}
+	if app.effectiveThemeMode() != themeDark {
+		t.Errorf("startup theme = %q, want %q", app.effectiveThemeMode(), themeDark)
+	}
+	if app.scheme != presets[0].name || app.quality != presets[0].quality || app.png != presets[0].png || !slices.Equal(app.presets, presets) {
+		t.Errorf("startup preset: scheme=%q, quality=%v, png=%+v, presets=%+v", app.scheme, app.quality, app.png, app.presets)
+	}
+	if !app.autoCompress || !app.backupToTrash {
+		t.Errorf("startup options: autoCompress=%v, backupToTrash=%v", app.autoCompress, app.backupToTrash)
+	}
+	if app.downloadDir != downloadDir || app.batchOutputDir != batchOutputDir {
+		t.Errorf("startup directories: download=%q, batch output=%q", app.downloadDir, app.batchOutputDir)
+	}
+}
+
+func TestSingleDragFilenameUsesDefaultSuffix(t *testing.T) {
+	app := newApplication()
+	app.file = &selectedImage{path: "hero.jpg"}
+	app.output = presetSaveOptions{UseSuffix: true}
+	if got := app.singleDragFilename(); got != "hero-zpic.jpg" {
+		t.Fatalf("singleDragFilename() = %q, want hero-zpic.jpg", got)
+	}
+}
+
+func TestStageSingleDragFileRemovesPreviousSlot(t *testing.T) {
+	app := newApplication()
+	app.dragTempDir = t.TempDir()
+	app.result = &compress.Result{Format: "jpeg", Data: []byte("first result")}
+	first := app.stageSingleDragFile()
+	firstSlot := filepath.Dir(first)
+	if !strings.HasPrefix(filepath.Base(firstSlot), "export-") {
+		t.Fatalf("unexpected first staged path %q: %s", first, app.message)
+	}
+	if got := app.stageSingleDragFile(); got != first {
+		t.Fatalf("staging the same result returned %q, want %q", got, first)
+	}
+
+	app.result = &compress.Result{Format: "jpeg", Data: []byte("second result")}
+	second := app.stageSingleDragFile()
+	if second == "" || filepath.Dir(second) == firstSlot {
+		t.Fatalf("second result must use a new slot: first=%q, second=%q, message=%q", first, second, app.message)
+	}
+	if _, err := os.Stat(firstSlot); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("previous slot %q still exists or could not be checked: %v", firstSlot, err)
+	}
+	if data, err := os.ReadFile(second); err != nil || !bytes.Equal(data, app.result.Data) {
+		t.Errorf("second staged file: data=%q, err=%v", data, err)
+	}
+}
+
 func TestDragOutSingleStagingSavedReuseAndSelfDropGuard(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "hero.jpg")

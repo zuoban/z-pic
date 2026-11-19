@@ -9,11 +9,17 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func newDesktopApplication() *application {
+	app := newApplication()
+	app.restoreSettings()
+	return app
+}
+
 func main() {
 	if shouldRunCLI(os.Args[1:]) {
 		os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	app := newApplication()
+	app := newDesktopApplication()
 	mygo.Theme.SetSource(app.effectiveThemeMode().source())
 	var pendingOpenFiles []string
 	mygo.App.OnOpenFile(func(path string) {

@@ -112,11 +112,18 @@ z-pic compress -o ./dist --format webp --max-dim 1920 --metadata strip --json ./
 # 复用桌面预设并在内存中试算压缩率（不写入磁盘）
 z-pic compress --preset 均衡 --dry-run --json ./photos
 
-# 仅在体积减小时原子覆盖同格式原图（转为 WebP 时仍另存为 .webp）
-z-pic compress --in-place -q 80 ./images
+# 同格式图片体积减小时，先将原图移入废纸篓，再写入压缩结果
+z-pic compress --in-place --trash -q 80 ./images
+
+# 只压缩指定目录顶层的图片
+z-pic compress --no-recursive ./images
 ```
 
-退出码：`0` 全部成功、`1` 存在失败项或操作取消、`2` 参数或预设无效。
+`--max-dim` 接受 **64–16384** 像素，`0` 保留原尺寸。默认递归扫描目录，`--no-recursive` 只扫描每个指定目录的顶层。
+
+`--trash` 仅可与 `--in-place` 一起使用。原地覆盖同格式且体积减小的图片时，原图会先移入系统废纸篓，成功备份并覆盖的文件在 JSON 报告中带有 `backed_up: true`。转为 WebP 的图片仍另存为 `.webp`。搭配 `--preset` 或 `--settings` 时，原地覆盖会继承设置中的废纸篓备份偏好，可用 `--trash=false` 显式关闭。
+
+退出码 `0` 表示全部成功，`1` 表示有失败项或操作取消，`2` 表示参数、设置或预设无效。
 
 ## 开发
 

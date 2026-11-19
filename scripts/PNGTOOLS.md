@@ -41,37 +41,45 @@ for the shipped binary. Full transitive license texts are under `licenses/`.
 
 The script installs into `internal/pngtools/assets/<goos>_<goarch>/` and records
 versions, source commits, compiler, and binary SHA-256 in `manifest.json`.
-`embed.FS` automatically includes added native assets when the Go app is rebuilt.
-Only **darwin/arm64** assets ship initially. Other targets compile and fail with
-an actionable Chinese missing-bundle error; they do not use PATH or fall back
-to a Go encoder. Linux builds use the host's system C runtime and require native
-QA before distribution. Windows preparation is not automated by this shell
-script: use the same frozen sources and static features with a native Windows
-toolchain, place `oxipng.exe` and `pngquant.exe` under `assets/windows_<goarch>/`,
-and validate dependencies and execution before distribution.
+Each bundled target embeds its assets with `//go:embed` in
+`bundle_<goos>_<goarch>.go`. The checked-in bundle targets **darwin/arm64**.
+Other targets compile with `bundle_other.go` and report a Chinese error pointing
+to the preparation script when PNG tools are requested. To ship another target,
+add its bundle file and update the build constraint in `bundle_other.go`.
+Linux builds use the host's system C runtime and require native QA before
+distribution. For Windows, use the same frozen sources and static features with
+a native Windows toolchain, place `oxipng.exe` and `pngquant.exe` under
+`assets/windows_<goarch>/`, and validate dependencies and execution before distribution.
 
-Runtime commands (stdin/stdout contain raw PNG bytes):
+## Runtime commands
 
-- Oxipng: `-o 2 --threads 2 --stdout -`. Adds `--nx` only for inputs containing
-  `sBIT`, `bKGD`, or `hIST` so their payloads remain valid and retained.
-  Other inputs permit normal lossless representation/palette/interlace changes.
-  Never passes `--alpha`, `--scale16`, or a stripping option. Metadata can move
-  to a valid chunk position; ICC data may be losslessly recompressed.
-  Oxipng automatically strips byte-dependent `caBX` and `iDOT` chunks when
-  rewriting the file (confirmed in upstream `src/png/mod.rs`) so invalidated
-  signatures or offsets are never left in compressed output.
-- pngquant default: `--quality=65-85 --speed=3 --skip-if-larger --output - 256 -`.
-  The selected image-quality level supplies `--quality=<min>-<max>`,
-  `--speed=<speed>`, and the positional color cap. Valid ranges: minimum
-  0–100, target 1–100 with minimum <= target, colors 2–256, speed 1–11.
-  The all-zero options value uses the defaults; partially specified invalid
-  configurations fail before execution. The UI adjusts all PNG parameters with
-  image quality; presets and legacy custom values are documented in README.md.
-  There is no separate lossless mode.
-  Unsafe-to-copy chunks such as `caBX` and `iDOT` are dropped when writing the
-  quantized output.
-  Exit 98/99 discards stdout and returns the exact original input without error.
-  Caller then runs Optimize and validates dimensions/output PNG.
+Both tools read and write raw PNG bytes through stdin and stdout.
+
+- Oxipng uses `-o 2 --threads <n> --stdout -`. The default thread count is
+  half of `GOMAXPROCS`, rounded down and clamped to 1–4. Explicit counts are
+  capped at 8. With the default metadata policy, Oxipng adds `--nx` for inputs
+  containing `sBIT`, `bKGD`, or `hIST` to preserve those chunks. The keep-ICC
+  (`icc`) policy passes `--strip safe`, retaining color information such as
+  `iCCP`. The `strip` policy passes `--strip all`, which also removes `iCCP`.
+  Oxipng preserves decoded sample values, including invisible RGB and 16-bit
+  samples. Depending on the options, the palette or interlace can change
+  losslessly, metadata can move to a valid chunk position, and ICC profiles can
+  be losslessly recompressed. Oxipng drops byte-dependent `caBX` and `iDOT`
+  chunks when rewriting the file.
+- pngquant defaults to `--quality=65-85 --speed=3 --skip-if-larger --output - 256 -`.
+  The `strip` metadata policy adds `--strip`. The selected image-quality level
+  supplies `--quality=<min>-<max>`, `--speed=<speed>`, and the positional color
+  cap. Valid ranges are 0–100 for minimum quality, 1–100 for target quality
+  (at least the minimum), 2–256 colors, and 1–11 for speed. The all-zero
+  options value uses the defaults. Invalid partial configurations fail before
+  execution. The UI adjusts all PNG parameters with image quality. README.md
+  documents presets and legacy custom values.
+  pngquant drops unsafe-to-copy chunks such as `caBX` and `iDOT` when writing
+  quantized output. Exit codes 98 and 99 discard stdout and return the exact
+  original input without error. The caller then runs Oxipng and validates the
+  resulting PNG and its dimensions.
+
+PNG lossless mode runs only Oxipng.
 
 Each invocation stages and reuses the selected binary inside a content-addressed
 0700 cache directory under the user cache root (verifying permissions, size, and
@@ -80,9 +88,10 @@ when the user cache directory is unavailable). No shell or inherited PATH is
 used. Runtime is capped at two minutes per tool, stdout at 64 MiB + 1 sentinel
 byte (overflow cancels the process), and stored stderr at 32 KiB (excess drained).
 `CommandContext` propagates cancellation/deadline errors via wrapping;
-`WaitDelay=1s` bounds pipe cleanup. Successful outputs without savings return
-the original input. The caller validates PNG structure, dimensions, decoded
-pixels as appropriate, and the 32 MP input limit.
+`WaitDelay=1s` bounds pipe cleanup. Successful outputs without savings normally
+return the original input. When the metadata policy requires stripping, the
+caller accepts Oxipng output of equal or larger size. The caller validates PNG
+structure, dimensions, decoded pixels as appropriate, and the 32 MP input limit.
 
 Verify with `go test ./internal/pngtools -count=1`, `go test -race
 ./internal/pngtools`, and `go vet ./internal/pngtools`. Native integration tests
