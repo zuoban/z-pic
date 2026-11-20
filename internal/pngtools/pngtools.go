@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -74,11 +75,20 @@ func OptimizeWithOptions(ctx context.Context, data []byte, options OptimizeOptio
 	args := []string{"-o", "2", "--threads", threadStr}
 	switch options.Strip {
 	case StripSafe:
-		args = append(args, "--strip", "safe")
+		hasICC, err := hasMetadataChunk(ctx, data, "iCCP")
+		if err != nil {
+			return nil, err
+		}
+		if hasICC {
+			// Exclude sRGB to prevent Oxipng from replacing a recognized ICC profile.
+			args = append(args, "--keep", "cICP,iCCP,pHYs,acTL,fcTL,fdAT")
+		} else {
+			args = append(args, "--strip", "safe")
+		}
 	case StripAll:
 		args = append(args, "--strip", "all")
 	default:
-		representationMetadata, err := hasRepresentationMetadata(ctx, data)
+		representationMetadata, err := hasMetadataChunk(ctx, data, "sBIT", "bKGD", "hIST")
 		if err != nil {
 			return nil, err
 		}
@@ -174,9 +184,8 @@ func checkInput(ctx context.Context, data []byte) error {
 	return nil
 }
 
-// The caller validates PNG structure. Still bound every slice here so a bad
-// direct call cannot panic while looking for representation-dependent metadata.
-func hasRepresentationMetadata(ctx context.Context, data []byte) (bool, error) {
+// The caller validates PNG structure. Bound every slice for direct calls as well.
+func hasMetadataChunk(ctx context.Context, data []byte, names ...string) (bool, error) {
 	for offset := 8; offset <= len(data)-12; {
 		if err := ctx.Err(); err != nil {
 			return false, err
@@ -185,11 +194,12 @@ func hasRepresentationMetadata(ctx context.Context, data []byte) (bool, error) {
 		if size > uint64(len(data)-offset-12) {
 			return false, nil
 		}
-		switch string(data[offset+4 : offset+8]) {
-		case "sBIT", "bKGD", "hIST":
-			return true, nil
-		case "IEND":
+		chunkType := string(data[offset+4 : offset+8])
+		if chunkType == "IEND" {
 			return false, ctx.Err()
+		}
+		if slices.Contains(names, chunkType) {
+			return true, nil
 		}
 		offset += int(size) + 12
 	}

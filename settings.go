@@ -533,7 +533,7 @@ func (s *application) activeImagePaths() map[string]bool {
 
 func isCleanableDownloadImage(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".webp":
+	case ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif":
 		return true
 	default:
 		return false

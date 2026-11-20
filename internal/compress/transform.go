@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"math"
 
 	xdraw "golang.org/x/image/draw"
+
+	"zpic/internal/toolio"
 )
 
 const (
@@ -38,18 +42,21 @@ func (p MetadataPolicy) Validate() error {
 	}
 }
 
-// OutputFormat selects the output image container format.
-// The zero value preserves the input image format.
+// OutputFormat selects a JPEG, PNG, or WebP output container.
+// The zero value keeps the input format, with HEIC exported as PNG in lossless
+// mode and JPEG otherwise.
 type OutputFormat string
 
 const (
 	OutputFormatKeep OutputFormat = ""
+	OutputFormatJPEG OutputFormat = "jpeg"
+	OutputFormatPNG  OutputFormat = "png"
 	OutputFormatWebP OutputFormat = "webp"
 )
 
 func (f OutputFormat) Validate() error {
 	switch f {
-	case OutputFormatKeep, OutputFormatWebP:
+	case OutputFormatKeep, OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP:
 		return nil
 	default:
 		return fmt.Errorf("不支持的输出格式：%q", string(f))
@@ -94,9 +101,12 @@ func resizeImage(ctx context.Context, img image.Image, maxDim int) (image.Image,
 	}
 	dstBounds := image.Rect(0, 0, dstW, dstH)
 	var dst xdraw.Image
-	if _, isGray := img.(*image.Gray); isGray {
+	switch img.ColorModel() {
+	case color.GrayModel:
 		dst = image.NewGray(dstBounds)
-	} else {
+	case color.Gray16Model:
+		dst = image.NewGray16(dstBounds)
+	default:
 		dst = image.NewRGBA(dstBounds)
 	}
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, xdraw.Src, nil)
@@ -110,19 +120,35 @@ func encodeResizedPNG(ctx context.Context, img image.Image, colorChunks [][]byte
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
+	output := pngTransformOutput{ctx: ctx, limit: maxInputSize}
+	for _, chunk := range colorChunks {
+		output.limit -= len(chunk)
+	}
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
-	if err := encoder.Encode(&buf, img); err != nil {
+	if err := encoder.Encode(&output, img); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	raw := buf.Bytes()
-	if len(colorChunks) == 0 {
-		return raw, nil
+	return injectPNGChunksAfterIHDR(output.buf.Bytes(), colorChunks), nil
+}
+
+type pngTransformOutput struct {
+	ctx   context.Context
+	buf   toolio.BoundedBuffer
+	limit int
+}
+
+func (out *pngTransformOutput) Write(data []byte) (int, error) {
+	if err := out.ctx.Err(); err != nil {
+		return 0, err
 	}
-	return injectPNGChunksAfterIHDR(raw, colorChunks), nil
+	if len(data) > out.limit-out.buf.Len() {
+		return 0, fmt.Errorf("输出超过 64 MiB 限制")
+	}
+	out.buf.AppendBounded(nil, data, out.limit)
+	return len(data), nil
 }
 
 // extractPNGColorChunks returns raw display/color chunks (iCCP, sRGB, cICP, pHYs)
@@ -201,6 +227,15 @@ func extractJPEGICCProfile(data []byte, outputComponents int) []byte {
 }
 
 func extractPNGICCProfile(data []byte) []byte {
+	return extractPNGICCProfileForComponents(data, 3)
+}
+
+// extractPNGICCProfileForComponents reads a bounded iCCP profile for grayscale
+// or RGB output.
+func extractPNGICCProfileForComponents(data []byte, components int) []byte {
+	if components != 1 && components != 3 {
+		return nil
+	}
 	if len(data) < len(pngSignature)+12 || [8]byte(data[:8]) != pngSignature {
 		return nil
 	}
@@ -229,7 +264,7 @@ func extractPNGICCProfile(data []byte) []byte {
 				return nil
 			}
 			headerLen := min(40, len(icc))
-			if !compatibleICCColorSpace(icc[:headerLen], len(icc), 3) {
+			if !compatibleICCColorSpace(icc[:headerLen], len(icc), components) {
 				return nil
 			}
 			return icc
@@ -237,6 +272,31 @@ func extractPNGICCProfile(data []byte) []byte {
 		offset += 12 + int(size)
 	}
 	return nil
+}
+
+// buildPNGICCPChunk wraps a compatible profile in a complete PNG iCCP chunk.
+func buildPNGICCPChunk(icc []byte, components int) []byte {
+	if len(icc) == 0 || len(icc) > maxJPEGICCBytes || (components != 1 && components != 3) {
+		return nil
+	}
+	if !compatibleICCColorSpace(icc[:min(len(icc), 40)], len(icc), components) {
+		return nil
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("\x00\x00\x00\x00iCCP") // Length filled in after compression.
+	buf.WriteString("ICC Profile\x00\x00")  // Profile name and zlib compression method.
+	zw := zlib.NewWriter(&buf)
+	_, writeErr := zw.Write(icc)
+	if closeErr := zw.Close(); writeErr != nil || closeErr != nil {
+		return nil
+	}
+	chunk := buf.Bytes()
+	if len(chunk)+4 > maxJPEGICCBytes {
+		return nil
+	}
+	binary.BigEndian.PutUint32(chunk[:4], uint32(len(chunk)-8))
+	return binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
 }
 
 func extractWebPICCProfile(data []byte) []byte {

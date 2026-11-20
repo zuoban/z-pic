@@ -232,10 +232,12 @@ func cliMetadataName(policy compress.MetadataPolicy) string {
 }
 
 func cliFormatName(format compress.OutputFormat) string {
-	if format == compress.OutputFormatWebP {
-		return "webp"
+	switch format {
+	case compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP:
+		return string(format)
+	default:
+		return "keep"
 	}
-	return "keep"
 }
 
 func runCLIPresets(args []string, stdout, stderr io.Writer) int {
@@ -296,8 +298,8 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 			mode = "无损"
 		}
 		extras := []string{mode}
-		if entry.Format == "webp" {
-			extras = append(extras, "转为 WebP")
+		if entry.Format != "keep" {
+			extras = append(extras, presetOutputFormatLabel(compress.OutputFormat(entry.Format)))
 		}
 		if entry.MaxDimension > 0 {
 			extras = append(extras, fmt.Sprintf("长边 ≤ %d px", entry.MaxDimension))
@@ -324,8 +326,8 @@ func printCompressCLIHelp(w io.Writer) {
   -p, --preset <name>      使用已保存预设作为基础参数
       --settings <path>    指定设置 JSON 文件路径
   -q, --quality <1-100>    JPEG / WebP 质量并联动调整 PNG 量化参数
-      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，JPEG 使用 MozJPEG 无损优化，HEIC 输出 PNG）
-      --format <keep|webp> 输出格式（keep 保持原格式 / HEIC 转为 JPEG 或 PNG，webp 转为 WebP）
+      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，同格式 JPEG 无损优化；转换为 JPEG 仍有损）
+      --format <keep|jpeg|png|webp> 输出格式（jpeg 可用 jpg，keep 时 HEIC 转为 JPEG 或 PNG）
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
   -o, --output <path>      输出文件路径（单图）或输出目录（批量/多图）
@@ -391,10 +393,14 @@ func parseCLIOutputFormat(raw string) (compress.OutputFormat, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "keep":
 		return compress.OutputFormatKeep, nil
+	case "jpeg", "jpg":
+		return compress.OutputFormatJPEG, nil
+	case "png":
+		return compress.OutputFormatPNG, nil
 	case "webp":
 		return compress.OutputFormatWebP, nil
 	default:
-		return "", fmt.Errorf("无效的输出格式 %q（支持 keep / webp）", raw)
+		return "", fmt.Errorf("无效的输出格式 %q（支持 keep / jpeg / png / webp）", raw)
 	}
 }
 
@@ -460,7 +466,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.IntVar(&quality, "quality", 80, "quality 1-100")
 	fs.IntVar(&quality, "q", 80, "quality 1-100")
 	fs.BoolVar(&lossless, "lossless", false, "lossless compression")
-	fs.StringVar(&formatFlag, "format", "", "output format: keep|webp")
+	fs.StringVar(&formatFlag, "format", "", "output format: keep|jpeg|png|webp (jpg is an alias for jpeg)")
 	fs.IntVar(&maxDim, "max-dim", 0, "max long-edge dimension in pixels")
 	fs.StringVar(&metadataFlag, "metadata", "", "metadata policy: keep-all|keep-icc|strip")
 	fs.StringVar(&outputPath, "output", "", "output file or directory")

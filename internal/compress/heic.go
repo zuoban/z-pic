@@ -22,11 +22,13 @@ func SniffHEICHeader(head []byte) bool {
 	return heictools.SniffFTYP(head)
 }
 
-// ResolveOutputFormat returns the concrete container format produced for sourceFormat
-// under the given output format and lossless settings.
+// ResolveOutputFormat returns an explicit JPEG, PNG, or WebP choice as-is.
+// With OutputFormatKeep it preserves the source format, except HEIC is exported
+// as PNG in lossless mode and JPEG otherwise.
 func ResolveOutputFormat(sourceFormat string, outputFormat OutputFormat, lossless bool) string {
-	if outputFormat == OutputFormatWebP {
-		return "webp"
+	switch outputFormat {
+	case OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP:
+		return string(outputFormat)
 	}
 	if sourceFormat == "heic" {
 		if lossless {
@@ -147,8 +149,7 @@ func pngOrientation(data []byte) int {
 	return 1
 }
 
-// flattenAlphaForJPEG composites non-opaque images over white so transparent
-// HEIC inputs produce clean JPEG output rather than black or uninitialized RGB.
+// flattenAlphaForJPEG composites non-opaque images over white for JPEG output.
 func flattenAlphaForJPEG(ctx context.Context, img image.Image) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -172,17 +173,13 @@ func flattenAlphaForJPEG(ctx context.Context, img image.Image) (image.Image, err
 		for x := range w {
 			r, g, b, a := img.At(bounds.Min.X+x, sy).RGBA()
 			off := rowBase + x*4
-			if a == 0xffff {
-				out.Pix[off] = uint8(r >> 8)
-				out.Pix[off+1] = uint8(g >> 8)
-				out.Pix[off+2] = uint8(b >> 8)
-				out.Pix[off+3] = 0xff
-				continue
-			}
-			inv := 0xffff - a
-			out.Pix[off] = uint8((r + inv) >> 8)
-			out.Pix[off+1] = uint8((g + inv) >> 8)
-			out.Pix[off+2] = uint8((b + inv) >> 8)
+			// RGBA returns premultiplied channels. Clamp them to alpha so the
+			// composite over white cannot exceed 0xffff.
+			a = min(a, 0xffff)
+			white := 0xffff - a
+			out.Pix[off] = uint8((min(r, a) + white) >> 8)
+			out.Pix[off+1] = uint8((min(g, a) + white) >> 8)
+			out.Pix[off+2] = uint8((min(b, a) + white) >> 8)
 			out.Pix[off+3] = 0xff
 		}
 	}

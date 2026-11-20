@@ -14,26 +14,39 @@ import (
 )
 
 func TestResolveOutputFormat(t *testing.T) {
-	cases := []struct {
-		source   string
-		output   OutputFormat
-		lossless bool
-		want     string
+	sources := []struct {
+		format       string
+		keepLossy    string
+		keepLossless string
 	}{
-		{"jpeg", OutputFormatKeep, false, "jpeg"},
-		{"png", OutputFormatKeep, true, "png"},
-		{"webp", OutputFormatKeep, false, "webp"},
-		{"heic", OutputFormatKeep, false, "jpeg"},
-		{"heic", OutputFormatKeep, true, "png"},
-		{"heic", OutputFormatWebP, false, "webp"},
-		{"heic", OutputFormatWebP, true, "webp"},
-		{"png", OutputFormatWebP, false, "webp"},
+		{"jpeg", "jpeg", "jpeg"},
+		{"png", "png", "png"},
+		{"webp", "webp", "webp"},
+		{"heic", "jpeg", "png"},
 	}
-	for _, tc := range cases {
-		got := ResolveOutputFormat(tc.source, tc.output, tc.lossless)
-		if got != tc.want {
-			t.Errorf("ResolveOutputFormat(%q, %q, %v) = %q, want %q",
-				tc.source, tc.output, tc.lossless, got, tc.want)
+	outputs := []struct {
+		format OutputFormat
+		want   string
+	}{
+		{OutputFormatKeep, ""},
+		{OutputFormatJPEG, "jpeg"},
+		{OutputFormatPNG, "png"},
+		{OutputFormatWebP, "webp"},
+	}
+	for _, source := range sources {
+		for _, output := range outputs {
+			for _, lossless := range []bool{false, true} {
+				want := output.want
+				if output.format == OutputFormatKeep {
+					want = source.keepLossy
+					if lossless {
+						want = source.keepLossless
+					}
+				}
+				if got := ResolveOutputFormat(source.format, output.format, lossless); got != want {
+					t.Errorf("ResolveOutputFormat(%q, %q, %v) = %q, want %q", source.format, output.format, lossless, got, want)
+				}
+			}
 		}
 	}
 }

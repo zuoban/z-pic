@@ -737,28 +737,18 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			if s.backupToTrash {
 				warning = "缩小后的文件会先将原图移入废纸篓再替换，未减小则跳过。"
 			}
-			hasHEIC := false
-			for _, item := range s.batch.items {
-				if item.effectiveSourceFormat() == "heic" {
-					hasHEIC = true
-					break
-				}
-			}
-			if s.outputFormat == compress.OutputFormatWebP {
+			if ext := outputExtensionForFormat(string(s.outputFormat)); ext != "" {
+				warning = "同格式原图缩小后将直接替换，其他格式将在原文件夹另存为 " + ext + "。"
 				if s.backupToTrash {
-					warning = "原 WebP 缩小后会先移入废纸篓再替换，其他格式将在原文件夹另存为 .webp。"
-				} else {
-					warning = "原 WebP 缩小后将直接替换，其他格式将在原文件夹另存为 .webp。"
+					warning = "同格式原图缩小后会移入废纸篓再替换，其他格式将在原文件夹另存为 " + ext + "。"
 				}
-			} else if hasHEIC {
-				targetExt := ".jpg"
-				if s.lossless {
-					targetExt = ".png"
-				}
-				if s.backupToTrash {
-					warning = "同格式图片会先移入废纸篓再替换；HEIC 将在原文件夹另存为 " + targetExt + "。"
-				} else {
-					warning = "同格式图片缩小后直接替换；HEIC 将在原文件夹另存为 " + targetExt + "。"
+			} else {
+				for _, item := range s.batch.items {
+					if item.effectiveSourceFormat() == "heic" {
+						targetExt := outputExtensionForFormat(compress.ResolveOutputFormat("heic", s.outputFormat, s.lossless))
+						warning += "HEIC 将在原文件夹另存为 " + targetExt + "。"
+						break
+					}
 				}
 			}
 			ui.Text(c, warning).

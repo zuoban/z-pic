@@ -133,6 +133,47 @@ func TestJPEGExportNormalizesOrientation(t *testing.T) {
 	}
 }
 
+func TestPNGToWebPOrientationInOutputAndPreview(t *testing.T) {
+	requireWebPEncoder(t)
+	img := image.NewGray(image.Rect(0, 0, 80, 48))
+	levels := []uint8{30, 90, 150, 220}
+	for y := range 48 {
+		for x := range 80 {
+			img.SetGray(x, y, color.Gray{Y: levels[(y/24)*2+x/40]})
+		}
+	}
+	data := insertPNGChunk(pngFixture(t, img, png.DefaultCompression), "eXIf", exifTIFF(binary.LittleEndian, 6))
+	result, preview, err := BytesWithPreview(t.Context(), data, writeFixture(t, "oriented.png", data), Options{
+		Quality: 100, Lossless: true, OutputFormat: OutputFormatWebP, Metadata: MetadataKeepAll, Threads: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "webp" || result.Width != 48 || result.Height != 80 || result.Unchanged {
+		t.Fatalf("unexpected result: format=%s dimensions=%dx%d unchanged=%v", result.Format, result.Width, result.Height, result.Unchanged)
+	}
+	if webpHasChunk(result.Data, "EXIF") || webpOrientation(result.Data) != 1 {
+		t.Fatal("WebP retained the source orientation after rotating the pixels")
+	}
+	decoded, format, err := image.Decode(bytes.NewReader(result.Data))
+	if err != nil || format != "webp" {
+		t.Fatalf("decode converted output: format=%s err=%v", format, err)
+	}
+	points := []image.Point{{8, 8}, {39, 8}, {8, 71}, {39, 71}}
+	corners := []uint8{150, 30, 220, 90}
+	for name, output := range map[string]image.Image{"output": decoded, "preview": preview} {
+		if output == nil || output.Bounds().Dx() != 48 || output.Bounds().Dy() != 80 {
+			t.Fatalf("%s has incorrect dimensions", name)
+		}
+		for i, point := range points {
+			got := color.GrayModel.Convert(output.At(point.X, point.Y)).(color.Gray).Y
+			if delta := int(got) - int(corners[i]); delta < -2 || delta > 2 {
+				t.Fatalf("%s corner %d = %d, want %d", name, i, got, corners[i])
+			}
+		}
+	}
+}
+
 func TestOrientationFallbackReportsDisplayDimensions(t *testing.T) {
 	for _, orientation := range []uint16{2, 6} {
 		data := withEXIF(jpegFixture(t, 1), exifTIFF(binary.BigEndian, orientation))

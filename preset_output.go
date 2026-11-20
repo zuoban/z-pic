@@ -84,7 +84,7 @@ func (o presetSaveOptions) replacesFile(sourceFormat string, targetFormat compre
 	if sourceFormat == "heic" {
 		return false
 	}
-	if targetFormat == compress.OutputFormatWebP && sourceFormat != "" && sourceFormat != "webp" {
+	if targetFormat != compress.OutputFormatKeep && sourceFormat != "" && sourceFormat != string(targetFormat) {
 		return false
 	}
 	return o.replacesOriginal()
@@ -108,11 +108,30 @@ func replaceFilenameExtension(name string, targetFormat compress.OutputFormat) s
 }
 
 func replaceFilenameExtensionFor(name, sourceFormat string, targetFormat compress.OutputFormat, lossless bool) string {
-	if targetFormat == compress.OutputFormatWebP {
-		ext := filepath.Ext(name)
-		return strings.TrimSuffix(name, ext) + ".webp"
-	}
 	ext := filepath.Ext(name)
+	if targetFormat != compress.OutputFormatKeep {
+		if sourceFormat != "" && sourceFormat == string(targetFormat) {
+			return name
+		}
+		switch targetFormat {
+		case compress.OutputFormatJPEG:
+			if strings.EqualFold(ext, ".jpg") || strings.EqualFold(ext, ".jpeg") {
+				return name
+			}
+		case compress.OutputFormatPNG:
+			if strings.EqualFold(ext, ".png") {
+				return name
+			}
+		case compress.OutputFormatWebP:
+			if strings.EqualFold(ext, ".webp") {
+				return name
+			}
+		}
+		if newExt := outputExtensionForFormat(string(targetFormat)); newExt != "" {
+			return strings.TrimSuffix(name, ext) + newExt
+		}
+		return name
+	}
 	isHEIC := sourceFormat == "heic" || (sourceFormat == "" && (strings.EqualFold(ext, ".heic") || strings.EqualFold(ext, ".heif")))
 	if isHEIC {
 		resolved := compress.ResolveOutputFormat("heic", targetFormat, lossless)
@@ -225,13 +244,13 @@ func (s *application) savePresetResult() {
 		s.reportError(err, "保存失败")
 		return
 	}
-	targetFormat := compress.OutputFormatKeep
-	if s.result.Format == "webp" && s.file != nil && s.file.format != "webp" {
-		targetFormat = compress.OutputFormatWebP
-	}
 	sourceFormat := ""
 	if s.file != nil {
 		sourceFormat = s.file.format
+	}
+	targetFormat := compress.OutputFormatKeep
+	if s.result.Format != "" && sourceFormat != "" && s.result.Format != sourceFormat {
+		targetFormat = compress.OutputFormat(s.result.Format)
 	}
 	if o.replacesFile(sourceFormat, targetFormat) {
 		s.requestOverwrite()

@@ -350,6 +350,37 @@ func TestPNGQualityGateRefusalRemainsUsable(t *testing.T) {
 	}
 }
 
+func TestTransformedPNGStripsMetadataAndKeepsSRGBICC(t *testing.T) {
+	requireNativePNGTools(t)
+	profile, err := os.ReadFile("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skip("system sRGB ICC profile unavailable")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := samplePhotoImage(48, 36)
+	data := injectPNGChunksAfterIHDR(pngFixture(t, img, png.NoCompression), [][]byte{
+		buildPNGICCPChunk(profile, 3),
+		pngTestChunk("tEXt", []byte("Comment\x00private note")),
+		pngTestChunk("eXIf", exifTIFF(binary.LittleEndian, 1)),
+	})
+	out, stripped, err := compressPNG(t.Context(), data, image.Config{Width: 48, Height: 36}, Options{
+		Lossless: true,
+		Metadata: MetadataKeepICC,
+		Threads:  1,
+	}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stripped || pngHasChunk(out, "tEXt") || pngHasChunk(out, "eXIf") {
+		t.Fatal("transformed PNG must drop text and EXIF metadata")
+	}
+	if got := extractPNGICCProfile(out); !bytes.Equal(got, profile) || pngHasChunk(out, "sRGB") {
+		t.Fatalf("transformed PNG must retain the original ICC profile: got %d bytes, want %d", len(got), len(profile))
+	}
+}
+
 func pngHasChunk(data []byte, target string) bool {
 	for offset := 8; offset <= len(data)-12; {
 		chunkSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))

@@ -465,9 +465,16 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				s.imageResultSummary(c, "压缩结果")
 			}
 			s.singleOutputSummary(c)
-			if s.file != nil && s.file.format == "png" && !s.lossless && s.outputFormat != compress.OutputFormatWebP {
-				ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
-					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+			if s.file != nil {
+				resolvedFmt := compress.ResolveOutputFormat(s.file.format, s.outputFormat, s.lossless)
+				switch {
+				case resolvedFmt == "png" && !s.lossless:
+					ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
+						FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+				case resolvedFmt == "jpeg" && s.file.format != "jpeg":
+					ui.Text(c, "转为 JPEG 时透明区域将自动填充白色背景").
+						FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+				}
 			}
 		}
 		if mobile {
@@ -590,8 +597,8 @@ func (s *application) singleReplacesOriginal() bool {
 		sourceFormat = s.file.format
 	}
 	targetFormat := s.outputFormat
-	if s.result != nil && s.result.Format == "webp" && sourceFormat != "" && sourceFormat != "webp" {
-		targetFormat = compress.OutputFormatWebP
+	if s.result != nil && s.result.Format != "" && sourceFormat != "" && s.result.Format != sourceFormat {
+		targetFormat = compress.OutputFormat(s.result.Format)
 	}
 	return s.output.replacesFile(sourceFormat, targetFormat)
 }
@@ -686,7 +693,11 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 			}
 		}
 		ui.Text(c, description).FontSize(13).FontWeight(500).TextColor(color).MaxLines(2).Tooltip(description)
-		outputFilenamePreviewForResolved(c, s.output, name, sourceFormat, s.outputFormat, s.lossless, replaces)
+		previewFormat := s.outputFormat
+		if s.result != nil && s.result.Format != "" {
+			previewFormat = compress.OutputFormat(s.result.Format)
+		}
+		outputFilenamePreviewForResolved(c, s.output, name, sourceFormat, previewFormat, s.lossless, replaces)
 	})
 }
 

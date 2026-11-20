@@ -47,10 +47,23 @@ func presetMetadataLabel(policy compress.MetadataPolicy) string {
 	}
 }
 
+func presetOutputFormatLabel(format compress.OutputFormat) string {
+	switch format {
+	case compress.OutputFormatJPEG:
+		return "转为 JPEG"
+	case compress.OutputFormatPNG:
+		return "转为 PNG"
+	case compress.OutputFormatWebP:
+		return "转为 WebP"
+	default:
+		return "保持原格式"
+	}
+}
+
 func presetProcessingSummary(preset compressionPreset) string {
 	var parts []string
-	if preset.outputFormat == compress.OutputFormatWebP {
-		parts = append(parts, "转为 WebP")
+	if preset.outputFormat != compress.OutputFormatKeep {
+		parts = append(parts, presetOutputFormatLabel(preset.outputFormat))
 	}
 	if preset.maxDimension > 0 {
 		parts = append(parts, fmt.Sprintf("长边 ≤ %dpx", preset.maxDimension))
@@ -254,7 +267,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			ui.Box(c).Grow(1)
 			if ui.Checkbox(c.Key("preset-lossless"), &preset.lossless, "无损").
 				FontSize(settingsFontSize(c, 12)).Disabled(locked).
-				Tooltip("PNG 仅执行 Oxipng 无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化").Changed() {
+				Tooltip("PNG 和 WebP 无损处理；JPEG 原图无损优化，其他格式转 JPEG 仍有损").Changed() {
 				s.editor.message = ""
 			}
 			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
@@ -264,7 +277,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 		description := fmt.Sprintf("JPEG / WebP 质量 %.0f；PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", preset.quality,
 			preset.png.MinQuality, preset.png.MaxQuality, preset.png.Colors)
 		if preset.lossless {
-			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化霍夫曼表与渐进扫描。"
+			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，同格式 JPEG 使用 MozJPEG 无损优化；转为 JPEG 仍有损。"
 		} else if presetQualityLabel(*preset) == "自定义质量" {
 			description = "已保留自定义参数；调整滑块后将使用对应档位。" + description
 		}
@@ -306,9 +319,9 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			s.editQualityLevel(int(math.Round(value)))
 		}
 		if preset.lossless {
-			note := "PNG 仅执行 Oxipng 像素无损优化，WebP 使用无损编码，JPEG 使用 MozJPEG 无损优化。"
+			note := "PNG、WebP 与同格式 JPEG 无损处理；转换为 JPEG 仍有损。"
 			if compress.SupportsHEIC() {
-				note = "PNG 仅执行 Oxipng 像素无损优化，WebP 无损，JPEG 无损优化，HEIC 输出无损 PNG。"
+				note = "PNG、WebP 与同格式 JPEG 无损处理；保持原格式时 HEIC 输出无损 PNG，转换为 JPEG 仍有损。"
 			}
 			ui.Text(c, note).
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
@@ -342,31 +355,37 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 		// Output format
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
 			ui.Text(c, "输出格式").FontSize(settingsFontSize(c, 13)).FontWeight(500)
-			fmtIdx := 0
-			if preset.outputFormat == compress.OutputFormatWebP {
-				fmtIdx = 1
+			formats := [...]compress.OutputFormat{
+				compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
 			}
-			seg := settingsSegments(c, "preset-output-format", "输出格式", &fmtIdx, locked, "保持原格式", "转为 WebP").FillWidth()
-			s.focusSettingsField(seg, "preset-output-format")
-			if seg.Changed() {
-				if fmtIdx == 1 {
-					preset.outputFormat = compress.OutputFormatWebP
-				} else {
-					preset.outputFormat = compress.OutputFormatKeep
+			fmtIdx := 0
+			for i, format := range formats {
+				if preset.outputFormat == format {
+					fmtIdx = i
+					break
 				}
+			}
+			seg := settingsSegments(c, "preset-output-format", "输出格式", &fmtIdx, locked, "保持原格式", "转为 JPEG", "转为 PNG", "转为 WebP").FillWidth()
+			s.focusSettingsField(seg, "preset-output-format")
+			if seg.Changed() && fmtIdx >= 0 && fmtIdx < len(formats) {
+				preset.outputFormat = formats[fmtIdx]
 				s.editor.message = ""
 			}
-			if preset.outputFormat == compress.OutputFormatWebP {
-				note := "将 JPEG / PNG 转换为 .webp；原文件不会被覆盖。"
+			var note string
+			switch preset.outputFormat {
+			case compress.OutputFormatJPEG:
+				note = "透明区域填充白色；转换为 JPEG 有损且保留原文件，同格式图片可覆盖。"
+			case compress.OutputFormatPNG:
+				note = "转换为 PNG 时保留原文件，同格式图片可覆盖。"
+			case compress.OutputFormatWebP:
+				note = "转换为 WebP 时保留原文件，同格式图片可覆盖。"
+			default:
+				note = "JPEG / PNG / WebP 保持原格式。"
 				if compress.SupportsHEIC() {
-					note = "将 JPEG / PNG / HEIC 转换为 .webp；原文件不会被覆盖。"
+					note = "HEIC 自动转为 JPEG（无损时为 PNG），并保留原文件。"
 				}
-				ui.Text(c, note).
-					FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
-			} else if compress.SupportsHEIC() {
-				ui.Text(c, "JPEG / PNG / WebP 保持原格式；HEIC 将自动转为 JPEG（无损时转为 PNG）。").
-					FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 			}
+			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
 		// Max dimension downscale
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -422,7 +441,7 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			case compress.MetadataStrip:
 				metaNote = "移除全部元数据与色彩配置，以换取最小体积。"
 			default:
-				metaNote = "PNG 与 WebP 保留原元数据；JPEG 仅保留兼容色彩配置并校正方向。"
+				metaNote = "同格式 PNG 与 WebP 保留元数据；转换格式时保留兼容色彩配置并校正方向。"
 			}
 			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).MaxLines(2)
 		})
@@ -456,8 +475,9 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 		})
 		if options.replacesOriginal() {
 			warning := presetSaveDescription(*options)
-			if preset.outputFormat == compress.OutputFormatWebP {
-				warning = "当前设置将替换原 WebP 文件；JPEG / PNG 将在原文件夹另存为 .webp"
+			if preset.outputFormat != compress.OutputFormatKeep {
+				format := strings.TrimPrefix(presetOutputFormatLabel(preset.outputFormat), "转为 ")
+				warning = fmt.Sprintf("同格式 %s 文件缩小后将被替换；其他格式另存为 %s", format, outputExtensionForFormat(string(preset.outputFormat)))
 			}
 			ui.Text(c, warning).FontSize(settingsFontSize(c, 12)).
 				TextColor(t.Danger).FillWidth().MaxLines(2)

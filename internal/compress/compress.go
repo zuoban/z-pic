@@ -1,5 +1,6 @@
-// Package compress compresses static JPEG, PNG and WebP images without scaling.
-// JPEG pixels are normalized to their EXIF display orientation.
+// Package compress compresses static JPEG, PNG, and WebP images, and accepts
+// HEIC/HEIF input on macOS. Re-encoding into JPEG, PNG, or WebP can normalize
+// EXIF orientation and downscale to a configured long edge.
 package compress
 
 import (
@@ -8,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
-	_ "image/png" // Register the PNG decoder; encoding is handled by native tools.
+	_ "image/png" // Register the PNG decoder.
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	_ "golang.org/x/image/webp"
@@ -33,9 +36,9 @@ const (
 type Options struct {
 	Quality               int // JPEG and WebP quality in [1, 100].
 	PNG                   PNGOptions
-	Lossless              bool           // PNG: Oxipng only; WebP: cwebp -lossless; JPEG: MozJPEG jpegtran lossless optimization (retains original if not bundled).
+	Lossless              bool           // PNG: Oxipng only. WebP: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
 	Metadata              MetadataPolicy // "", "icc", or "strip".
-	OutputFormat          OutputFormat   // "" (preserve) or "webp".
+	OutputFormat          OutputFormat   // "" (keep), "jpeg", "png", or "webp".
 	MaxDimension          int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
 	Threads               int            // Optional native encoder thread cap; <= 0 selects automatic default.
 	SkipOverwriteSnapshot bool           // Skip SHA-256 overwrite snapshot when caller only writes copies.
@@ -67,9 +70,9 @@ type Result struct {
 	snapshot     *overwriteSnapshot // Non-nil only for a validated File/Bytes result unless skipped.
 }
 
-// File reads and compresses an image. Quality must be in [1, 100], including
-// for PNG inputs. PNG's zero value uses the balanced quantization defaults.
-// Decoding and JPEG encoding check cancellation on reads/writes.
+// File reads an image and compresses it into the selected output format.
+// Quality must be in [1, 100]. The zero PNGOptions value uses the balanced
+// quantization defaults. Decoding and Go encoding check cancellation on reads/writes.
 // Native PNG/WebP processes are canceled with ctx.
 func File(ctx context.Context, path string, options Options) (*Result, error) {
 	sourcePath, err := validateRequest(ctx, path, options)
@@ -238,12 +241,15 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	}
 	sourceFormat := format
 	targetFormat := ResolveOutputFormat(sourceFormat, options.OutputFormat, options.Lossless)
+	converting := targetFormat != sourceFormat
+	if converting && sourceFormat == "png" {
+		sourceOrient = pngOrientation(data)
+	}
 	width, height := config.Width, config.Height
 	if sourceOrient >= 5 && sourceOrient <= 8 {
 		width, height = height, width
 	}
 	_, _, needsResize := resizedDimensions(width, height, options.MaxDimension)
-	converting := targetFormat != sourceFormat
 	transforming := converting || needsResize
 	forcedOutput := false
 
@@ -351,7 +357,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 		}
 	case "jpeg":
-		if options.Lossless && !needsResize {
+		if options.Lossless && !transforming {
 			if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 				if cancelErr := ctx.Err(); cancelErr != nil {
 					return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
@@ -432,12 +438,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			var iccSegments [][]byte
 			var iccBytes int
 			if options.Metadata != MetadataStrip {
-				if sourceFormat == "heic" {
-					if icc := extractPNGICCProfile(pixelSource); len(icc) > 0 {
-						iccSegments, iccBytes = buildJPEGICCSegments(icc, outputComponents)
-					}
-				} else {
+				switch sourceFormat {
+				case "jpeg":
 					iccSegments, iccBytes = jpegCompatibleICCSegments(data, outputComponents)
+				case "png", "heic":
+					icc := extractPNGICCProfileForComponents(pixelSource, outputComponents)
+					iccSegments, iccBytes = buildJPEGICCSegments(icc, outputComponents)
+				case "webp":
+					iccSegments, iccBytes = buildJPEGICCSegments(extractWebPICCProfile(data), outputComponents)
 				}
 			}
 			mustStrip := !converting && options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
@@ -464,7 +472,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 						Quality:        options.Quality,
 						MaxOutputBytes: maxOut,
 					})
-					if errors.Is(err, jpegtools.ErrNoSavings) {
+					if stopOnDiscard && errors.Is(err, jpegtools.ErrNoSavings) {
 						err = nil
 						encoded = data
 					} else if err == nil {
@@ -507,7 +515,8 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	default: // png
 		pngInput := pixelSource
 		pngConfig := config
-		needsPNGReencode := needsResize || (converting && sourceOrient > 1)
+		needsPNGReencode := sourceFormat == "jpeg" || sourceFormat == "webp" ||
+			needsResize || (converting && sourceOrient > 1)
 		if needsPNGReencode {
 			var decoded image.Image
 			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
@@ -525,7 +534,25 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 			var colorChunks [][]byte
 			if options.Metadata != MetadataStrip {
-				colorChunks = extractPNGColorChunks(pixelSource)
+				switch sourceFormat {
+				case "png", "heic":
+					colorChunks = extractPNGColorChunks(pixelSource)
+				case "jpeg", "webp":
+					components := 3
+					switch resized.ColorModel() {
+					case color.GrayModel, color.Gray16Model:
+						components = 1
+					}
+					var icc []byte
+					if sourceFormat == "jpeg" {
+						icc = extractJPEGICCProfile(data, components)
+					} else {
+						icc = extractWebPICCProfile(data)
+					}
+					if chunk := buildPNGICCPChunk(icc, components); len(chunk) > 0 {
+						colorChunks = [][]byte{chunk}
+					}
+				}
 			}
 			pngInput, err = encodeResizedPNG(ctx, resized, colorChunks)
 			if err != nil {
@@ -540,7 +567,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			forcedOutput = true
 		}
 		var stripped bool
-		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, converting || needsResize)
+		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, transforming)
 		if err == nil && len(encoded) > maxInputSize {
 			err = fmt.Errorf("输出超过 64 MiB 限制")
 		}
@@ -608,8 +635,12 @@ func jpegCopyMode(policy MetadataPolicy) jpegtools.CopyMode {
 	}
 }
 
-func compressPNG(ctx context.Context, data []byte, config image.Config, options Options, preview *image.Image, resized bool) ([]byte, bool, error) {
+func compressPNG(ctx context.Context, data []byte, config image.Config, options Options, preview *image.Image, transformed bool) ([]byte, bool, error) {
 	candidate := data
+	var colorChunks [][]byte
+	if transformed && options.Metadata != MetadataStrip {
+		colorChunks = extractPNGColorChunks(data)
+	}
 	var quantized []byte
 	if !options.Lossless {
 		var err error
@@ -617,7 +648,9 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 		if err != nil {
 			return nil, false, err
 		}
-		if len(quantized) < len(candidate) {
+		// pngquant can convert profiled pixels to sRGB and discard their ICC.
+		if len(quantized) < len(candidate) &&
+			(len(colorChunks) == 0 || slices.EqualFunc(colorChunks, extractPNGColorChunks(quantized), bytes.Equal)) {
 			candidate = quantized
 		}
 	}
@@ -642,7 +675,7 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 	if mustStrip || len(optimized) < len(candidate) {
 		candidate = optimized
 	}
-	if !resized && !mustStrip && sameBytesBacking(candidate, data) {
+	if !transformed && !mustStrip && sameBytesBacking(candidate, data) {
 		if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
 			return nil, false, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 		}

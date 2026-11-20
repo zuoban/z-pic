@@ -59,8 +59,10 @@ Both tools read and write raw PNG bytes through stdin and stdout.
   half of `GOMAXPROCS`, rounded down and clamped to 1–4. Explicit counts are
   capped at 8. With the default metadata policy, Oxipng adds `--nx` for inputs
   containing `sBIT`, `bKGD`, or `hIST` to preserve those chunks. The keep-ICC
-  (`icc`) policy passes `--strip safe`, retaining color information such as
-  `iCCP`. The `strip` policy passes `--strip all`, which also removes `iCCP`.
+  (`icc`) policy passes `--strip safe` for PNGs without `iCCP`. When `iCCP`
+  is present, it passes `--keep cICP,iCCP,pHYs,acTL,fcTL,fdAT` to preserve the
+  embedded profile, including recognized sRGB profiles. The `strip` policy
+  passes `--strip all`, which also removes `iCCP`.
   Oxipng preserves decoded sample values, including invisible RGB and 16-bit
   samples. Depending on the options, the palette or interlace can change
   losslessly, metadata can move to a valid chunk position, and ICC profiles can
