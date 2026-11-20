@@ -285,6 +285,11 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 					ui.Text(c, item.relPath).FontSize(13).FontWeight(500).
 						TextColor(t.Text).SingleLine().TruncateMiddle().
 						Width(0).Grow(1).Tooltip(item.path)
+					if item.status == batchDone && item.targetSizeMissed {
+						ui.Badge(c, "未达目标").Shrink(0).TextColor(t.Warning).
+							Background(statusTintSurface(c, t.Warning)).
+							Tooltip("目标体积 ≤ " + compress.FormatTargetSize(item.targetSizeBytes))
+					}
 					badge := ui.Text(c, statusText).FontSize(12).FontWeight(500).
 						FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
 					if item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize {
@@ -817,6 +822,9 @@ func (s *application) batchResultSummary(c *ui.Context) {
 			} else {
 				parts = append(parts, fmt.Sprintf("%d 张未减小保持原样", unchanged))
 			}
+		}
+		if missed := s.batch.cachedStats.targetSizeMissed; missed > 0 {
+			parts = append(parts, fmt.Sprintf("%d 张未达目标体积", missed))
 		}
 		note = strings.Join(parts, " · ")
 	}

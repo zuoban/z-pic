@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -67,6 +68,9 @@ func presetProcessingSummary(preset compressionPreset) string {
 	}
 	if preset.maxDimension > 0 {
 		parts = append(parts, fmt.Sprintf("长边 ≤ %dpx", preset.maxDimension))
+	}
+	if preset.targetSizeBytes > 0 {
+		parts = append(parts, "体积 ≤ "+compress.FormatTargetSize(preset.targetSizeBytes))
 	}
 	if preset.metadata != compress.MetadataKeepAll {
 		parts = append(parts, presetMetadataLabel(preset.metadata))
@@ -414,6 +418,7 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			ui.Text(c, "仅缩小超过上限的图片，保持原比例不放大。").
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
+		s.presetTargetSizeSection(c, preset)
 		// Metadata policy
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
 			ui.Text(c, "元数据").FontSize(settingsFontSize(c, 13)).FontWeight(500)
@@ -445,6 +450,64 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			}
 			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).MaxLines(2)
 		})
+	})
+}
+
+func (s *application) presetTargetSizeSection(c *ui.Context, preset *compressionPreset) {
+	editor := s.editor
+	text := &editor.targetSizeTexts[editor.selected]
+	_, problem := compress.ParseTargetSize(*text)
+	locked := s.settingsDraftLocked()
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
+		limit := "不限制"
+		if preset.targetSizeBytes > 0 {
+			limit = "≤ " + compress.FormatTargetSize(preset.targetSizeBytes)
+		}
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "目标体积").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
+			ui.Text(c, limit).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
+		})
+		sizes := [...]int64{0, 200 << 10, 500 << 10, 1 << 20, 2 << 20}
+		choice := -1
+		if problem == nil {
+			choice = slices.Index(sizes[:], preset.targetSizeBytes)
+		}
+		seg := settingsSegments(c, "preset-target-size", "目标体积", &choice, locked,
+			"不限", "200 KiB", "500 KiB", "1 MiB", "2 MiB").FillWidth()
+		s.focusSettingsField(seg, "preset-target-size")
+		if seg.Changed() && choice >= 0 && choice < len(sizes) {
+			preset.targetSizeBytes = sizes[choice]
+			*text = compress.FormatTargetSize(preset.targetSizeBytes)
+			problem = nil
+			editor.message = ""
+		}
+		var input ui.Element
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			label := ui.Text(c, "自定义上限").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
+			input = ui.TextInput(c.Key("preset-target-size-input"), text).LabelledBy(label).
+				Placeholder("如 300KB / 1.5MiB").Width(settingsFontSize(c, 168)).Height(settingsControlHeight(c, 32)).
+				FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+			styleGlassField(input, c, 32)
+			s.focusSettingsField(input, "preset-target-size-input")
+			if input.Changed() {
+				var size int64
+				size, problem = compress.ParseTargetSize(*text)
+				if problem == nil {
+					preset.targetSizeBytes = size
+				}
+				editor.message = ""
+			}
+		})
+		if problem != nil {
+			danger := c.Theme().Danger
+			input.Invalid(true).Border(1, danger).ErrorMessage(ui.Text(c, problem.Error()).
+				FontSize(settingsFontSize(c, 12)).TextColor(danger).FillWidth().MaxLines(2))
+		}
+		note := "超出上限时自动降低 JPEG / WebP 质量或 PNG 色彩档位逼近目标；留空表示不限制。"
+		if preset.lossless {
+			note = "无损模式下不会降低画质；若结果仍超出目标体积，完成后会给出提示。"
+		}
+		ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 	})
 }
 

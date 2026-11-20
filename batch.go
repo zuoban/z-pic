@@ -52,24 +52,26 @@ const (
 )
 
 type batchItem struct {
-	path         string
-	absPath      string
-	relPath      string
-	sourceDir    string
-	sourceBase   string
-	prefixedDir  bool
-	sourceFormat string
-	format       string
-	width        int
-	height       int
-	originalSize int64
-	outputSize   int64
-	status       batchStatus
-	unchanged    bool
-	overwritten  bool
-	invalidInput bool
-	savedPath    string
-	errMsg       string
+	path             string
+	absPath          string
+	relPath          string
+	sourceDir        string
+	sourceBase       string
+	prefixedDir      bool
+	sourceFormat     string
+	format           string
+	width            int
+	height           int
+	originalSize     int64
+	outputSize       int64
+	status           batchStatus
+	unchanged        bool
+	targetSizeMissed bool
+	targetSizeBytes  int64
+	overwritten      bool
+	invalidInput     bool
+	savedPath        string
+	errMsg           string
 }
 
 func (item batchItem) effectiveSourceFormat() string {
@@ -119,26 +121,28 @@ type batchNameKey struct {
 }
 
 type batchItemSnapshot struct {
-	relPath      string
-	originalSize int64
-	outputSize   int64
-	status       batchStatus
-	unchanged    bool
-	invalidInput bool
+	relPath          string
+	originalSize     int64
+	outputSize       int64
+	status           batchStatus
+	unchanged        bool
+	targetSizeMissed bool
+	invalidInput     bool
 }
 
 type batchStatsSummary struct {
-	total           int
-	pending         int
-	done            int
-	failed          int
-	retryableFailed int
-	invalidFailed   int
-	unchangedDone   int
-	origTotal       int64
-	outTotal        int64
-	doneOrigTotal   int64
-	canRun          bool
+	total            int
+	pending          int
+	done             int
+	failed           int
+	retryableFailed  int
+	invalidFailed    int
+	unchangedDone    int
+	targetSizeMissed int
+	origTotal        int64
+	outTotal         int64
+	doneOrigTotal    int64
+	canRun           bool
 }
 
 type batchScanResult struct {
@@ -158,18 +162,20 @@ type batchTask struct {
 }
 
 type batchItemUpdate struct {
-	index        int
-	status       batchStatus
-	format       string
-	width        int
-	height       int
-	originalSize int64
-	outputSize   int64
-	unchanged    bool
-	overwritten  bool
-	savedPath    string
-	errMsg       string
-	advanceDone  bool
+	index            int
+	status           batchStatus
+	format           string
+	width            int
+	height           int
+	originalSize     int64
+	outputSize       int64
+	unchanged        bool
+	targetSizeMissed bool
+	targetSizeBytes  int64
+	overwritten      bool
+	savedPath        string
+	errMsg           string
+	advanceDone      bool
 }
 
 var errBatchLimit = errors.New("已达到单次批处理数量上限")
@@ -414,6 +420,7 @@ func resetBatchItemState(item *batchItem) bool {
 	item.status = batchPending
 	item.outputSize = 0
 	item.unchanged = false
+	item.targetSizeMissed, item.targetSizeBytes = false, 0
 	item.overwritten = false
 	item.savedPath = ""
 	item.errMsg = ""
@@ -702,6 +709,7 @@ func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 	}
 	item.outputSize = update.outputSize
 	item.unchanged = update.unchanged
+	item.targetSizeMissed, item.targetSizeBytes = update.targetSizeMissed, update.targetSizeBytes
 	item.overwritten = update.overwritten
 	item.savedPath = update.savedPath
 	item.errMsg = update.errMsg

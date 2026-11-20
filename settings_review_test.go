@@ -19,6 +19,13 @@ func settingsReviewApplication(t *testing.T, scene string) *application {
 	t.Helper()
 	app := newApplication()
 	app.presets, app.scheme = testLegacyPresets(), "均衡"
+	if scene == "many-presets" {
+		for index := range 16 {
+			preset := app.presets[1]
+			preset.name = fmt.Sprintf("项目图片 %02d", index+1)
+			app.presets = append(app.presets, preset)
+		}
+	}
 	app.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	app.setSettingsOpen(true)
 	if scene == "general" || scene == "general-large-text" {
@@ -39,11 +46,6 @@ func settingsReviewApplication(t *testing.T, scene string) *application {
 		app.editor.selectedPreset().name = strings.Repeat("项目", 20)
 		app.requestDeletePreset()
 	case "many-presets":
-		for index := range 16 {
-			preset := app.presets[1]
-			preset.name = fmt.Sprintf("项目图片 %02d", index+1)
-			app.editor.presets = append(app.editor.presets, preset)
-		}
 		app.editor.selected = len(app.editor.presets) - 1
 	case "dirty":
 		app.editQualityLevel(4)

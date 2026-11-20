@@ -252,6 +252,8 @@ func saveBatchOutcomeWithBackup(task batchTask, outcome batchCompressionOutcome,
 	}
 	update.format, update.width, update.height = result.Format, result.Width, result.Height
 	update.originalSize, update.outputSize, update.unchanged = result.OriginalSize, outputSize, unchanged
+	update.targetSizeBytes = result.TargetSizeBytes
+	update.targetSizeMissed = result.TargetSizeBytes > 0 && outputSize > result.TargetSizeBytes
 	update.status = batchDone
 	return update
 }

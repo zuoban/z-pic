@@ -128,10 +128,13 @@ func TestDuplicatePresetUniqueNames(t *testing.T) {
 			application := newApplication()
 			openTestSettings(t, application)
 			application.addPreset()
+			sourceIndex := application.editor.selected
 			application.editor.selectedPreset().name = scenario.source
 			for _, name := range scenario.conflicts {
-				application.editor.presets = append(application.editor.presets, compressionPreset{name: name})
+				application.addPreset()
+				application.editor.selectedPreset().name = name
 			}
+			application.editor.selected = sourceIndex
 			application.duplicatePreset()
 			actual := application.editor.selectedPreset().name
 			if actual != scenario.expected || !utf8.ValidString(actual) || utf8.RuneCountInString(actual) > 40 {

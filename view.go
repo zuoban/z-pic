@@ -580,14 +580,15 @@ func (s *application) workFeedback(c *ui.Context) {
 
 func (s *application) activePresetSnapshot() compressionPreset {
 	return compressionPreset{
-		name:         s.scheme,
-		quality:      s.quality,
-		png:          s.png,
-		lossless:     s.lossless,
-		metadata:     s.metadata,
-		outputFormat: s.outputFormat,
-		maxDimension: s.maxDimension,
-		output:       s.output,
+		name:            s.scheme,
+		quality:         s.quality,
+		png:             s.png,
+		lossless:        s.lossless,
+		metadata:        s.metadata,
+		outputFormat:    s.outputFormat,
+		maxDimension:    s.maxDimension,
+		targetSizeBytes: s.targetSizeBytes,
+		output:          s.output,
 	}
 }
 
@@ -762,6 +763,11 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 				(s.result.Width != s.file.width || s.result.Height != s.file.height) {
 				notes = append(notes, fmt.Sprintf("%d × %d → %d × %d", s.file.width, s.file.height, s.result.Width, s.result.Height))
 			}
+		}
+		if s.result.TargetSizeMissed {
+			notes = append(notes, fmt.Sprintf("未达目标 ≤ %s", compress.FormatTargetSize(s.result.TargetSizeBytes)))
+		} else if s.result.AppliedQuality > 0 {
+			notes = append(notes, fmt.Sprintf("自动质量 %d", s.result.AppliedQuality))
 		}
 		note = strings.Join(notes, " · ")
 	}

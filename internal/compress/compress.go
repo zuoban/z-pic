@@ -40,6 +40,7 @@ type Options struct {
 	Metadata              MetadataPolicy // "", "icc", or "strip".
 	OutputFormat          OutputFormat   // "" (keep), "jpeg", "png", or "webp".
 	MaxDimension          int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
+	TargetSizeBytes       int64          // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
 	Threads               int            // Optional native encoder thread cap; <= 0 selects automatic default.
 	SkipOverwriteSnapshot bool           // Skip SHA-256 overwrite snapshot when caller only writes copies.
 }
@@ -56,14 +57,17 @@ func DefaultPNGOptions() PNGOptions {
 // upright dimensions, including when Data retains the original EXIF-bearing
 // JPEG because recompression offered no saving.
 type Result struct {
-	SourcePath   string
-	Format       string
-	Width        int
-	Height       int
-	OriginalSize int64
-	OutputSize   int64
-	Data         []byte
-	Unchanged    bool
+	SourcePath       string
+	Format           string
+	Width            int
+	Height           int
+	OriginalSize     int64
+	OutputSize       int64
+	Data             []byte
+	Unchanged        bool
+	TargetSizeBytes  int64
+	TargetSizeMissed bool
+	AppliedQuality   int // Lower JPEG/WebP quality selected to approach the target.
 
 	sourcePath   string             // Absolute path captured before the caller can change cwd.
 	sourceFormat string             // Original decoded format, used to guard Overwrite.
@@ -154,6 +158,9 @@ func validateRequest(ctx context.Context, path string, options Options) (string,
 		return "", err
 	}
 	if err := ValidateMaxDimension(options.MaxDimension); err != nil {
+		return "", err
+	}
+	if err := ValidateTargetSizeBytes(options.TargetSizeBytes); err != nil {
 		return "", err
 	}
 	if path == "" {
@@ -254,6 +261,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	forcedOutput := false
 
 	var encoded []byte
+	var appliedQuality int
 	switch targetFormat {
 	case "webp":
 		needsWebPReencodeFromPixels := converting || needsResize ||
@@ -275,28 +283,30 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			}
 			outBounds := resized.Bounds()
 			width, height = outBounds.Dx(), outBounds.Dy()
-			encoded, err = webptools.EncodeImage(ctx, resized, webptools.EncodeOptions{
-				Quality:  options.Quality,
-				Lossless: options.Lossless,
-				Threads:  options.Threads,
-			})
-			if err == nil {
-				if options.Metadata != MetadataStrip {
-					var icc []byte
-					switch sourceFormat {
-					case "jpeg":
-						icc = extractJPEGICCProfile(data, 3)
-					case "png":
-						icc = extractPNGICCProfile(data)
-					case "webp":
-						icc = extractWebPICCProfile(data)
-					case "heic":
-						icc = extractPNGICCProfile(pixelSource)
-					}
-					if len(icc) > 0 {
-						encoded = injectWebPICC(encoded, icc, width, height)
-					}
+			var icc []byte
+			if options.Metadata != MetadataStrip {
+				switch sourceFormat {
+				case "jpeg":
+					icc = extractJPEGICCProfile(data, 3)
+				case "png", "heic":
+					icc = extractPNGICCProfile(pixelSource)
+				case "webp":
+					icc = extractWebPICCProfile(data)
 				}
+			}
+			encodePreparedWebP := func(quality int) ([]byte, error) {
+				out, err := webptools.EncodeImage(ctx, resized, webptools.EncodeOptions{
+					Quality:  quality,
+					Lossless: options.Lossless,
+					Threads:  options.Threads,
+				})
+				if err == nil && len(icc) > 0 {
+					out = injectWebPICC(out, icc, width, height)
+				}
+				return out, err
+			}
+			encoded, appliedQuality, err = encodeWithTargetSize(ctx, options, encodePreparedWebP)
+			if err == nil {
 				outConfig := image.Config{Width: width, Height: height}
 				if preview != nil {
 					var outDecoded image.Image
@@ -320,13 +330,16 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				}
 				encoded = data
 			} else {
-				encoded, err = webptools.EncodeWithOptions(ctx, data, webptools.EncodeOptions{
-					Quality:     options.Quality,
-					Lossless:    options.Lossless,
-					Metadata:    webpMetadataMode(options.Metadata),
-					Threads:     options.Threads,
-					SmallerOnly: !mustStrip,
-				})
+				encodeWebP := func(quality int) ([]byte, error) {
+					return webptools.EncodeWithOptions(ctx, data, webptools.EncodeOptions{
+						Quality:     quality,
+						Lossless:    options.Lossless,
+						Metadata:    webpMetadataMode(options.Metadata),
+						Threads:     options.Threads,
+						SmallerOnly: !mustStrip,
+					})
+				}
+				encoded, appliedQuality, err = encodeWithTargetSize(ctx, options, encodeWebP)
 				if err == nil {
 					useEncoded := mustStrip || len(encoded) < len(data)
 					if useEncoded {
@@ -449,68 +462,10 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				}
 			}
 			mustStrip := !converting && options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
-			limit := len(data) - iccBytes
-			stopOnDiscard := true
-			if converting || needsResize || mustStrip {
-				limit = maxInputSize - iccBytes + 1
-				stopOnDiscard = false
-				forcedOutput = true
-			}
-			if jpegtools.Available() {
-				if limit <= 2 {
-					if converting || needsResize || mustStrip {
-						return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
-					}
-					encoded = data
-				} else {
-					maxOut := 0
-					if stopOnDiscard {
-						maxOut = limit
-					}
-					var rawOut []byte
-					rawOut, err = jpegtools.EncodeImage(ctx, img, jpegtools.EncodeOptions{
-						Quality:        options.Quality,
-						MaxOutputBytes: maxOut,
-					})
-					if stopOnDiscard && errors.Is(err, jpegtools.ErrNoSavings) {
-						err = nil
-						encoded = data
-					} else if err == nil {
-						if len(rawOut)+iccBytes > maxInputSize {
-							if converting || needsResize || mustStrip {
-								return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
-							}
-							encoded = data
-						} else if outCfg, outFmt, cfgErr := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(rawOut))); cfgErr != nil || outFmt != "jpeg" {
-							err = fmt.Errorf("MozJPEG 输出无效：%v", cfgErr)
-						} else if outCfg.Width != width || outCfg.Height != height {
-							err = fmt.Errorf("MozJPEG 输出尺寸异常（%dx%d != %dx%d）", outCfg.Width, outCfg.Height, width, height)
-						} else {
-							encoded = injectJPEGICCSegments(rawOut, iccSegments, iccBytes)
-						}
-					}
-				}
-			} else {
-				output := jpegOutput{ctx: ctx, limit: limit, stopOnDiscard: stopOnDiscard}
-				if output.limit <= 2 {
-					output.discarded = true
-				} else {
-					err = jpeg.Encode(&output, img, &jpeg.Options{Quality: options.Quality})
-					if errors.Is(err, errJPEGNoSavings) {
-						err = nil
-					}
-				}
-				if err == nil {
-					if output.discarded {
-						if converting || needsResize || mustStrip {
-							return nil, fmt.Errorf("图片编码失败：输出超过 64 MiB 限制")
-						}
-						encoded = data
-					} else {
-						encoded = injectJPEGICCSegments(output.buf.Bytes(), iccSegments, iccBytes)
-					}
-				}
-			}
+			forcedOutput = transforming || mustStrip
+			encoded, appliedQuality, err = encodeWithTargetSize(ctx, options, func(quality int) ([]byte, error) {
+				return encodePreparedJPEG(ctx, img, data, iccSegments, iccBytes, quality, forcedOutput)
+			})
 		}
 	default: // png
 		pngInput := pixelSource
@@ -582,20 +537,25 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		return nil, fmt.Errorf("图片编码失败：%w", err)
 	}
 	result := &Result{
-		SourcePath:   path,
-		Format:       targetFormat,
-		Width:        width,
-		Height:       height,
-		OriginalSize: int64(len(data)),
-		Data:         encoded,
-		sourcePath:   sourcePath,
-		sourceFormat: sourceFormat,
+		SourcePath:      path,
+		Format:          targetFormat,
+		Width:           width,
+		Height:          height,
+		OriginalSize:    int64(len(data)),
+		Data:            encoded,
+		TargetSizeBytes: options.TargetSizeBytes,
+		sourcePath:      sourcePath,
+		sourceFormat:    sourceFormat,
 	}
 	if !transforming && !forcedOutput && len(result.Data) >= len(data) {
 		result.Data = data
 		result.Unchanged = true
 	}
 	result.OutputSize = int64(len(result.Data))
+	result.TargetSizeMissed = result.TargetSizeBytes > 0 && result.OutputSize > result.TargetSizeBytes
+	if !result.Unchanged && appliedQuality > 0 && appliedQuality < options.Quality {
+		result.AppliedQuality = appliedQuality
+	}
 	if !options.SkipOverwriteSnapshot {
 		result.snapshot = captureOverwriteSnapshot(data, result.Data)
 	}
@@ -635,18 +595,138 @@ func jpegCopyMode(policy MetadataPolicy) jpegtools.CopyMode {
 	}
 }
 
+func encodePreparedJPEG(ctx context.Context, img image.Image, data []byte, iccSegments [][]byte, iccBytes, quality int, forcedOutput bool) ([]byte, error) {
+	limit := len(data) - iccBytes
+	if forcedOutput {
+		limit = maxInputSize - iccBytes + 1
+	}
+	if limit <= 2 {
+		return data, nil
+	}
+	var raw []byte
+	if jpegtools.Available() {
+		maxOut := 0
+		if !forcedOutput {
+			maxOut = limit
+		}
+		encoded, err := jpegtools.EncodeImage(ctx, img, jpegtools.EncodeOptions{
+			Quality:        quality,
+			MaxOutputBytes: maxOut,
+		})
+		if !forcedOutput && errors.Is(err, jpegtools.ErrNoSavings) {
+			return data, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded)+iccBytes > maxInputSize {
+			return nil, fmt.Errorf("输出超过 64 MiB 限制")
+		}
+		outCfg, outFmt, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(encoded)))
+		if err != nil || outFmt != "jpeg" {
+			return nil, fmt.Errorf("MozJPEG 输出无效：%v", err)
+		}
+		bounds := img.Bounds()
+		if outCfg.Width != bounds.Dx() || outCfg.Height != bounds.Dy() {
+			return nil, fmt.Errorf("MozJPEG 输出尺寸异常（%dx%d != %dx%d）", outCfg.Width, outCfg.Height, bounds.Dx(), bounds.Dy())
+		}
+		raw = encoded
+	} else {
+		output := jpegOutput{ctx: ctx, limit: limit, stopOnDiscard: !forcedOutput}
+		err := jpeg.Encode(&output, img, &jpeg.Options{Quality: quality})
+		if errors.Is(err, errJPEGNoSavings) {
+			return data, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if output.discarded {
+			return nil, fmt.Errorf("输出超过 64 MiB 限制")
+		}
+		raw = output.buf.Bytes()
+	}
+	return injectJPEGICCSegments(raw, iccSegments, iccBytes), nil
+}
+
+var pngTargetSizeTiers = [...]PNGOptions{
+	{MinQuality: 0, MaxQuality: 85, Colors: 256, Speed: 3},
+	{MinQuality: 0, MaxQuality: 70, Colors: 192, Speed: 3},
+	{MinQuality: 0, MaxQuality: 55, Colors: 128, Speed: 4},
+	{MinQuality: 0, MaxQuality: 40, Colors: 64, Speed: 4},
+	{MinQuality: 0, MaxQuality: 25, Colors: 32, Speed: 5},
+	{MinQuality: 0, MaxQuality: 15, Colors: 16, Speed: 5},
+	{MinQuality: 0, MaxQuality: 5, Colors: 8, Speed: 5},
+	{MinQuality: 0, MaxQuality: 1, Colors: 4, Speed: 6},
+}
+
+type pngCandidate struct {
+	data      []byte
+	stripped  bool
+	quantized bool
+}
+
 func compressPNG(ctx context.Context, data []byte, config image.Config, options Options, preview *image.Image, transformed bool) ([]byte, bool, error) {
-	candidate := data
 	var colorChunks [][]byte
 	if transformed && options.Metadata != MetadataStrip {
 		colorChunks = extractPNGColorChunks(data)
 	}
+	candidate, err := encodePNGCandidate(ctx, data, config, options, colorChunks)
+	if err != nil {
+		return nil, false, err
+	}
+	target := options.TargetSizeBytes
+	if target > 0 && !options.Lossless && int64(len(candidate.data)) > target &&
+		(transformed || candidate.stripped || int64(len(data)) > target) {
+		baseline := options.PNG
+		if baseline == (PNGOptions{}) {
+			baseline = DefaultPNGOptions()
+		}
+		tiers := make([]PNGOptions, 0, len(pngTargetSizeTiers))
+		for _, tier := range pngTargetSizeTiers {
+			if tier == baseline || (tier.MaxQuality > baseline.MaxQuality && tier.Colors > baseline.Colors) {
+				continue
+			}
+			tiers = append(tiers, tier)
+		}
+		candidate, _, err = searchTargetSize(ctx, candidate, len(tiers)+1, target, func(out pngCandidate) int {
+			return len(out.data)
+		}, func(rank int) (pngCandidate, error) {
+			probe := options
+			probe.PNG = tiers[len(tiers)-rank]
+			return encodePNGCandidate(ctx, data, config, probe, colorChunks)
+		})
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if !transformed && !candidate.stripped && sameBytesBacking(candidate.data, data) {
+		if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); err != nil {
+			return nil, false, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+		}
+		return data, false, nil
+	}
+	if preview != nil {
+		*preview, err = decodePNGOutput(ctx, candidate.data, config)
+	} else {
+		err = validatePNGStructureAndCRCs(ctx, candidate.data, config)
+	}
+	if err != nil {
+		if candidate.quantized {
+			return nil, false, fmt.Errorf("pngquant 输出无效：%w", err)
+		}
+		return nil, false, fmt.Errorf("Oxipng 输出无效：%w", err)
+	}
+	return candidate.data, candidate.stripped, nil
+}
+
+func encodePNGCandidate(ctx context.Context, data []byte, config image.Config, options Options, colorChunks [][]byte) (pngCandidate, error) {
+	candidate := data
 	var quantized []byte
 	if !options.Lossless {
 		var err error
 		quantized, err = pngtools.QuantizeWithStrip(ctx, data, options.PNG, options.Threads, options.Metadata == MetadataStrip)
 		if err != nil {
-			return nil, false, err
+			return pngCandidate{}, err
 		}
 		// pngquant can convert profiled pixels to sRGB and discard their ICC.
 		if len(quantized) < len(candidate) &&
@@ -657,7 +737,7 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 	stripMode := pngStripMode(options.Metadata)
 	mustStrip, err := pngtools.HasStrippableMetadata(ctx, candidate, stripMode)
 	if err != nil {
-		return nil, false, err
+		return pngCandidate{}, err
 	}
 	optimized, err := pngtools.OptimizeWithOptions(ctx, candidate, pngtools.OptimizeOptions{
 		Threads:     options.Threads,
@@ -667,37 +747,19 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 	if err != nil {
 		if !sameBytesBacking(candidate, data) {
 			if validateErr := validatePNGOutput(ctx, candidate, config); validateErr != nil {
-				return nil, false, fmt.Errorf("pngquant 输出无效：%w", validateErr)
+				return pngCandidate{}, fmt.Errorf("pngquant 输出无效：%w", validateErr)
 			}
 		}
-		return nil, false, err
+		return pngCandidate{}, err
 	}
 	if mustStrip || len(optimized) < len(candidate) {
 		candidate = optimized
 	}
-	if !transformed && !mustStrip && sameBytesBacking(candidate, data) {
-		if _, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); decodeErr != nil {
-			return nil, false, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
-		}
-		return candidate, false, nil
-	}
-	var validateErr error
-	if preview != nil {
-		var decoded image.Image
-		decoded, validateErr = decodePNGOutput(ctx, candidate, config)
-		if validateErr == nil {
-			*preview = decoded
-		}
-	} else {
-		validateErr = validatePNGStructureAndCRCs(ctx, candidate, config)
-	}
-	if validateErr != nil {
-		if quantized != nil && sameBytesBacking(candidate, quantized) {
-			return nil, false, fmt.Errorf("pngquant 输出无效：%w", validateErr)
-		}
-		return nil, false, fmt.Errorf("Oxipng 输出无效：%w", validateErr)
-	}
-	return candidate, mustStrip, nil
+	return pngCandidate{
+		data:      candidate,
+		stripped:  mustStrip,
+		quantized: sameBytesBacking(candidate, quantized),
+	}, nil
 }
 
 func sameBytesBacking(a, b []byte) bool {

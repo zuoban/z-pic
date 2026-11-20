@@ -3,26 +3,28 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
 	"zpic/internal/compress"
 )
 
 type compressionPreset struct {
-	name         string
-	quality      float64
-	png          compress.PNGOptions
-	lossless     bool
-	metadata     compress.MetadataPolicy
-	outputFormat compress.OutputFormat
-	maxDimension int
-	output       presetSaveOptions
+	name            string
+	quality         float64
+	png             compress.PNGOptions
+	lossless        bool
+	metadata        compress.MetadataPolicy
+	outputFormat    compress.OutputFormat
+	maxDimension    int
+	targetSizeBytes int64
+	output          presetSaveOptions
 }
 
 var compressionPresets = []compressionPreset{
@@ -68,19 +70,20 @@ const (
 )
 
 type settingsEditor struct {
-	section       settingsSection
-	theme         themeMode
-	autoCompress  bool
-	backupToTrash bool
-	downloadDir   string
-	presets       []compressionPreset
-	selected      int
-	active        int
-	message       string
-	notice        string
-	confirmDelete bool
-	focusField    string
-	selectName    bool
+	section         settingsSection
+	theme           themeMode
+	autoCompress    bool
+	backupToTrash   bool
+	downloadDir     string
+	presets         []compressionPreset
+	targetSizeTexts []string
+	selected        int
+	active          int
+	message         string
+	notice          string
+	confirmDelete   bool
+	focusField      string
+	selectName      bool
 }
 
 func defaultPresets() []compressionPreset {
@@ -115,13 +118,32 @@ func (e *settingsEditor) nameProblem() string {
 	return ""
 }
 
+func presetTargetSizeText(size int64) string {
+	text := compress.FormatTargetSize(size)
+	if parsed, _ := compress.ParseTargetSize(text); parsed == size {
+		return text
+	}
+	return fmt.Sprintf("%d B", size)
+}
+
 func (s *application) settingsHaveChanges() bool {
 	e := s.editor
-	return e != nil && (e.theme.normalized() != s.effectiveThemeMode() ||
+	if e == nil {
+		return false
+	}
+	if e.theme.normalized() != s.effectiveThemeMode() ||
 		e.autoCompress != s.autoCompress ||
 		e.backupToTrash != s.backupToTrash ||
 		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) ||
-		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme)
+		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme {
+		return true
+	}
+	for index, text := range e.targetSizeTexts {
+		if text != presetTargetSizeText(s.presets[index].targetSizeBytes) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *application) restoreSettings() {
@@ -170,19 +192,23 @@ func (s *application) setSettingsOpen(open bool) {
 	}
 	s.settingsOpen = true
 	active := 0
+	targetSizeTexts := make([]string, len(s.presets))
 	for index, preset := range s.presets {
+		targetSizeTexts[index] = presetTargetSizeText(preset.targetSizeBytes)
 		if preset.name == s.scheme {
 			active = index
-			break
 		}
 	}
 	s.editor = &settingsEditor{
-		theme:         s.effectiveThemeMode(),
-		autoCompress:  s.autoCompress,
-		backupToTrash: s.backupToTrash,
-		downloadDir:   s.downloadDir,
-		presets:       slices.Clone(s.presets), selected: active, active: active,
-		message: s.settingsError,
+		theme:           s.effectiveThemeMode(),
+		autoCompress:    s.autoCompress,
+		backupToTrash:   s.backupToTrash,
+		downloadDir:     s.downloadDir,
+		presets:         slices.Clone(s.presets),
+		targetSizeTexts: targetSizeTexts,
+		selected:        active,
+		active:          active,
+		message:         s.settingsError,
 	}
 	if s.window == nil {
 		return
@@ -259,12 +285,14 @@ func (s *application) applyScheme(name string) bool {
 		if preset.name == name {
 			changed := s.quality != preset.quality || s.png != preset.png ||
 				s.lossless != preset.lossless || s.metadata != preset.metadata ||
-				s.outputFormat != preset.outputFormat || s.maxDimension != preset.maxDimension
+				s.outputFormat != preset.outputFormat || s.maxDimension != preset.maxDimension ||
+				s.targetSizeBytes != preset.targetSizeBytes
 			formatChanged := s.outputFormat != preset.outputFormat
 			s.scheme = name
 			s.quality, s.png = preset.quality, preset.png
 			s.lossless, s.metadata = preset.lossless, preset.metadata
 			s.outputFormat, s.maxDimension = preset.outputFormat, preset.maxDimension
+			s.targetSizeBytes = preset.targetSizeBytes
 			if changed {
 				s.invalidateResult()
 			}
@@ -301,6 +329,7 @@ func (s *application) addPreset() {
 		preset.name = fmt.Sprintf("新预设 %d", number)
 	}
 	editor.presets = append(editor.presets, preset)
+	editor.targetSizeTexts = append(editor.targetSizeTexts, presetTargetSizeText(preset.targetSizeBytes))
 	editor.selected = len(editor.presets) - 1
 	editor.message, editor.confirmDelete = "", false
 	editor.focusField, editor.selectName = "preset-name", true
@@ -330,6 +359,7 @@ func (s *application) duplicatePreset() {
 		}
 	}
 	editor.presets = append(editor.presets, preset)
+	editor.targetSizeTexts = append(editor.targetSizeTexts, editor.targetSizeTexts[editor.selected])
 	editor.selected = len(editor.presets) - 1
 	editor.message, editor.confirmDelete = "", false
 	editor.focusField, editor.selectName = "preset-name", true
@@ -350,6 +380,7 @@ func (s *application) deletePreset() {
 	editor := s.editor
 	index := editor.selected
 	editor.presets = slices.Delete(editor.presets, index, index+1)
+	editor.targetSizeTexts = slices.Delete(editor.targetSizeTexts, index, index+1)
 	if editor.active > index {
 		editor.active--
 	} else if editor.active == index {
@@ -367,6 +398,16 @@ func (s *application) saveSettingsEdits() {
 	presets := slices.Clone(s.editor.presets)
 	for index := range presets {
 		presets[index].name = strings.TrimSpace(presets[index].name)
+	}
+	for index, text := range s.editor.targetSizeTexts {
+		size, err := compress.ParseTargetSize(text)
+		if err != nil {
+			s.editor.section, s.editor.selected = settingsPresets, index
+			s.editor.focusField, s.editor.selectName = "preset-target-size-input", false
+			s.editor.message = "无法保存设置：" + err.Error()
+			return
+		}
+		presets[index].targetSizeBytes = size
 	}
 	selected := presets[s.editor.active].name
 	if err := validatePresets(presets, selected); err != nil {
@@ -430,12 +471,13 @@ func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected
 // Capture all settings on the UI thread before launching compression.
 func (s *application) compressionOptions() compress.Options {
 	return compress.Options{
-		Quality:      int(s.quality),
-		PNG:          s.png,
-		Lossless:     s.lossless,
-		Metadata:     s.metadata,
-		OutputFormat: s.outputFormat,
-		MaxDimension: s.maxDimension,
+		Quality:         int(s.quality),
+		PNG:             s.png,
+		Lossless:        s.lossless,
+		Metadata:        s.metadata,
+		OutputFormat:    s.outputFormat,
+		MaxDimension:    s.maxDimension,
+		TargetSizeBytes: s.targetSizeBytes,
 	}
 }
 

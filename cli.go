@@ -90,6 +90,7 @@ func printRootCLIHelp(w io.Writer) {
 常用示例:
   z-pic compress hero.png
   z-pic compress -o ./dist --format webp --max-dim 1920 ./photos
+  z-pic compress --max-size 300KB hero.jpg
   z-pic compress --preset 均衡 --in-place ./images
   z-pic compress --dry-run --json ./photos
 
@@ -172,15 +173,16 @@ type cliPNGOptions struct {
 }
 
 type cliPresetEntry struct {
-	Name         string        `json:"name"`
-	Active       bool          `json:"active"`
-	Quality      int           `json:"quality"`
-	Lossless     bool          `json:"lossless"`
-	Format       string        `json:"format"`
-	MaxDimension int           `json:"max_dimension"`
-	Metadata     string        `json:"metadata"`
-	PNG          cliPNGOptions `json:"png"`
-	SaveMode     string        `json:"save_mode"`
+	Name            string        `json:"name"`
+	Active          bool          `json:"active"`
+	Quality         int           `json:"quality"`
+	Lossless        bool          `json:"lossless"`
+	Format          string        `json:"format"`
+	MaxDimension    int           `json:"max_dimension"`
+	TargetSizeBytes int64         `json:"target_size_bytes"`
+	Metadata        string        `json:"metadata"`
+	PNG             cliPNGOptions `json:"png"`
+	SaveMode        string        `json:"save_mode"`
 }
 
 type cliPresetsReport struct {
@@ -269,13 +271,14 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, preset := range cfg.presets {
 		report.Presets = append(report.Presets, cliPresetEntry{
-			Name:         preset.name,
-			Active:       preset.name == cfg.selected,
-			Quality:      int(preset.quality),
-			Lossless:     preset.lossless,
-			Format:       cliFormatName(preset.outputFormat),
-			MaxDimension: preset.maxDimension,
-			Metadata:     cliMetadataName(preset.metadata),
+			Name:            preset.name,
+			Active:          preset.name == cfg.selected,
+			Quality:         int(preset.quality),
+			Lossless:        preset.lossless,
+			Format:          cliFormatName(preset.outputFormat),
+			MaxDimension:    preset.maxDimension,
+			TargetSizeBytes: preset.targetSizeBytes,
+			Metadata:        cliMetadataName(preset.metadata),
 			PNG: cliPNGOptions{
 				MinQuality: preset.png.MinQuality,
 				MaxQuality: preset.png.MaxQuality,
@@ -304,6 +307,9 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 		if entry.MaxDimension > 0 {
 			extras = append(extras, fmt.Sprintf("长边 ≤ %d px", entry.MaxDimension))
 		}
+		if entry.TargetSizeBytes > 0 {
+			extras = append(extras, "体积 ≤ "+compress.FormatTargetSize(entry.TargetSizeBytes))
+		}
 		if entry.Metadata != "keep-all" {
 			extras = append(extras, "元数据:"+entry.Metadata)
 		}
@@ -329,6 +335,7 @@ func printCompressCLIHelp(w io.Writer) {
       --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，同格式 JPEG 无损优化；转换为 JPEG 仍有损）
       --format <keep|jpeg|png|webp> 输出格式（jpeg 可用 jpg，keep 时 HEIC 转为 JPEG 或 PNG）
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
+      --max-size <size>    尝试将每张图片压到目标体积以内，如 300KB 或 1MiB（0 表示关闭）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
   -o, --output <path>      输出文件路径（单图）或输出目录（批量/多图）
       --in-place           仅在体积减小时覆盖同格式原图（格式转换时在原目录另存副本）
@@ -343,37 +350,41 @@ func printCompressCLIHelp(w io.Writer) {
 }
 
 type cliFileReport struct {
-	Input         string  `json:"input"`
-	Output        string  `json:"output,omitempty"`
-	Status        string  `json:"status"`
-	SourceFormat  string  `json:"source_format,omitempty"`
-	OutputFormat  string  `json:"output_format,omitempty"`
-	Width         int     `json:"width,omitempty"`
-	Height        int     `json:"height,omitempty"`
-	OriginalBytes int64   `json:"original_bytes"`
-	OutputBytes   int64   `json:"output_bytes"`
-	SavedBytes    int64   `json:"saved_bytes"`
-	SavedPercent  float64 `json:"saved_percent"`
-	Unchanged     bool    `json:"unchanged,omitempty"`
-	Overwritten   bool    `json:"overwritten,omitempty"`
-	BackedUp      bool    `json:"backed_up,omitempty"`
-	Error         string  `json:"error,omitempty"`
+	Input            string  `json:"input"`
+	Output           string  `json:"output,omitempty"`
+	Status           string  `json:"status"`
+	SourceFormat     string  `json:"source_format,omitempty"`
+	OutputFormat     string  `json:"output_format,omitempty"`
+	Width            int     `json:"width,omitempty"`
+	Height           int     `json:"height,omitempty"`
+	OriginalBytes    int64   `json:"original_bytes"`
+	OutputBytes      int64   `json:"output_bytes"`
+	SavedBytes       int64   `json:"saved_bytes"`
+	SavedPercent     float64 `json:"saved_percent"`
+	AppliedQuality   int     `json:"applied_quality,omitempty"`
+	TargetSizeMissed bool    `json:"target_size_missed,omitempty"`
+	Unchanged        bool    `json:"unchanged,omitempty"`
+	Overwritten      bool    `json:"overwritten,omitempty"`
+	BackedUp         bool    `json:"backed_up,omitempty"`
+	Error            string  `json:"error,omitempty"`
 }
 
 type cliCompressReport struct {
-	DryRun        bool            `json:"dry_run"`
-	InPlace       bool            `json:"in_place"`
-	Preset        string          `json:"preset,omitempty"`
-	Total         int             `json:"total"`
-	Succeeded     int             `json:"succeeded"`
-	Failed        int             `json:"failed"`
-	Unchanged     int             `json:"unchanged"`
-	Truncated     bool            `json:"truncated,omitempty"`
-	OriginalBytes int64           `json:"original_bytes"`
-	OutputBytes   int64           `json:"output_bytes"`
-	SavedBytes    int64           `json:"saved_bytes"`
-	SavedPercent  float64         `json:"saved_percent"`
-	Files         []cliFileReport `json:"files"`
+	DryRun           bool            `json:"dry_run"`
+	InPlace          bool            `json:"in_place"`
+	Preset           string          `json:"preset,omitempty"`
+	Total            int             `json:"total"`
+	Succeeded        int             `json:"succeeded"`
+	Failed           int             `json:"failed"`
+	Unchanged        int             `json:"unchanged"`
+	TargetSizeBytes  int64           `json:"target_size_bytes,omitempty"`
+	TargetSizeMissed int             `json:"target_size_missed,omitempty"`
+	Truncated        bool            `json:"truncated,omitempty"`
+	OriginalBytes    int64           `json:"original_bytes"`
+	OutputBytes      int64           `json:"output_bytes"`
+	SavedBytes       int64           `json:"saved_bytes"`
+	SavedPercent     float64         `json:"saved_percent"`
+	Files            []cliFileReport `json:"files"`
 }
 
 func parseCLIMetadataPolicy(raw string) (compress.MetadataPolicy, error) {
@@ -449,6 +460,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		lossless     bool
 		formatFlag   string
 		maxDim       int
+		maxSizeFlag  string
 		metadataFlag string
 		outputPath   string
 		inPlace      bool
@@ -468,6 +480,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.BoolVar(&lossless, "lossless", false, "lossless compression")
 	fs.StringVar(&formatFlag, "format", "", "output format: keep|jpeg|png|webp (jpg is an alias for jpeg)")
 	fs.IntVar(&maxDim, "max-dim", 0, "max long-edge dimension in pixels")
+	fs.StringVar(&maxSizeFlag, "max-size", "", "target output size")
 	fs.StringVar(&metadataFlag, "metadata", "", "metadata policy: keep-all|keep-icc|strip")
 	fs.StringVar(&outputPath, "output", "", "output file or directory")
 	fs.StringVar(&outputPath, "o", "", "output file or directory")
@@ -484,7 +497,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	reordered := reorderCLIFlags(args, map[string]bool{
 		"p": true, "preset": true, "settings": true,
 		"q": true, "quality": true, "format": true,
-		"max-dim": true, "metadata": true,
+		"max-dim": true, "max-size": true, "metadata": true,
 		"o": true, "output": true, "suffix": true,
 		"j": true, "jobs": true,
 	})
@@ -556,12 +569,13 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			return 2
 		}
 		opts = compress.Options{
-			Quality:      int(basePreset.quality),
-			PNG:          basePreset.png,
-			Lossless:     basePreset.lossless,
-			Metadata:     basePreset.metadata,
-			OutputFormat: basePreset.outputFormat,
-			MaxDimension: basePreset.maxDimension,
+			Quality:         int(basePreset.quality),
+			PNG:             basePreset.png,
+			Lossless:        basePreset.lossless,
+			Metadata:        basePreset.metadata,
+			OutputFormat:    basePreset.outputFormat,
+			MaxDimension:    basePreset.maxDimension,
+			TargetSizeBytes: basePreset.targetSizeBytes,
 		}
 	}
 
@@ -590,6 +604,14 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			return 2
 		}
 		opts.MaxDimension = maxDim
+	}
+	if setFlags["max-size"] {
+		parsed, err := compress.ParseTargetSize(maxSizeFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "参数错误：%v\n", err)
+			return 2
+		}
+		opts.TargetSizeBytes = parsed
 	}
 	if setFlags["metadata"] {
 		parsed, err := parseCLIMetadataPolicy(metadataFlag)
@@ -747,6 +769,15 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return batchCompressionOutcome{result: result, err: err, started: started, release: release}
 	}
 
+	report := cliCompressReport{
+		DryRun:          dryRun,
+		InPlace:         inPlace,
+		Preset:          presetName,
+		Total:           len(files),
+		TargetSizeBytes: opts.TargetSizeBytes,
+		Truncated:       scan.truncated,
+		Files:           files,
+	}
 	consume := func(task batchTask, outcome batchCompressionOutcome) {
 		entry := cliFileReport{
 			Input:         task.path,
@@ -820,8 +851,11 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		if entry.Unchanged {
 			entry.Status = "unchanged"
+			entry.TargetSizeMissed = res.TargetSizeBytes > 0 && entry.OutputBytes > res.TargetSizeBytes
 		} else {
 			entry.Status = "ok"
+			entry.AppliedQuality = res.AppliedQuality
+			entry.TargetSizeMissed = res.TargetSizeMissed
 		}
 		files[task.index] = entry
 	}
@@ -841,23 +875,16 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 	}
 
-	report := cliCompressReport{
-		DryRun:    dryRun,
-		InPlace:   inPlace,
-		Preset:    presetName,
-		Total:     len(files),
-		Truncated: scan.truncated,
-		Files:     files,
-	}
 	for _, f := range files {
 		switch f.Status {
-		case "ok":
+		case "ok", "unchanged":
 			report.Succeeded++
-			report.OriginalBytes += f.OriginalBytes
-			report.OutputBytes += f.OutputBytes
-		case "unchanged":
-			report.Succeeded++
-			report.Unchanged++
+			if f.Unchanged {
+				report.Unchanged++
+			}
+			if f.TargetSizeMissed {
+				report.TargetSizeMissed++
+			}
 			report.OriginalBytes += f.OriginalBytes
 			report.OutputBytes += f.OutputBytes
 		default:
@@ -890,16 +917,27 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			if f.Output != "" {
 				arrow = " -> " + f.Output
 			}
-			fmt.Fprintf(stdout, "%s  %s  %s -> %s (%+.1f%%)%s\n",
-				tag, f.Input, formatSize(f.OriginalBytes), formatSize(f.OutputBytes), -f.SavedPercent, arrow)
+			missed := ""
+			if f.TargetSizeMissed {
+				missed = " [未达目标]"
+			}
+			fmt.Fprintf(stdout, "%s  %s  %s -> %s (%+.1f%%)%s%s\n",
+				tag, f.Input, formatSize(f.OriginalBytes), formatSize(f.OutputBytes), -f.SavedPercent, arrow, missed)
 		}
 		if !quiet {
 			prefix := "完成"
 			if dryRun {
 				prefix = "试算完成"
 			}
-			fmt.Fprintf(stdout, "\n%s：%d 成功，%d 失败（共 %s -> %s，节省 %s / %.1f%%）\n",
-				prefix, report.Succeeded, report.Failed,
+			targetNote := ""
+			if report.TargetSizeBytes > 0 {
+				targetNote = "，目标体积 ≤ " + compress.FormatTargetSize(report.TargetSizeBytes)
+			}
+			if report.TargetSizeMissed > 0 {
+				targetNote += fmt.Sprintf("，%d 未达目标", report.TargetSizeMissed)
+			}
+			fmt.Fprintf(stdout, "\n%s：%d 成功，%d 失败%s（共 %s -> %s，节省 %s / %.1f%%）\n",
+				prefix, report.Succeeded, report.Failed, targetNote,
 				formatSize(report.OriginalBytes), formatSize(report.OutputBytes),
 				formatSize(max(int64(0), report.SavedBytes)), report.SavedPercent)
 		}

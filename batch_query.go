@@ -41,12 +41,13 @@ func matchesBatchFilter(item batchItem, filter int, query string) bool {
 
 func snapshotOfBatchItem(item batchItem) batchItemSnapshot {
 	return batchItemSnapshot{
-		relPath:      item.relPath,
-		originalSize: item.originalSize,
-		outputSize:   item.outputSize,
-		status:       item.status,
-		unchanged:    item.unchanged,
-		invalidInput: item.invalidInput,
+		relPath:          item.relPath,
+		originalSize:     item.originalSize,
+		outputSize:       item.outputSize,
+		status:           item.status,
+		unchanged:        item.unchanged,
+		targetSizeMissed: item.targetSizeMissed,
+		invalidInput:     item.invalidInput,
 	}
 }
 
@@ -55,6 +56,7 @@ func samePendingBucketChange(prev, curr batchItemSnapshot) bool {
 		prev.originalSize != curr.originalSize ||
 		prev.outputSize != curr.outputSize ||
 		prev.unchanged != curr.unchanged ||
+		prev.targetSizeMissed != curr.targetSizeMissed ||
 		prev.invalidInput != curr.invalidInput {
 		return false
 	}
@@ -123,6 +125,9 @@ func (state *batchState) syncItemsCache() {
 			summary.doneOrigTotal += item.originalSize
 			if item.unchanged {
 				summary.unchangedDone++
+			}
+			if item.targetSizeMissed {
+				summary.targetSizeMissed++
 			}
 		case batchFailed:
 			summary.failed++
