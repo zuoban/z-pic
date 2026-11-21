@@ -564,6 +564,90 @@ func chromeDivider(c *ui.Context) ui.Color {
 	return c.Theme().Text.Alpha(0.16)
 }
 
+func hairlineDivider(c *ui.Context) ui.Color {
+	if c.Preferences().HighContrast {
+		return c.Theme().Border
+	}
+	if usesGlass(c) {
+		if c.Theme().Dark {
+			return ui.RGBA(255, 255, 255, 0.11)
+		}
+		return c.Theme().Text.Alpha(0.09)
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(255, 255, 255, 0.08)
+	}
+	return c.Theme().Text.Alpha(0.08)
+}
+
+func subtleRowDivider(c *ui.Context) ui.Color {
+	if c.Preferences().HighContrast {
+		return c.Theme().Border
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(255, 255, 255, 0.05)
+	}
+	return c.Theme().Text.Alpha(0.05)
+}
+
+func sidebarSurface(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		return t.Surface
+	}
+	if t.Dark {
+		return t.Surface.Alpha(0.76)
+	}
+	return t.Surface.Alpha(0.84)
+}
+
+func tonalWellSurface(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		if t.Dark {
+			return ui.Hex("#1b1f29")
+		}
+		return ui.Hex("#f3f5f8")
+	}
+	if t.Dark {
+		return ui.RGBA(255, 255, 255, 0.055)
+	}
+	return ui.RGBA(17, 20, 26, 0.04)
+}
+
+func tonalWellBorder(c *ui.Context) ui.Color {
+	if c.Preferences().HighContrast {
+		return c.Theme().Border
+	}
+	return ui.Transparent
+}
+
+func canvasWellBackground(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		if c.Theme().Dark {
+			return ui.Hex("#0c0c0c")
+		}
+		return ui.Hex("#ededed")
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(10, 10, 10, 0.56)
+	}
+	return ui.RGBA(237, 237, 237, 0.62)
+}
+
+func emptyDropzoneSurface(c *ui.Context) ui.Color {
+	if !usesGlass(c) {
+		if c.Theme().Dark {
+			return ui.Hex("#14171f")
+		}
+		return ui.Hex("#ffffff")
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(22, 26, 35, 0.58)
+	}
+	return ui.RGBA(255, 255, 255, 0.72)
+}
+
 func glassSelectionBackground(c *ui.Context) ui.Color {
 	t := c.Theme()
 	if !usesGlass(c) {

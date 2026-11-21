@@ -170,8 +170,9 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 	locked := s.settingsDraftLocked()
 	bodyPad := settingsPagePadding(c)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(12, bodyPad, 0, bodyPad).Children(func() { s.presetEditorTabs(c) })
-		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(16, bodyPad, 20, bodyPad).Gap(20).Children(func() {
+		ui.Column(c).FillWidth().Padding(10, bodyPad, 10, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
+		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(16, bodyPad, 20, bodyPad).Gap(14).Children(func() {
 			preset := editor.selectedPreset()
 			ui.Column(c).FillWidth().Gap(8).Children(func() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
@@ -737,7 +738,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 			s.editor.message = ""
 		}
 		if options.Mode == presetSaveFixed {
-			ui.Row(c).Gap(8).Padding(8, 12).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+			ui.Row(c).Gap(8).Padding(8, 12).Radius(innerRadius(c)).Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).
 				AlignItems(ui.Center).Children(func() {
 				path := options.Directory
 				if path == "" {

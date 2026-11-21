@@ -17,122 +17,127 @@ func (s *application) batchListPanel(c *ui.Context) {
 	width, _ := c.Size()
 	mobile := width < 720
 	narrow := width < 560
-	compactQueue := narrow || width >= 720 && width < 1100
+	compactQueue := narrow || width >= 720 && width < 1040
+	pad := float32(16)
+	if width < 960 {
+		pad = 12
+	}
 	visible := s.filteredBatchIndices()
 	minW := float32(340)
 	if mobile {
 		minW = 0
 	}
-	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(16).Gap(12).
-		Radius(panelRadius(c)).Background(panelSurface(c)).Border(1, glassBorder(c))
+	panel := ui.Column(c).Grow(1).MinWidth(minW)
 	if mobile {
 		panel.FillWidth().MinHeight(360)
 	}
 	panel.Children(func() {
-		headerRow := ui.Row(c).MinHeight(32).Gap(8).AlignItems(ui.Center)
-		if narrow {
-			headerRow.Wrap()
-		}
-		headerRow.Children(func() {
-			headerText := fmt.Sprintf("批量队列 · %d 张", len(s.batch.items))
-			if s.batchFilterActive() {
-				headerText = fmt.Sprintf("批量队列 · %d / %d 张", len(visible), len(s.batch.items))
+		ui.Column(c).FillWidth().Padding(pad, pad, 10, pad).Gap(10).Children(func() {
+			headerRow := ui.Row(c).MinHeight(30).Gap(8).AlignItems(ui.Center)
+			if narrow {
+				headerRow.Wrap()
 			}
-			ui.Text(c, headerText).
-				FontSize(16).FontWeight(600).FontFeatures("tnum").
-				SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(140).Tooltip(headerText)
-			quietButton(c, "batch-add-files", "添加图片", 32, s.modalOpen()).
-				KeyShortcuts(ui.Cmd, ui.KeyO).
-				Tooltip("添加更多图片 · " + shortcutLabel("O")).
-				OnClick(s.chooseFile)
-			quietButton(c, "batch-add-folder", "添加文件夹", 32, s.modalOpen()).
-				Tooltip("从文件夹添加图片").
-				OnClick(s.chooseFolder)
-			quietButton(c, "batch-clear", "清空", 32, s.modalOpen()).
-				Tooltip("清空当前批量队列").
-				OnClick(s.clearBatch)
-		})
-		filterRow := ui.Row(c).MinHeight(32).Gap(8).AlignItems(ui.Center)
-		if narrow {
-			filterRow.Wrap()
-		}
-		filterRow.Children(func() {
-			stats := s.batch.cachedStats
-			labels := []string{
-				fmt.Sprintf("全部 %d", stats.total), fmt.Sprintf("待处理 %d", stats.pending),
-				fmt.Sprintf("已完成 %d", stats.done), fmt.Sprintf("失败 %d", stats.failed),
-				fmt.Sprintf("未达目标 %d", stats.targetSizeMissed),
-			}
-			seg := segmentedControl(c, "batch-filter", "队列筛选", &s.batch.filter, 32, false, labels...).
-				FillEqually().FillWidth().
-				Tooltip("按整个队列计数。未达目标的图片也计入已完成。搜索仅在当前筛选中查找。")
-			if seg.Changed() {
-				visible = s.filteredBatchIndices()
-			}
-		})
-		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
-			searchField := ui.SearchField(c.Key("batch-search"), &s.batch.query).
-				Bind(&s.batchSearchRef).
-				Label("筛选文件名").Placeholder("搜索文件名").
-				Tooltip("搜索相对路径或文件名 · " + shortcutLabel("F")).
-				Height(32).Grow(1)
-			styleGlassField(searchField, c, 32)
-			queryChanged := searchField.Changed()
-			sortChanged := s.batchSortControl(c)
-			if queryChanged || sortChanged {
-				visible = s.filteredBatchIndices()
-			}
-		})
-		retryFailed, invalidCount := s.batchFailureCounts()
-		if retryFailed > 0 || invalidCount > 0 {
-			var bannerText string
-			switch {
-			case retryFailed > 0 && invalidCount > 0:
-				bannerText = fmt.Sprintf("%d 张失败（%d 无效）", retryFailed+invalidCount, invalidCount)
-			case retryFailed > 0:
-				bannerText = fmt.Sprintf("%d 张图片处理失败", retryFailed)
-			default:
-				bannerText = fmt.Sprintf("%d 张无效图片无法处理", invalidCount)
-			}
-			bannerRow := ui.Row(c).MinHeight(36).Padding(4, 12).Gap(8).Radius(innerRadius(c)).
-				Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger)).AlignItems(ui.Center)
-			if compactQueue {
-				bannerRow.Column().Padding(8, 12).AlignItems(ui.Stretch)
-			}
-			bannerRow.Children(func() {
-				title := ui.Text(c, bannerText).
-					FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(t.Danger).
-					SingleLine().Width(0).Grow(1).MinWidth(120).Tooltip(bannerText)
-				if compactQueue {
-					title.FillWidth().Grow(0).MinWidth(0)
+			headerRow.Children(func() {
+				headerText := fmt.Sprintf("批量队列 · %d 张", len(s.batch.items))
+				if s.batchFilterActive() {
+					headerText = fmt.Sprintf("批量队列 · %d / %d 张", len(visible), len(s.batch.items))
 				}
-				actions := func() {
-					if invalidCount > 0 {
-						quietButton(c, "batch-remove-invalid", "移除无效项", 28, s.modalOpen()).
-							Tooltip(fmt.Sprintf("从队列移除 %d 张无法处理的图片", invalidCount)).
-							OnClick(s.removeInvalidBatchItems)
-					}
-					if retryFailed > 0 {
-						quietButton(c, "batch-remove-failed", "移除失败项", 28, s.modalOpen()).
-							Tooltip("从队列移除全部失败的图片").
-							OnClick(s.removeFailedBatchItems)
-						retryBtn := quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
-							Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
-							OnClick(s.retryFailedBatchItems)
-						if !s.modalOpen() {
-							retryBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
-						}
-					}
+				ui.Text(c, headerText).
+					FontSize(14).FontWeight(600).FontFeatures("tnum").
+					SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(120).Tooltip(headerText)
+				quietButton(c, "batch-add-files", "添加图片", 30, s.modalOpen()).Padding(0, 10).
+					KeyShortcuts(ui.Cmd, ui.KeyO).
+					Tooltip("添加更多图片 · " + shortcutLabel("O")).
+					OnClick(s.chooseFile)
+				quietButton(c, "batch-add-folder", "添加文件夹", 30, s.modalOpen()).Padding(0, 10).
+					Tooltip("从文件夹添加图片").
+					OnClick(s.chooseFolder)
+				quietButton(c, "batch-clear", "清空", 30, s.modalOpen()).Padding(0, 10).
+					Tooltip("清空当前批量队列").
+					OnClick(s.clearBatch)
+			})
+			filterRow := ui.Row(c).MinHeight(30).Gap(8).AlignItems(ui.Center)
+			if narrow {
+				filterRow.Wrap()
+			}
+			filterRow.Children(func() {
+				stats := s.batch.cachedStats
+				labels := []string{
+					fmt.Sprintf("全部 %d", stats.total), fmt.Sprintf("待处理 %d", stats.pending),
+					fmt.Sprintf("已完成 %d", stats.done), fmt.Sprintf("失败 %d", stats.failed),
+					fmt.Sprintf("未达目标 %d", stats.targetSizeMissed),
 				}
-				if compactQueue {
-					ui.Row(c).FillWidth().Gap(8).Wrap().Children(actions)
-				} else {
-					actions()
+				seg := segmentedControl(c, "batch-filter", "队列筛选", &s.batch.filter, 30, false, labels...).
+					FillEqually().FillWidth().
+					Tooltip("按整个队列计数。未达目标的图片也计入已完成。搜索仅在当前筛选中查找。")
+				if seg.Changed() {
+					visible = s.filteredBatchIndices()
 				}
 			})
-		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Radius(innerRadius(c)).
-			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Clip().Children(func() {
+			ui.Row(c).Height(30).Gap(8).AlignItems(ui.Center).Children(func() {
+				searchField := ui.SearchField(c.Key("batch-search"), &s.batch.query).
+					Bind(&s.batchSearchRef).
+					Label("筛选文件名").Placeholder("搜索文件名").
+					Tooltip("搜索相对路径或文件名 · " + shortcutLabel("F")).
+					Height(30).Grow(1)
+				styleGlassField(searchField, c, 30)
+				queryChanged := searchField.Changed()
+				sortChanged := s.batchSortControl(c)
+				if queryChanged || sortChanged {
+					visible = s.filteredBatchIndices()
+				}
+			})
+			retryFailed, invalidCount := s.batchFailureCounts()
+			if retryFailed > 0 || invalidCount > 0 {
+				var bannerText string
+				switch {
+				case retryFailed > 0 && invalidCount > 0:
+					bannerText = fmt.Sprintf("%d 张失败（%d 无效）", retryFailed+invalidCount, invalidCount)
+				case retryFailed > 0:
+					bannerText = fmt.Sprintf("%d 张图片处理失败", retryFailed)
+				default:
+					bannerText = fmt.Sprintf("%d 张无效图片无法处理", invalidCount)
+				}
+				bannerRow := ui.Row(c).MinHeight(34).Padding(6, 10).Gap(8).Radius(innerRadius(c)).
+					Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger)).AlignItems(ui.Center)
+				if compactQueue {
+					bannerRow.Column().Padding(8, 10).AlignItems(ui.Stretch)
+				}
+				bannerRow.Children(func() {
+					title := ui.Text(c, bannerText).
+						FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(t.Danger).
+						SingleLine().Width(0).Grow(1).MinWidth(120).Tooltip(bannerText)
+					if compactQueue {
+						title.FillWidth().Grow(0).MinWidth(0)
+					}
+					actions := func() {
+						if invalidCount > 0 {
+							quietButton(c, "batch-remove-invalid", "移除无效项", 28, s.modalOpen()).
+								Tooltip(fmt.Sprintf("从队列移除 %d 张无法处理的图片", invalidCount)).
+								OnClick(s.removeInvalidBatchItems)
+						}
+						if retryFailed > 0 {
+							quietButton(c, "batch-remove-failed", "移除失败项", 28, s.modalOpen()).
+								Tooltip("从队列移除全部失败的图片").
+								OnClick(s.removeFailedBatchItems)
+							retryBtn := quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
+								Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
+								OnClick(s.retryFailedBatchItems)
+							if !s.modalOpen() {
+								retryBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
+							}
+						}
+					}
+					if compactQueue {
+						ui.Row(c).FillWidth().Gap(8).Wrap().Children(actions)
+					} else {
+						actions()
+					}
+				})
+			}
+		})
+		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+		ui.Box(c).Grow(1).FillWidth().MinHeight(180).Clip().Children(func() {
 			if len(visible) == 0 {
 				s.batch.selected = -1
 				s.batch.listSelected = -1
@@ -143,7 +148,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 					if query := strings.TrimSpace(s.batch.query); query != "" {
 						ui.Text(c, "搜索：“"+query+"”").FontSize(12).TextColor(metadataColor(c)).
 							SingleLine().TruncateMiddle().FillWidth().TextAlign(ui.Center).Tooltip(query)
-						quietButton(c, "batch-clear-search", "清除搜索", 32, false).
+						quietButton(c, "batch-clear-search", "清除搜索", 30, false).
 							Tooltip("保留当前状态筛选和排序，仅清除搜索词").
 							OnClick(func() {
 								s.batch.query = ""
@@ -151,7 +156,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 							})
 					}
 					if s.batchFilterActive() {
-						quietButton(c, "batch-reset-filter", "显示全部", 32, false).
+						quietButton(c, "batch-reset-filter", "显示全部", 30, false).
 							OnClick(s.resetBatchFilter)
 					}
 				})
@@ -172,7 +177,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 			var list ui.Element
 			ui.Themed(c, customSelectionListTheme(c)).Fill().Background(ui.Transparent).Children(func() {
 				list = ui.List(c, &s.batch.list, len(visible)).
-					Label("批量图片列表").Fill().Padding(8).Gap(8)
+					Label("批量图片列表").Fill().Padding(6, pad-4).Gap(2)
 				list.Rows(func(r ui.ListRow) {
 					s.batchListRow(r, visible[r.Index], baseTheme)
 				})
@@ -247,7 +252,7 @@ func (s *application) batchSortControl(c *ui.Context) bool {
 		Panel: func(panel ui.Element) {
 			stylePopoverPanel(panel, c)
 		},
-	}).Label("队列排序").Height(32).Radius(pillRadius(32, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+	}).Label("队列排序").Height(30).Radius(pillRadius(30, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).
 		Tooltip("排序方式：" + current.menuLabel)
 	return changed
 }
@@ -280,7 +285,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Th
 		t := c.Theme()
 		statusText, statusColor := batchItemStatus(item, t)
 		detailText, detailColor := batchItemDetail(item, t)
-		background, border := glassCardSurface(c), glassBorder(c)
+		background, border := ui.Transparent, ui.Transparent
 		borderWidth := float32(1)
 		if r.Selected() {
 			background, border = cardSelectionBackground(c), selectionBorder(c)
@@ -288,18 +293,23 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Th
 				borderWidth = 1.5
 			}
 		} else if r.Pressed() {
-			background, border = glassControlPressed(c), controlHoverBorder(c)
+			background = glassControlPressed(c)
 		} else if r.Hovered() {
-			background, border = glassControlHover(c), controlHoverBorder(c)
+			background = glassControlHover(c)
 		}
-		rowCard := ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
-			Radius(innerRadius(c)).Background(background).Border(borderWidth, border)
+		rowCard := ui.Row(c).FillWidth().Padding(8, 10).Gap(10).AlignItems(ui.Center).
+			Radius(10).Background(background).Border(borderWidth, border)
 		if r.Selected() {
 			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 				if bounds.H <= 20 {
 					return
 				}
 				p.Fill(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 10, W: 3, H: bounds.H - 20}, accentForeground(t), 1.5)
+			})
+		} else {
+			divider := subtleRowDivider(c)
+			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
+				p.Line(bounds.X+64, bounds.Y+bounds.H-0.5, bounds.X+bounds.W-10, bounds.Y+bounds.H-0.5, 1, divider)
 			})
 		}
 		rowCard.Children(func() {
@@ -358,11 +368,7 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 	entry := s.batchThumbnail(item)
 	label := item.relPath + " 缩略图"
 	unavailable := item.invalidInput || entry == nil || entry.failed
-	thumbRadius := float32(4)
-	if usesGlass(c) {
-		thumbRadius = 6
-	}
-	box := ui.Box(c).Size(64, 64).Shrink(0).Radius(thumbRadius).Background(panelStageBackground(c)).Border(1, glassBorder(c)).
+	box := ui.Box(c).Size(60, 60).Shrink(0).Radius(8).Background(canvasWellBackground(c)).Border(1, glassBorder(c)).
 		Clip().Role(ui.RoleImage).Label(label)
 	if entry != nil && entry.bitmap != nil && supportsAlphaFormat(item.format) {
 		box.Draw(func(p *ui.Painter, bounds ui.Rect) {
@@ -476,19 +482,24 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 	} else if item.status == batchFailed {
 		subTooltip = item.errMsg
 	}
-	bar := ui.Row(c).Padding(10, 12).Gap(8).Radius(innerRadius(c)).
-		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center)
+	pad := float32(16)
+	if width < 960 {
+		pad = 12
+	}
+	ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+	bar := ui.Row(c).FillWidth().Padding(10, pad).Gap(8).
+		Background(sidebarSurface(c)).AlignItems(ui.Center)
 	compact := width < 560 || width >= 720 && width < 1100
 	if compact {
 		bar.Column().AlignItems(ui.Stretch)
 	}
 	bar.Children(func() {
-		details := ui.Column(c).Width(0).Grow(1).MinWidth(140).Gap(4)
+		details := ui.Column(c).Width(0).Grow(1).MinWidth(140).Gap(2)
 		if compact {
 			details.FillWidth().Grow(0).MinWidth(0)
 		}
 		details.Children(func() {
-			ui.Text(c, filepath.Base(item.path)).FontSize(13).FontWeight(500).
+			ui.Text(c, filepath.Base(item.path)).FontSize(13).FontWeight(600).
 				SingleLine().TruncateMiddle().Tooltip(item.path)
 			detail := ui.Text(c, subText).FontSize(12).FontFeatures("tnum").TextColor(subColor).
 				FillWidth().Tooltip(subTooltip)
@@ -500,37 +511,37 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		})
 		actions := func() {
 			if item.status == batchPending && !item.invalidInput {
-				quietButton(c, "batch-compress-item", "压缩此张", 32, s.modalOpen()).
+				quietButton(c, "batch-compress-item", "压缩此张", 30, s.modalOpen()).Padding(0, 10).
 					Tooltip("仅压缩此张图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if item.status == batchFailed && !item.invalidInput {
-				quietButton(c, "batch-retry-item", "重试", 32, s.modalOpen()).
+				quietButton(c, "batch-retry-item", "重试", 30, s.modalOpen()).Padding(0, 10).
 					Tooltip("重新压缩此失败图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if outPath := batchItemOutputPath(item); outPath != "" {
-				quietButton(c, "batch-reveal-item", "定位文件", 32, s.modalOpen()).
+				quietButton(c, "batch-reveal-item", "定位文件", 30, s.modalOpen()).Padding(0, 10).
 					Tooltip("在文件夹中显示输出文件").
 					OnClick(func() { s.revealFileInFolder(outPath) })
-				quietButton(c, "batch-copy-item", "复制", 32, !s.canCopyBatchItem(item)).
+				quietButton(c, "batch-copy-item", "复制", 30, !s.canCopyBatchItem(item)).Padding(0, 10).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
 				idx := selected
 				dragExportControl(c, "batch-drag-item", "拖出图片", "拖出",
 					"按住将此压缩输出文件拖到 Finder 或其他应用",
-					32, 13, 400, s.modalOpen(),
+					30, 12, 500, s.modalOpen(),
 					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
-			quietButton(c, "batch-preview", "预览", 32, s.modalOpen() || item.invalidInput).
+			quietButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).Padding(0, 10).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
-			quietButton(c, "batch-remove", "移除", 32, s.modalOpen()).
+			quietButton(c, "batch-remove", "移除", 30, s.modalOpen()).Padding(0, 10).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}
 		if compact {
-			ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(actions)
+			ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(actions)
 		} else {
 			actions()
 		}
@@ -550,19 +561,22 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 	if previewIdx >= 0 && previewIdx < len(s.batch.items) {
 		previewItem = &s.batch.items[previewIdx]
 	}
+	pad := float32(16)
+	if width < 960 {
+		pad = 12
+	}
 	minW := float32(340)
 	if mobile {
 		minW = 0
 	}
-	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(16).Gap(12).
-		Radius(panelRadius(c)).Background(panelSurface(c)).Border(1, glassBorder(c))
+	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(pad).Gap(10)
 	if mobile {
-		panel.FillWidth()
+		panel.FillWidth().MinHeight(380)
 	}
 	panel.Children(func() {
 		inlinePreviewMode := width >= 960 && s.result != nil && !s.overwritten
-		ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			quietButton(c, "batch-back", "返回列表", 32, s.modalOpen()).
+		ui.Row(c).MinHeight(30).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+			quietButton(c, "batch-back", "返回列表", 30, s.modalOpen()).Padding(0, 10).
 				KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
 				OnClick(s.closeBatchPreview)
 			visible := s.filteredBatchIndices()
@@ -575,11 +589,11 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 			if inlinePreviewMode {
 				s.previewModeControl(c)
 			}
-			quietButton(c, "batch-prev", "上一张", 32, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).
+			quietButton(c, "batch-prev", "上一张", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).Padding(0, 10).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
 				Tooltip("上一张 · " + shortcutLabel("[")).
 				OnClick(func() { s.stepBatchPreview(-1) })
-			quietButton(c, "batch-next", "下一张", 32, s.modalOpen() || !s.hasAdjacentBatchPreview(1)).
+			quietButton(c, "batch-next", "下一张", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(1)).Padding(0, 10).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketRight).
 				Tooltip("下一张 · " + shortcutLabel("]")).
 				OnClick(func() { s.stepBatchPreview(1) })
@@ -592,7 +606,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 			}
 		}
 		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
-			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
+			Background(canvasWellBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
 			if s.preview != nil {
 				s.previewCanvas(c)
 			}
@@ -721,11 +735,18 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 
 func (s *application) batchOutputCard(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
+	isOverwrite := s.batch.outputMode != batchOutputFolder && !(s.batch.previewOpen && s.batch.previewIndex >= 0 && s.batch.previewIndex < len(s.batch.items) && batchItemOutputPath(s.batch.items[s.batch.previewIndex]) != "")
+	wellBg := tonalWellSurface(c)
+	wellBorder := tonalWellBorder(c)
+	if isOverwrite {
+		wellBg = statusTintSurface(c, t.Danger)
+		wellBorder = statusTintBorder(c, t.Danger)
+	}
+	ui.Column(c).Padding(12).Gap(6).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
 		if s.batch.previewOpen && s.batch.previewIndex >= 0 && s.batch.previewIndex < len(s.batch.items) {
 			item := s.batch.items[s.batch.previewIndex]
 			if path := batchItemOutputPath(item); path != "" {
-				ui.Text(c, "输出文件").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
+				ui.Text(c, "输出文件").FontSize(11).FontWeight(600).TextColor(metadataColor(c))
 				ui.Text(c, path).FontSize(12).SingleLine().TruncateMiddle().FillWidth().Tooltip(path)
 				if item.overwritten {
 					ui.Text(c, "已覆盖原图，无法撤销").FontSize(12).TextColor(t.TextMuted).MaxLines(2)
@@ -733,7 +754,16 @@ func (s *application) batchOutputCard(c *ui.Context) {
 				return
 			}
 		}
-		ui.Text(c, "保存方式").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			title := "保存方式"
+			if s.batch.outputMode == batchOutputFolder && !s.batch.previewOpen && s.output.Mode == presetSaveAsk {
+				title = "输出位置"
+			}
+			ui.Text(c, title).FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
+			if s.batch.outputMode == batchOutputFolder && !s.batch.previewOpen && s.output.Mode == presetSaveAsk {
+				keyboardKeycap(c, "S").Padding(0, 5)
+			}
+		})
 		if s.batch.outputMode == batchOutputFolder {
 			dirText, dirColor, dirTooltip := "压缩时选择保存位置", metadataColor(c), "将在开始压缩时选择保存文件夹"
 			btnLabel := "选择位置"

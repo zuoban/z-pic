@@ -413,8 +413,10 @@ func (s *application) floatingView(c *ui.Context) {
 	root.Children(func() {
 		if s.floating.expanded {
 			s.floatingHeader(c)
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 			s.floatingGallery(c, indices)
 			s.floatingFeedback(c)
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 			ui.Row(c).FillWidth().Height(28).Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					compressLabel, canCompress := s.floatingCompressAction()
@@ -637,7 +639,7 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 		} else {
 			state := &s.floating.grid
 			state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
-			gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 128,
+			gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 120,
 				func(position int) { s.floatingGalleryItem(c, indices, position, false, baseTheme) }).
 				Label("悬浮窗图片网格").Fill()
 		}
@@ -665,24 +667,26 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		theme := c.Theme()
 		if position == len(indices) {
 			_, selected := s.floatingSelectedImage()
-			foreground, iconColor := theme.Text, theme.TextMuted
+			foreground, iconColor := theme.TextMuted, theme.TextMuted
 			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(innerRadius(c)).
-				Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+				Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
 				Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 				Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 				OnClick(s.revealFloatingSelection)
 			if button.Hovered() && selected && !s.modalOpen() {
-				button.Background(glassControlHover(c))
+				foreground = theme.Text
+				button.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 			}
 			if s.floating.cursor == position {
+				foreground = theme.Text
 				button.Background(cardSelectionBackground(c)).Border(1.5, selectionBorder(c))
 			}
 			if list {
-				button.Height(56).Row().Gap(8)
+				button.Height(52).Row().Gap(8)
 			}
 			button.Children(func() {
 				floatingIcon(c, "reveal", 16, iconColor)
-				ui.Text(c, floatingRevealLabel()).FontSize(13).TextColor(foreground)
+				ui.Text(c, floatingRevealLabel()).FontSize(12).FontWeight(500).TextColor(foreground)
 			})
 			return
 		}
@@ -695,44 +699,44 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		if selected {
 			background, border, borderWidth = cardSelectionBackground(c), selectionBorder(c), 1.5
 		}
-		tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(innerRadius(c)).Background(background).
+		tile := ui.Column(c).Fill().Padding(8).Gap(5).Radius(innerRadius(c)).Background(background).
 			Border(borderWidth, border).Tooltip(item.path)
 		if tile.Hovered() && !selected {
 			tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}
 		if list {
-			tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
+			tile.Row().Height(54).Gap(8).AlignItems(ui.Center)
 		}
 		tile.Children(func() {
 			image := ui.Column(c).Grow(1).FillWidth().Center()
 			if list {
-				image.Grow(0).Size(56, 40).Shrink(0)
+				image.Grow(0).Size(52, 38).Shrink(0)
 			} else {
-				image.Height(48).Grow(0).Shrink(0)
+				image.Height(46).Grow(0).Shrink(0)
 			}
 			image.Children(func() {
 				if bitmap != nil {
-					maxWidth, maxHeight := float32(96), float32(48)
+					maxWidth, maxHeight := float32(96), float32(46)
 					if list {
-						maxWidth, maxHeight = 56, 40
+						maxWidth, maxHeight = 52, 38
 					}
 					width, height := bitmap.Size()
 					scale := min(maxWidth/float32(width), maxHeight/float32(height))
 					ui.Image(c, bitmap).Size(float32(width)*scale, float32(height)*scale).
-						Fit(ui.Contain).Radius(4).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
+						Fit(ui.Contain).Radius(6).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
 				} else {
-					floatingIcon(c, "photo", 32, secondary)
+					floatingIcon(c, "photo", 30, secondary)
 					if item.invalidInput {
-						ui.Text(c, "无预览").FontSize(12).TextColor(secondary)
+						ui.Text(c, "无预览").FontSize(11).TextColor(secondary)
 					}
 				}
 			})
-			details := ui.Column(c).FillWidth().Gap(4)
+			details := ui.Column(c).FillWidth().Gap(3)
 			if list {
 				details.Width(0).Grow(1)
 			}
 			details.Children(func() {
-				filename := ui.Text(c, filepath.Base(item.relPath)).FontSize(13).FontWeight(500).
+				filename := ui.Text(c, filepath.Base(item.relPath)).FontSize(12).FontWeight(600).
 					TextColor(foreground).SingleLine().TruncateMiddle().FillWidth()
 				detail := formatSize(item.originalSize)
 				if item.status == batchDone && item.outputSize > 0 {
@@ -743,6 +747,10 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 				if item.status == batchFailed {
 					detail = "失败 · " + detail
 					secondary = theme.Danger
+				} else if item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
+					saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
+					detail = fmt.Sprintf("%s (-%.0f%%)", formatSize(item.outputSize), saved)
+					secondary = theme.Success
 				}
 				detailTooltip := detail
 				if item.errMsg != "" {
@@ -753,7 +761,12 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 					// Keep each measured size and its unit together in narrow cells.
 					displayDetail = formatSize(item.originalSize)
 					if item.status == batchDone && item.outputSize > 0 {
-						displayDetail += "\n→ " + formatSize(item.outputSize)
+						if !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
+							saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
+							displayDetail = fmt.Sprintf("%s\n-%.0f%%", formatSize(item.outputSize), saved)
+						} else {
+							displayDetail += "\n→ " + formatSize(item.outputSize)
+						}
 					} else if item.width > 0 && item.height > 0 {
 						displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
 					}
@@ -761,7 +774,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 						displayDetail = "失败 · " + displayDetail
 					}
 				}
-				metadata := ui.Text(c, displayDetail).FontSize(12).FontFeatures("tnum").TextColor(secondary).
+				metadata := ui.Text(c, displayDetail).FontSize(11).FontFeatures("tnum").TextColor(secondary).
 					FillWidth().Tooltip(detailTooltip)
 				if list {
 					metadata.SingleLine().TruncateMiddle()

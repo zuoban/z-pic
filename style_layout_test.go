@@ -29,12 +29,12 @@ func TestStyleQueueActionsFitAtDesktopSizes(t *testing.T) {
 				if !ok || control.Offscreen || control.Bounds.W < 28 || control.Bounds.H < 28 {
 					t.Fatalf("%s must remain usable: %+v", label, control)
 				}
-				// The right column starts at width - edge - overview width.
-				edge, overview := float32(24), float32(320)
+				// The right inspector sidebar starts at width - overview - 1px divider.
+				overview := float32(312)
 				if width < 960 {
-					edge, overview = 16, 280
+					overview = 280
 				}
-				if control.Bounds.X < edge || control.Bounds.X+control.Bounds.W > float32(width)-edge-overview {
+				if control.Bounds.X < 0 || control.Bounds.X+control.Bounds.W > float32(width)-overview-1 {
 					t.Fatalf("%s escaped the queue into the overview: %+v", label, control.Bounds)
 				}
 			}
@@ -44,12 +44,15 @@ func TestStyleQueueActionsFitAtDesktopSizes(t *testing.T) {
 
 func TestStyleWorkspaceHeadingsAlign(t *testing.T) {
 	for _, width := range []int{760, 980, 1440} {
-		app := newApplication()
+		app := styleReviewApplication(t, "batch")
 		tester := ui.NewTester(app.view, width, 720)
-		preview, _ := tester.Access("图片预览")
-		overview, _ := tester.Access("压缩概览")
-		if preview.Bounds.Y != overview.Bounds.Y {
-			t.Fatalf("peer headings must align at %d: preview=%v overview=%v", width, preview.Bounds, overview.Bounds)
+		queue, ok1 := tester.Access("批量队列 · 3 张")
+		overview, ok2 := tester.Access("压缩概览")
+		if !ok1 || !ok2 {
+			t.Fatalf("expected split-view headings at %d: queue=%v overview=%v", width, ok1, ok2)
+		}
+		if queue.Bounds.Y-overview.Bounds.Y > 8 || overview.Bounds.Y-queue.Bounds.Y > 8 {
+			t.Fatalf("peer split-view headings must stay top-aligned at %d: queue=%v overview=%v", width, queue.Bounds, overview.Bounds)
 		}
 	}
 }

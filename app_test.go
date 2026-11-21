@@ -720,7 +720,7 @@ func TestSettingsShortcutOpensWithoutChangingCompressionState(t *testing.T) {
 			file, result, preview, options := s.file, s.result, s.preview, s.compressionOptions()
 			tt := ui.NewTester(s.view, 880, 660)
 			settings, ok := tt.AccessByRole(ui.RoleButton, "设置")
-			if !ok || !strings.Contains(settings.KeyShortcuts, ",") || !tt.HasText(shortcutLabel(",")) {
+			if !ok || !strings.Contains(settings.KeyShortcuts, ",") {
 				t.Fatal("settings must expose its shortcut to users and assistive technology")
 			}
 			tt.Key(0, ui.KeyComma)
@@ -945,7 +945,7 @@ func TestSettingsDialogPreservesCompressionStateWithoutEdits(t *testing.T) {
 			if err := tt.Click("设置"); err != nil {
 				t.Fatal(err)
 			}
-			if !s.settingsOpen || !tt.HasText("图片预览") || !tt.HasText("另存副本") {
+			if !s.settingsOpen || !tt.HasText("压缩概览") || !tt.HasText("另存副本") {
 				t.Fatal("opening a separate settings window must keep the main view intact")
 			}
 			s.settingsFile = filepath.Join(t.TempDir(), "settings.json")

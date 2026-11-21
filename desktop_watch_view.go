@@ -76,7 +76,7 @@ func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir s
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Text(c, label).FontSize(settingsFontSize(c, 13)).FontWeight(500)
 		ui.Row(c).FillWidth().Gap(8).Padding(8, 12).Radius(innerRadius(c)).
-			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center).Children(func() {
+			Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
 				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
 			settingsButton(c, key, "选择…", 32, disabled).Label("选择" + label).Shrink(0).OnClick(choose)
@@ -184,7 +184,7 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 	}
 	ui.Row(c.Key("folder-watch-status")).FillWidth().Gap(8).AlignItems(ui.Center).
 		Padding(8, 12).Radius(innerRadius(c)).
-		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
+		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).Children(func() {
 		statusCapsule(c, status, color).FontSize(fontSize).Role(ui.RoleStatus)
 		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			if watch.err != nil {

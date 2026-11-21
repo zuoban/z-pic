@@ -134,13 +134,17 @@ func (s *application) zoomPreviewActual() {
 }
 
 func (s *application) previewToolbar(c *ui.Context) {
-	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		if s.result != nil && !s.overwritten {
-			ui.Row(c).FillWidth().Height(32).Justify(ui.End).Children(func() {
-				s.previewModeControl(c)
-			})
+	s.previewUnifiedBar(c)
+}
+
+func (s *application) previewUnifiedBar(c *ui.Context) {
+	hasModes := s.result != nil && !s.overwritten
+	ui.Row(c).FillWidth().MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+		if hasModes {
+			s.previewModeControl(c)
 		}
-		s.previewZoomToolbar(c)
+		ui.Box(c).Grow(1)
+		s.previewZoomControls(c)
 	})
 }
 
@@ -148,19 +152,25 @@ func (s *application) previewModeControl(c *ui.Context) {
 	if s.result == nil || s.overwritten {
 		return
 	}
-	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 32, s.previewLocked(), "对比", "原图", "结果").
-		FillEqually().Width(168)
+	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 30, s.previewLocked(), "对比", "原图", "结果").
+		FillEqually().Width(156)
 }
 
 func (s *application) previewZoomToolbar(c *ui.Context) {
+	ui.Row(c).FillWidth().MinHeight(30).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1)
+		s.previewZoomControls(c)
+	})
+}
+
+func (s *application) previewZoomControls(c *ui.Context) {
 	t := c.Theme()
-	width, _ := c.Size()
 	locked := s.previewLocked()
 	bounds := s.comparison.viewport
 	scale := s.previewScale(bounds)
-	ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).
+	ui.Row(c).MinHeight(30).Gap(6).Wrap().AlignItems(ui.Center).
 		Role(ui.RoleToolbar).Label("图片缩放").Children(func() {
-		ui.Row(c).Height(32).Gap(0).Radius(innerRadius(c)).
+		ui.Row(c).Height(30).Gap(0).Radius(pillRadius(30, c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
 			for index, action := range []struct {
 				key, label string
@@ -172,36 +182,36 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 				{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
 			} {
 				if index > 0 {
-					ui.Box(c).Size(1, 16).Background(glassDivider(c))
+					ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 				}
 				disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
 				strokeColor := t.Text
 				if disabled {
 					strokeColor = t.TextMuted.Alpha(0.45)
 				}
-				button := quietButton(c, action.key, "", 32, disabled).
+				button := quietButton(c, action.key, "", 30, disabled).
 					Background(ui.Transparent).Border(0, ui.Transparent).Label(action.label).
 					KeyShortcuts(ui.Cmd, action.keyCode).
 					Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
-					Size(32, 32)
+					Size(30, 30)
 				button.DrawOver(func(p *ui.Painter, r ui.Rect) {
-					p.Line(r.X+10.5, r.Y+r.H/2, r.X+r.W-10.5, r.Y+r.H/2, 1.5, strokeColor)
+					p.Line(r.X+10, r.Y+r.H/2, r.X+r.W-10, r.Y+r.H/2, 1.5, strokeColor)
 					if action.factor > 1 {
-						p.Line(r.X+r.W/2, r.Y+10.5, r.X+r.W/2, r.Y+r.H-10.5, 1.5, strokeColor)
+						p.Line(r.X+r.W/2, r.Y+10, r.X+r.W/2, r.Y+r.H-10, 1.5, strokeColor)
 					}
 				}).OnClick(func() {
 					s.zoomPreviewBy(action.factor)
 				})
 			}
-			ui.Box(c).Size(1, 16).Background(glassDivider(c))
-			ui.Textf(c, "%.0f%%", scale*100).Width(56).FontSize(12).
+			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+			ui.Textf(c, "%.0f%%", scale*100).Width(48).FontSize(12).
 				FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted).SingleLine()
 		})
-		fit := quietButton(c, "preview-fit", "适应", 32, locked).
+		fit := quietButton(c, "preview-fit", "适应", 30, locked).Padding(0, 10).
 			KeyShortcuts(ui.Cmd, ui.Key0).
 			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
 			OnClick(s.resetPreviewFit)
-		actual := quietButton(c, "preview-actual", "1:1", 32, locked).
+		actual := quietButton(c, "preview-actual", "1:1", 30, locked).Padding(0, 10).
 			KeyShortcuts(ui.Cmd, ui.Key1).
 			Tooltip("按原始尺寸查看（100%） · " + shortcutLabel("1")).
 			OnClick(s.zoomPreviewActual)
@@ -211,21 +221,6 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 			fit.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
 		} else if s.comparison.scale == 1 {
 			actual.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
-		}
-		if width >= 560 {
-			hint := "滚轮缩放"
-			if s.comparing() {
-				if s.previewCanPan(bounds) {
-					hint = "拖动平移 · 拖分隔线对比"
-				} else {
-					hint = "拖动分隔线"
-				}
-			} else if s.previewCanPan(bounds) {
-				hint = "拖动平移"
-			}
-			ui.Text(c, hint).FontSize(12).TextColor(metadataColor(c)).
-				Width(0).Grow(1).SingleLine().TextAlign(ui.End).
-				Tooltip("拖动分隔线对比；双击画布切换 1:1 / 适应；放大后拖动图片或双指滚动平移；滚轮或捏合缩放")
 		}
 	})
 }

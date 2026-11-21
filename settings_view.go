@@ -8,9 +8,6 @@ import (
 
 var (
 	settingsChevronIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6.5 3 3 3-3"/></svg>`))
-	settingsSystemIcon  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="10" rx="2"/><path d="M10 13.5v3M6.5 16.5h7"/></svg>`))
-	settingsLightIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="10" cy="10" r="3.25"/><path d="M10 2v1.5M10 16.5V18M2 10h1.5M16.5 10H18M4.35 4.35l1.1 1.1m9.1 9.1 1.1 1.1M4.35 15.65l1.1-1.1m9.1-9.1 1.1-1.1"/></svg>`))
-	settingsDarkIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16.8 11.8A7 7 0 0 1 8.2 3.2a7 7 0 1 0 8.6 8.6Z"/></svg>`))
 )
 
 func (s *application) settingsView(c *ui.Context) {
@@ -28,14 +25,14 @@ func (s *application) settingsView(c *ui.Context) {
 	})
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveSettingsEdits)
 	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("应用设置").Children(func() {
-		ui.Column(c).FillWidth().Background(panelSurface(c)).Children(func() {
+		ui.Column(c).FillWidth().Background(sidebarSurface(c)).Children(func() {
 			s.settingsNavigation(c)
 			if s.editor.section != settingsFolderWatch {
-				ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+				ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 				s.settingsPresetSelection(c)
 			}
 		})
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 		switch s.editor.section {
 		case settingsPresets:
 			s.presetSettingsContent(c)
@@ -51,8 +48,8 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 52)).Padding(0, settingsPagePadding(c)).Gap(12).Background(panelSubtleSurface(c)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).Shrink(0)
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 46)).Padding(0, settingsPagePadding(c)).Gap(10).Background(tonalWellSurface(c)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
 		picker := ui.ButtonBase(c.Key("settings-preset-picker"))
@@ -72,7 +69,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 				stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 			},
 		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
-			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).
+			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 32)).Padding(0, 10).Gap(8).
 			AlignItems(ui.Center).Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 		if !disabled {
@@ -82,15 +79,15 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 				picker.Background(glassControlHover(c))
 			}
 		}
-		settingsGlassControl(picker, c, 36, disabled, ui.Transparent)
+		settingsGlassControl(picker, c, 32, disabled, ui.Transparent)
 		picker.Children(func() {
 			ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
 				Width(0).Grow(1).MinWidth(0)
-			ui.Icon(c, settingsChevronIcon).Size(16, 16).Shrink(0).TextColor(t.TextMuted)
+			ui.Icon(c, settingsChevronIcon).Size(15, 15).Shrink(0).TextColor(t.TextMuted)
 		})
 		ui.Box(c).Grow(1).MinWidth(0)
 		if editor.section == settingsGeneral {
-			settingsButton(c, "manage-presets", "管理预设", 32, s.settingsDraftLocked()).OnClick(func() {
+			settingsButton(c, "manage-presets", "管理预设", 30, s.settingsDraftLocked()).OnClick(func() {
 				editor.selected = editor.active
 				editor.section = settingsPresets
 			})
@@ -192,8 +189,8 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
 				downloadColor = t.TextMuted
 			}
-			ui.Row(c).FillWidth().Gap(8).Padding(4, 12).Radius(innerRadius(c)).
-				Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).Padding(6, 12).Radius(innerRadius(c)).
+				Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
@@ -267,21 +264,20 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 			selected = index
 		}
 	}
-	icons := [...]*ui.SVG{settingsSystemIcon, settingsLightIcon, settingsDarkIcon}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
 	locked := s.settingsDraftLocked()
-	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 64)).Gap(8).AlignItems(ui.Stretch).Disabled(locked).
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 66)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
-					Radius(innerRadius(c)).Padding(8).
-					Background(glassCardSurface(c)).Border(1, controlBorder(c))
+					Radius(innerRadius(c)).Padding(6, 10).
+					Background(tonalWellSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
-					segment.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
-					settingsGlassControl(segment, c, 64, locked, t.Accent.Alpha(0.14)).
+					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
+					settingsGlassControl(segment, c, 66, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
@@ -290,11 +286,37 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 						segment.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 					}
 				}
+				mode := option.mode
 				segment.Children(func() {
 					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
-						ui.Icon(c, icons[index]).Size(20, 20).TextColor(color)
+						ui.Box(c).Size(46, 28).Draw(func(p *ui.Painter, r ui.Rect) {
+							lightWin, darkWin := ui.Hex("#f5f6f8"), ui.Hex("#151821")
+							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#202532")
+							lightBar, darkBar := ui.Hex("#e5e7eb"), ui.Hex("#2a3040")
+							switch mode {
+							case themeLight:
+								p.Fill(r, lightWin, 5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.62, Y: r.Y, W: r.W * 0.38, H: r.H}, lightSide, 4)
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 5, W: 14, H: 3.5}, lightBar, 1.75)
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 19, H: 12}, ui.Hex("#dfe3ea"), 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.68, Y: r.Y + 18, W: r.W * 0.25, H: 4.5}, t.Accent, 2.25)
+							case themeDark:
+								p.Fill(r, darkWin, 5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.62, Y: r.Y, W: r.W * 0.38, H: r.H}, darkSide, 4)
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 5, W: 14, H: 3.5}, darkBar, 1.75)
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 19, H: 12}, ui.Hex("#0b0d12"), 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.68, Y: r.Y + 18, W: r.W * 0.25, H: 4.5}, accentForeground(ui.DarkTheme()), 2.25)
+							default:
+								p.Fill(r, lightWin, 5)
+								p.Fill(ui.Rect{X: r.X + r.W/2, Y: r.Y, W: r.W / 2, H: r.H}, darkWin, 4)
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 7, W: 12, H: 14}, ui.Hex("#dfe3ea"), 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W/2 + 4, Y: r.Y + 7, W: 12, H: 14}, darkSide, 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W/2 + 6, Y: r.Y + 16, W: 9, H: 3.5}, accentForeground(ui.DarkTheme()), 1.75)
+							}
+							p.Stroke(r, controlBorder(c), 5, 1)
+						})
 						ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, option.label).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TextColor(t.Text)
+							ui.Text(c, option.label).FontSize(settingsFontSize(c, 12)).FontWeight(500).SingleLine().TextColor(t.Text)
 							if active {
 								ui.Icon(c, presetCheckIcon).Size(12, 12).TextColor(color)
 							}
@@ -311,7 +333,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 func (s *application) settingsFooter(c *ui.Context) {
 	t, editor := c.Theme(), s.editor
 	padding := settingsPagePadding(c)
-	ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+	ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 	if editor.confirmDelete {
 		ui.Row(c).Padding(12, padding).Gap(8).Background(statusTintSurface(c, t.Danger)).AlignItems(ui.Center).Children(func() {
 			name := presetDisplayName(*editor.selectedPreset())
@@ -331,9 +353,9 @@ func (s *application) settingsFooter(c *ui.Context) {
 			destructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 32), false).
 				FontSize(settingsFontSize(c, 13)).OnClick(s.deletePreset)
 		})
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 	}
-	ui.Column(c).Padding(12, padding).Gap(8).Background(panelSurface(c)).Children(func() {
+	ui.Column(c).Padding(12, padding).Gap(8).Background(sidebarSurface(c)).Children(func() {
 		message, color, role := "", t.TextMuted, ui.RoleStatus
 		dirty := s.settingsHaveChanges()
 		presetChanged := editor.presets[editor.active].name != s.scheme
