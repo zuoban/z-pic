@@ -165,10 +165,14 @@ func (s *application) batchListPanel(c *ui.Context) {
 			}
 			s.batch.list.Key = func(i int) any { return s.batch.items[visible[i]].absPath }
 			s.batch.list.Label = func(i int) string { return s.batch.items[visible[i]].relPath }
-			list := ui.List(c, &s.batch.list, len(visible)).
-				Label("批量图片列表").Fill().Padding(8).Gap(8)
-			list.Rows(func(r ui.ListRow) {
-				s.batchListRow(r, visible[r.Index])
+			baseTheme := c.Theme()
+			var list ui.Element
+			ui.Themed(c, customSelectionListTheme(c)).Fill().Background(ui.Transparent).Children(func() {
+				list = ui.List(c, &s.batch.list, len(visible)).
+					Label("批量图片列表").Fill().Padding(8).Gap(8)
+				list.Rows(func(r ui.ListRow) {
+					s.batchListRow(r, visible[r.Index], baseTheme)
+				})
 			})
 			if s.batch.listSelected >= 0 && s.batch.listSelected < len(visible) {
 				s.batch.selected = visible[s.batch.listSelected]
@@ -238,8 +242,7 @@ func (s *application) batchSortControl(c *ui.Context) bool {
 		At:   ui.AnchorBottomEnd,
 		Self: ui.AnchorTopEnd,
 		Panel: func(panel ui.Element) {
-			panel.Radius(12).Background(c.Theme().Surface).Border(1, glassBorder(c)).
-				NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+			stylePopoverPanel(panel, c)
 		},
 	}).Label("队列排序").Height(32).Radius(pillRadius(32, c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).
 		Tooltip("排序方式：" + current.menuLabel)
@@ -267,21 +270,27 @@ func (s *application) emptyBatchFilterMessage() string {
 	}
 }
 
-func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
+func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Theme) {
 	c := r.Context
-	t := c.Theme()
 	item := s.batch.items[itemIndex]
-	statusText, statusColor := batchItemStatus(item, t)
-	detailText, detailColor := batchItemDetail(item, t)
-	background, border := glassCardSurface(c), glassBorder(c)
-	if r.Selected() {
-		background, border = glassSelectionBackground(c), selectionBorder(c)
-	} else if r.Hovered() {
-		background, border = glassControlHover(c), controlHoverBorder(c)
-	}
-	ui.Box(c).FillWidth().Children(func() {
+	ui.Themed(c, baseTheme).FillWidth().Background(ui.Transparent).Children(func() {
+		t := c.Theme()
+		statusText, statusColor := batchItemStatus(item, t)
+		detailText, detailColor := batchItemDetail(item, t)
+		background, border := glassCardSurface(c), glassBorder(c)
+		borderWidth := float32(1)
+		if r.Selected() {
+			background, border = cardSelectionBackground(c), selectionBorder(c)
+			if r.ListFocused() {
+				borderWidth = 1.5
+			}
+		} else if r.Pressed() {
+			background, border = glassControlPressed(c), controlHoverBorder(c)
+		} else if r.Hovered() {
+			background, border = glassControlHover(c), controlHoverBorder(c)
+		}
 		ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
-			Radius(innerRadius(c)).Background(background).Border(1, border).Children(func() {
+			Radius(innerRadius(c)).Background(background).Border(borderWidth, border).Children(func() {
 			s.batchThumbnailView(c, item)
 			ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -289,21 +298,21 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 						TextColor(t.Text).SingleLine().TruncateMiddle().
 						Width(0).Grow(1).Tooltip(item.path)
 					if item.status == batchDone && item.targetSizeMissed {
-						ui.Badge(c, "未达目标").Shrink(0).TextColor(t.Warning).
-							Background(statusTintSurface(c, t.Warning)).
+						statusCapsule(c, "未达目标", t.Warning).SingleLine().
 							Tooltip("目标体积 ≤ " + compress.FormatTargetSize(item.targetSizeBytes))
 					}
-					badge := ui.Text(c, statusText).FontSize(12).FontWeight(500).
-						FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
-					if item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize {
-						badge.Padding(2, 8).Radius(badgeRadius(20)).
-							Background(statusTintSurface(c, t.Success)).Border(1, statusTintBorder(c, t.Success))
-					} else if item.status == batchFailed {
-						badge.Padding(2, 8).Radius(badgeRadius(20)).
-							Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger))
-					} else if item.status == batchProcessing {
-						badge.Padding(2, 8).Radius(badgeRadius(20)).
-							Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+					switch {
+					case item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize:
+						statusCapsule(c, statusText, t.Success).SingleLine()
+					case item.status == batchDone && !item.unchanged && item.outputSize > item.originalSize && item.originalSize > 0:
+						statusCapsule(c, statusText, t.Warning).SingleLine()
+					case item.status == batchFailed:
+						statusCapsule(c, statusText, t.Danger).SingleLine()
+					case item.status == batchProcessing:
+						accentCapsule(c, statusText)
+					default:
+						ui.Text(c, statusText).FontSize(12).FontWeight(500).
+							FontFeatures("tnum").TextColor(statusColor).SingleLine().Shrink(0)
 					}
 				})
 				width, _ := c.Size()
@@ -488,22 +497,11 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 				quietButton(c, "batch-copy-item", "复制", 32, !s.canCopyBatchItem(item)).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
-				dragItem := ui.Row(c.Key("batch-drag-item")).Height(32).Padding(0, 10).Gap(4).
-					AlignItems(ui.Center).Radius(innerRadius(c)).
-					Background(glassControlSurface(c)).Border(1, controlBorder(c)).
-					Label("拖出图片").Tooltip("按住将此压缩输出文件拖到 Finder 或其他应用").
-					Disabled(s.modalOpen())
-				if !s.modalOpen() {
-					idx := selected
-					dragItem.DragDataFrom(func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
-					if dragItem.Hovered() {
-						dragItem.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-					}
-				}
-				dragItem.Children(func() {
-					ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
-					ui.Text(c, "拖出").FontSize(13).TextColor(t.Text).SingleLine()
-				})
+				idx := selected
+				dragExportControl(c, "batch-drag-item", "拖出图片", "拖出",
+					"按住将此压缩输出文件拖到 Finder 或其他应用",
+					32, 13, 400, s.modalOpen(),
+					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
 			quietButton(c, "batch-preview", "预览", 32, s.modalOpen() || item.invalidInput).
 				Tooltip("查看或对比选中图片").
@@ -621,22 +619,11 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 							quietButton(c, "batch-preview-reveal", "定位文件", 32, s.modalOpen()).
 								Tooltip("在文件夹中显示输出文件").
 								OnClick(func() { s.revealFileInFolder(outPath) })
-							dragItem := ui.Row(c.Key("batch-preview-drag")).Height(32).Padding(0, 10).Gap(4).
-								AlignItems(ui.Center).Radius(innerRadius(c)).
-								Background(glassControlSurface(c)).Border(1, controlBorder(c)).
-								Label("拖出图片").Tooltip("按住将此压缩输出文件拖到 Finder 或其他应用").
-								Disabled(s.modalOpen())
-							if !s.modalOpen() {
-								idx := previewIdx
-								dragItem.DragDataFrom(func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
-								if dragItem.Hovered() {
-									dragItem.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-								}
-							}
-							dragItem.Children(func() {
-								ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
-								ui.Text(c, "拖出").FontSize(13).TextColor(t.Text).SingleLine()
-							})
+							idx := previewIdx
+							dragExportControl(c, "batch-preview-drag", "拖出图片", "拖出",
+								"按住将此压缩输出文件拖到 Finder 或其他应用",
+								32, 13, 400, s.modalOpen(),
+								func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 						}
 						quietButton(c, "batch-preview-remove", "移除", 32, s.modalOpen()).
 							Tooltip("从批量队列移除此图片").
@@ -685,17 +672,9 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 	if !s.batch.previewOpen && !s.modalOpen() {
 		if donePaths := s.batchDoneOutputPaths(); len(donePaths) > 0 {
 			label := fmt.Sprintf("拖出已完成（%d 张）", len(donePaths))
-			dragChip := ui.Row(c.Key("drag-out-batch")).FillWidth().Height(30).Padding(0, 10).Gap(6).
-				Center().Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
-				Label(label).Tooltip("按住将全部已完成的压缩文件直接拖到 Finder 或其他应用").
-				DragDataFrom(s.batchAllDoneDragExportData, s.dragExportOptions())
-			if dragChip.Hovered() {
-				dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-			}
-			dragChip.Children(func() {
-				ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
-				ui.Text(c, label).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(t.TextMuted).SingleLine()
-			})
+			dragExportControl(c, "drag-out-batch", label, label,
+				"按住将全部已完成的压缩文件直接拖到 Finder 或其他应用",
+				32, 12, 500, false, s.batchAllDoneDragExportData, s.dragExportOptions()).FillWidth()
 		}
 	}
 	if s.batch.previewOpen && s.result != nil {

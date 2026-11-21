@@ -370,13 +370,13 @@ func (s *application) previewCanvas(c *ui.Context) {
 		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
 				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(5, 12).Radius(badgeRadius(28)).Material(glass.Glass{}).
+					Padding(4, 12).Radius(badgeRadius(24)).Material(glass.Glass{}).
 					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
 				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(5, 12).Radius(badgeRadius(28)).Material(glass.Glass{}).
+					Padding(4, 12).Radius(badgeRadius(24)).Material(glass.Glass{}).
 					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
 			}
 		})

@@ -479,6 +479,25 @@ func statusTintBorder(c *ui.Context, semantic ui.Color) ui.Color {
 	return semantic.Alpha(0.26)
 }
 
+func statusCapsule(c *ui.Context, text string, semantic ui.Color) ui.Element {
+	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
+		TextColor(semantic).Padding(2, 8).Radius(badgeRadius(20)).
+		Background(statusTintSurface(c, semantic)).Border(1, statusTintBorder(c, semantic)).
+		Shrink(0)
+}
+
+func accentCapsule(c *ui.Context, text string) ui.Element {
+	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
+		TextColor(accentForeground(c.Theme())).Padding(2, 8).Radius(badgeRadius(20)).
+		Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).
+		SingleLine().Shrink(0)
+}
+
+func stylePopoverPanel(panel ui.Element, c *ui.Context) ui.Element {
+	return panel.Radius(12).Background(c.Theme().Surface).Border(1, glassBorder(c)).
+		NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+}
+
 // Small passive surfaces stay opaque so they remain legible over native glass.
 func keycapSurface(c *ui.Context) ui.Color {
 	t := c.Theme()
@@ -554,6 +573,34 @@ func glassSelectionBackground(c *ui.Context) ui.Color {
 		return t.Accent.Alpha(0.24)
 	}
 	return t.Accent.Alpha(0.12)
+}
+
+func cardSelectionBackground(c *ui.Context) ui.Color {
+	t := c.Theme()
+	if !usesGlass(c) {
+		if t.Dark {
+			return cardSurface(c).Mix(t.Accent, 0.16)
+		}
+		return cardSurface(c).Mix(t.Accent, 0.07)
+	}
+	if t.Dark {
+		return ui.RGBA(28, 34, 46, 0.88).Mix(t.Accent, 0.16)
+	}
+	return ui.RGBA(255, 255, 255, 0.94).Mix(t.Accent, 0.08)
+}
+
+// customSelectionListTheme suppresses MyGo's solid-accent default row/cell fill
+// so custom cards keep crisp contrast and rounded corners over vibrancy chrome
+// while preserving native list/grid selection, focus and accessibility states.
+func customSelectionListTheme(c *ui.Context) *ui.Theme {
+	lt := *c.Theme()
+	lt.Radius = innerRadius(c)
+	lt.Accent = ui.Transparent
+	lt.InactiveAccent = ui.Color{R: 1, A: 0}
+	lt.SurfaceHover = ui.Transparent
+	lt.SurfacePressed = ui.Transparent
+	lt.Border = ui.Transparent
+	return &lt
 }
 
 func segmentedThumbBorder(c *ui.Context) ui.Color {

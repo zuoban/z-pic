@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -48,6 +51,81 @@ func TestStyleWorkspaceHeadingsAlign(t *testing.T) {
 		if preview.Bounds.Y != overview.Bounds.Y {
 			t.Fatalf("peer headings must align at %d: preview=%v overview=%v", width, preview.Bounds, overview.Bounds)
 		}
+	}
+}
+
+func TestStyleQueueSelectionUsesSoftTintOverVibrancy(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		app := styleReviewApplication(t, "batch")
+		tester := ui.NewTester(app.view, 980, 720)
+		tester.SetDark(dark)
+		tester.SetVibrancy(true)
+		row, ok := tester.AccessByRole(ui.RoleListItem, filepath.Base(app.batch.items[0].path))
+		if !ok || !row.Selected {
+			t.Fatalf("selected queue row must preserve list selection semantics: %+v", row)
+		}
+		img := tester.Image()
+		// Sample the interior of the selected row card to the right of the
+		// thumbnail and text; it must remain a soft surface tint rather than
+		// leaking MyGo's solid #215be6 list selection fill.
+		x := int(row.Bounds.X + row.Bounds.W*0.65)
+		y := int(row.Bounds.Y + row.Bounds.H*0.5)
+		r, g, b, _ := img.At(x, y).RGBA()
+		r8, g8, b8 := uint8(r>>8), uint8(g>>8), uint8(b>>8)
+		if !dark && (r8 < 180 || g8 < 190) {
+			t.Fatalf("light selected queue row must stay a pale tint, got rgb(%d,%d,%d)", r8, g8, b8)
+		}
+		if dark && b8 > 140 {
+			t.Fatalf("dark selected queue row must stay a muted tint, got rgb(%d,%d,%d)", r8, g8, b8)
+		}
+	}
+}
+
+func TestStyleFloatingExpandedFooterFitsWithoutTruncation(t *testing.T) {
+	app := styleReviewApplication(t, "floating")
+	app.floating.expanded = true
+	tester := ui.NewTester(app.floatingView, floatingExpandedWidth, floatingExpandedHeight)
+	var controls []ui.AccessInfo
+	for _, label := range []string{"继续压缩", "查看队列", "预览选中", "复制图片", "拖出图片", "下载位置"} {
+		info, ok := tester.Access(label)
+		if !ok || info.Offscreen || info.Bounds.X < 0 ||
+			info.Bounds.X+info.Bounds.W > floatingExpandedWidth ||
+			info.Bounds.Y+info.Bounds.H > floatingExpandedHeight {
+			t.Fatalf("floating footer control %q must fit cleanly: %+v", label, info)
+		}
+		controls = append(controls, info)
+	}
+	slices.SortFunc(controls, func(a, b ui.AccessInfo) int {
+		if a.Bounds.X < b.Bounds.X {
+			return -1
+		}
+		if a.Bounds.X > b.Bounds.X {
+			return 1
+		}
+		return 0
+	})
+	for i := 1; i < len(controls); i++ {
+		prev, curr := controls[i-1], controls[i]
+		if prev.Bounds.X+prev.Bounds.W > curr.Bounds.X {
+			t.Fatalf("floating footer controls overlap: %s / %s", prev.Name, curr.Name)
+		}
+	}
+}
+
+func TestStyleGeneralShortcutsOddRowAlignsToLeftColumn(t *testing.T) {
+	app := newApplication()
+	if !app.clipboardPNGCompressionAvailable() {
+		t.Skip("7th clipboard compression shortcut is platform-specific")
+	}
+	app.setSettingsOpen(true)
+	tester := ui.NewTester(app.settingsView, 724, 700)
+	firstKey, ok1 := tester.Access(shortcutLabel("O"))
+	oddKey, ok2 := tester.Access(shortcutLabel("⇧V"))
+	if !ok1 || !ok2 {
+		t.Fatalf("expected first and odd-row shortcut keycaps: ok1=%v ok2=%v", ok1, ok2)
+	}
+	if oddKey.Bounds.X+oddKey.Bounds.W != firstKey.Bounds.X+firstKey.Bounds.W {
+		t.Fatalf("odd shortcut row must stay aligned in the left column: first=%v odd=%v", firstKey.Bounds, oddKey.Bounds)
 	}
 }
 
@@ -223,6 +301,49 @@ func TestStyleReviewRenders(t *testing.T) {
 			tester := ui.NewTester(app.floatingView, width, height)
 			tester.SetDark(dark)
 			save("floating-"+state+"-"+theme, tester)
+			if state != "compact" {
+				tester.SetVibrancy(true)
+				bg := color.RGBA{0xf4, 0xf5, 0xf7, 0xff}
+				if dark {
+					bg = color.RGBA{0x0e, 0x10, 0x14, 0xff}
+				}
+				frame := image.NewRGBA(image.Rect(0, 0, width, height))
+				draw.Draw(frame, frame.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
+				draw.Draw(frame, frame.Bounds(), tester.Image(), image.Point{}, draw.Over)
+				file, err := os.Create(filepath.Join(dir, "floating-glass-"+state+"-"+theme+".png"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := png.Encode(file, frame); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		batchGlass := styleReviewApplication(t, "batch")
+		batchTester := ui.NewTester(batchGlass.view, 980, 720)
+		batchTester.SetDark(dark)
+		batchTester.SetVibrancy(true)
+		bg := color.RGBA{0xf4, 0xf5, 0xf7, 0xff}
+		if dark {
+			bg = color.RGBA{0x0e, 0x10, 0x14, 0xff}
+		}
+		frame := image.NewRGBA(image.Rect(0, 0, 980, 720))
+		draw.Draw(frame, frame.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
+		draw.Draw(frame, frame.Bounds(), batchTester.Image(), image.Point{}, draw.Over)
+		file, err := os.Create(filepath.Join(dir, "batch-glass-980-"+theme+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, frame); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

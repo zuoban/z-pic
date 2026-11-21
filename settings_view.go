@@ -69,9 +69,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 		}, ui.PopoverMenuButtonOptions{
 			At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
 			Panel: func(panel ui.Element) {
-				panel.MinWidth(max(180, picker.Bounds().W)).MaxWidth(360).
-					Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
-					NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+				stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 			},
 		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
 			Width(0).Grow(1).MinWidth(0).MaxWidth(360).Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).
@@ -155,9 +153,9 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 	narrow := width < 560
 	sideBySideWorkflow := !narrow && c.Preferences().TextScale <= 1.1
 	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
-	scrollPadV, scrollGap := float32(16), float32(12)
+	scrollPadV, scrollGap := float32(12), float32(12)
 	if narrow {
-		scrollPadV, scrollGap = 10, 8
+		scrollPadV, scrollGap = 12, 8
 	}
 	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
 		settingsPanel(c, "settings-appearance-panel").Children(func() {
@@ -188,14 +186,16 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			}
 			downloadPath := s.editor.downloadDir
 			downloadTooltip := downloadPath
+			downloadColor := t.Text
 			if downloadPath == "" {
 				downloadPath = "默认（下载/Z Pic）"
 				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
+				downloadColor = t.TextMuted
 			}
-			ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
+			ui.Row(c).FillWidth().Gap(8).Padding(4, 12).Radius(innerRadius(c)).
 				Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
-				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).
+				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
+				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
 				settingsButton(c, "settings-download-dir", "选择…", 28, locked).
 					Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
@@ -239,6 +239,8 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 							ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row].label, shortcuts[row].key) })
 							if row+1 < len(shortcuts) {
 								ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row+1].label, shortcuts[row+1].key) })
+							} else {
+								ui.Box(c).Width(0).Grow(1)
 							}
 						})
 					}

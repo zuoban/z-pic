@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
@@ -29,6 +30,40 @@ func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *
 		ui.Icon(c, icon).Size(16, 16).Shrink(0)
 		ui.Text(c, label).SingleLine()
 	})
+}
+
+func dragExportControl(
+	c *ui.Context,
+	key, label, text, tooltip string,
+	height, fontSize float32,
+	weight int,
+	disabled bool,
+	data func() transfer.Data,
+	opts transfer.DragOptions,
+) ui.Element {
+	t := c.Theme()
+	padX, gap := float32(12), float32(8)
+	if height <= 28 {
+		padX, gap = 8, 4
+	}
+	chip := ui.Row(c.Key(key)).Height(height).Padding(0, padX).Gap(gap).
+		Center().Shrink(0).Radius(pillRadius(height, c)).
+		Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+		Label(label).Tooltip(tooltip).Disabled(disabled)
+	if !disabled {
+		chip.DragDataFrom(data, opts)
+		if chip.Pressed() {
+			chip.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
+		} else if chip.Hovered() {
+			chip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+		}
+	}
+	chip.Children(func() {
+		ui.Icon(c, toolbarDragIcon).Size(16, 16).TextColor(t.TextMuted).Shrink(0)
+		ui.Text(c, text).FontSize(fontSize).FontWeight(weight).FontFeatures("tnum").
+			TextColor(t.Text).SingleLine().NoWrap()
+	})
+	return chip
 }
 
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
@@ -178,17 +213,17 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		if availWidth >= 850 || mobile {
 			toolbarButtonContent(c, pasteButton, "粘贴图片", toolbarPasteIcon)
 		} else {
-			pasteButton.Children(func() { ui.Icon(c, toolbarPasteIcon).Size(16, 16) })
+			pasteButton.Size(32, 32).Center().Children(func() { ui.Icon(c, toolbarPasteIcon).Size(16, 16) })
 		}
 		if s.clipboardPNGCompressionAvailable() {
 			const label = "压缩剪贴板图片"
 			button := quietToolbarButton(c, "compress-clipboard-png", "", !s.canCompressClipboardPNG()).
 				Label(label).KeyShortcuts(ui.Cmd|ui.Shift, ui.KeyV).
-				Tooltip("压缩剪贴板中的单张 PNG 并写回 · ⌘⇧V").OnClick(s.compressClipboardPNG)
+				Tooltip("压缩剪贴板中的单张 PNG 并写回 · " + shortcutLabel("⇧V")).OnClick(s.compressClipboardPNG)
 			if availWidth >= 850 || mobile {
 				toolbarButtonContent(c, button, label, toolbarClipboardCompressIcon)
 			} else {
-				button.Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(16, 16) })
+				button.Size(32, 32).Center().Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(16, 16) })
 			}
 		}
 		floatingLabel := "悬浮窗"
@@ -231,7 +266,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 	toolbarHeight := max(bar.Height, mainTitleBarHeight)
 	toolbarGap := float32(8)
 	if availWidth < 660 {
-		toolbarGap = 6
+		toolbarGap = 4
 	}
 	ui.Row(c).FillWidth().Height(toolbarHeight).Padding(0, rightPad, 0, leftPad).
 		Gap(toolbarGap).AlignItems(ui.Center).DragWindow().
@@ -247,7 +282,13 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 
 func shortcutLabel(key string) string {
 	if runtime.GOOS == "darwin" {
+		if strings.HasPrefix(key, "⇧") && len(key) > len("⇧") {
+			return "⇧ ⌘ " + strings.TrimPrefix(key, "⇧")
+		}
 		return "⌘ " + key
+	}
+	if strings.HasPrefix(key, "⇧") && len(key) > len("⇧") {
+		return "Ctrl+Shift+" + strings.TrimPrefix(key, "⇧")
 	}
 	if key == "↵" {
 		key = "Enter"
@@ -541,20 +582,9 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 					KeyShortcuts(ui.Cmd, ui.KeyC).
 					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 			})
-			dragChip := ui.Row(c.Key("drag-out-single")).FillWidth().Height(30).Padding(0, 10).Gap(6).
-				Center().Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
-				Label("拖出压缩图").Tooltip("按住拖动压缩后的图片到 Finder、聊天窗口或其他应用").
-				Disabled(s.modalOpen())
-			if !s.modalOpen() {
-				dragChip.DragDataFrom(s.singleDragExportData, s.dragExportOptions())
-				if dragChip.Hovered() {
-					dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-				}
-			}
-			dragChip.Children(func() {
-				ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(t.TextMuted).Shrink(0)
-				ui.Text(c, "拖出压缩图").FontSize(12).FontWeight(500).TextColor(t.TextMuted).SingleLine()
-			})
+			dragExportControl(c, "drag-out-single", "拖出压缩图", "拖出压缩图",
+				"按住拖动压缩后的图片到 Finder、聊天窗口或其他应用",
+				32, 12, 500, s.modalOpen(), s.singleDragExportData, s.dragExportOptions()).FillWidth()
 		}
 	})
 }
@@ -688,9 +718,7 @@ func quickPickerButton(
 	picker.PopoverMenuButton(buildMenu, ui.PopoverMenuButtonOptions{
 		At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
 		Panel: func(panel ui.Element) {
-			panel.MinWidth(max(148, picker.Bounds().W)).MaxWidth(280).
-				Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
-				NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+			stylePopoverPanel(panel, c).MinWidth(max(148, picker.Bounds().W)).MaxWidth(280)
 		},
 	}).Label(label).Value(display).Tooltip(tooltip).
 		Height(28).Padding(0, 8).Gap(4).
@@ -718,18 +746,14 @@ func (s *application) presetOverview(c *ui.Context) {
 	overridden := s.hasQuickOverrides()
 	disabled := s.modalOpen()
 	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Height(32).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
 			if overridden {
-				ui.Text(c, "已微调").FontSize(12).FontWeight(500).TextColor(accentForeground(t)).
-					Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).
-					Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).
+				accentCapsule(c, "已微调").
 					Tooltip("已临时调整本次压缩参数，不会修改预设本身")
 			}
 			if s.batch != nil && s.batch.previewOpen {
-				ui.Text(c, "单张预览").FontSize(12).FontWeight(500).TextColor(accentForeground(t)).
-					Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).
-					Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
+				accentCapsule(c, "单张预览")
 			}
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -769,7 +793,7 @@ func (s *application) presetOverview(c *ui.Context) {
 					}
 				}).Width(0).Grow(1).MinWidth(0)
 		})
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "格式尺寸").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
 			formatTweaked := hasSaved && s.outputFormat != saved.outputFormat
 			formats := []compress.OutputFormat{
@@ -787,7 +811,7 @@ func (s *application) presetOverview(c *ui.Context) {
 							s.quickSetOutputFormat(format)
 						}
 					}
-				}).Width(0).Grow(1).MinWidth(0).PaddingX(4).Gap(3)
+				}).Width(0).Grow(1.15).MinWidth(0)
 
 			dimTweaked := hasSaved && s.resizeLimits != saved.resizeLimits()
 			dimDisplay := quickDimensionLabel(s.resizeLimits)
@@ -814,7 +838,7 @@ func (s *application) presetOverview(c *ui.Context) {
 							s.editor.focusField = presetResizeModeField
 						}
 					}
-				}).Width(90).Shrink(0).PaddingX(4).Gap(3)
+				}).Width(0).Grow(0.85).MinWidth(0)
 		})
 		if summary := presetProcessingSummary(active); summary != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -824,14 +848,14 @@ func (s *application) presetOverview(c *ui.Context) {
 			})
 		}
 		if overridden {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "临时生效，未改动预设").FontSize(12).TextColor(metadataColor(c)).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().
 					Tooltip("已临时调整本次压缩参数，不会修改预设本身")
-				quietButton(c, "quick-reset-overrides", "重置", 26, disabled).
+				quietButton(c, "quick-reset-overrides", "重置", 28, disabled).FontSize(12).Padding(0, 8).
 					Label("恢复预设参数").Tooltip("放弃临时微调，恢复当前预设参数").
 					OnClick(s.resetQuickOverrides)
-				quietButton(c, "quick-save-preset", "存为预设", 26, disabled).
+				quietButton(c, "quick-save-preset", "存为预设", 28, disabled).FontSize(12).Padding(0, 8).
 					Label("将微调存为新预设").Tooltip("打开设置并将当前临时参数保存为新预设").
 					OnClick(s.openSaveQuickPreset)
 			})
@@ -1060,18 +1084,16 @@ func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Col
 			case ratio >= 1:
 				barColor = t.TextMuted.Alpha(0.45)
 			}
-			ui.Box(c).FillWidth().Height(5).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
+			ui.Box(c).FillWidth().Height(4).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
 				Draw(func(p *ui.Painter, r ui.Rect) {
-					p.Fill(r, meterTrackColor(c), 2.5)
-					fillW := max(5, r.W*float32(min(1, ratio)))
-					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
+					p.Fill(r, meterTrackColor(c), 2)
+					fillW := max(4, r.W*float32(min(1, ratio)))
+					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
 				})
 		}
-		if statusColor == t.Success || statusColor == t.Warning {
+		if statusColor == t.Success || statusColor == t.Warning || statusColor == t.Danger {
 			ui.Row(c).Children(func() {
-				ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
-					TextColor(statusColor).Padding(2, 8).Radius(badgeRadius(20)).
-					Background(statusTintSurface(c, statusColor)).Border(1, statusTintBorder(c, statusColor)).
+				statusCapsule(c, status, statusColor).Role(ui.RoleStatus).
 					MaxLines(2).Tooltip(status)
 			})
 		} else {

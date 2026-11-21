@@ -415,42 +415,35 @@ func (s *application) floatingView(c *ui.Context) {
 			s.floatingHeader(c)
 			s.floatingGallery(c, indices)
 			s.floatingFeedback(c)
-			ui.Row(c).Height(28).Gap(6).AlignItems(ui.Center).Children(func() {
-				compressLabel, canCompress := s.floatingCompressAction()
-				primaryAction(c, "floating-compress", compressLabel, !canCompress).Height(28).Padding(0, 10).
-					Tooltip("直接按当前预设压缩队列图片").
-					OnClick(s.compressFromFloating)
-				quietButton(c, "floating-show-main", "查看队列", 28, false).
-					OnClick(s.showMainWindow)
-				item, selected := s.floatingSelectedImage()
-				quietButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).
-					Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
-					OnClick(s.openFloatingSelection)
-				if s.canCopyFloatingSelection() {
-					quietButton(c, "floating-copy", "复制", 28, false).
-						Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
-						OnClick(s.copyFloatingSelection)
-					dragChip := ui.Row(c.Key("floating-drag")).Height(28).Padding(0, 8).Gap(4).
-						AlignItems(ui.Center).Radius(innerRadius(c)).
-						Background(glassControlSurface(c)).Border(1, controlBorder(c)).
-						Label("拖出图片").Tooltip("按住将所选压缩结果拖到 Finder 或其他应用").
-						DragDataFrom(func() transfer.Data {
-							sel, ok := s.floatingSelectedImage()
-							if !ok {
-								return transfer.Data{}
-							}
-							return s.floatingItemDragExportData(sel)
-						}, s.dragExportOptions())
-					if dragChip.Hovered() {
-						dragChip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			ui.Row(c).FillWidth().Height(28).Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+					compressLabel, canCompress := s.floatingCompressAction()
+					primaryAction(c, "floating-compress", compressLabel, !canCompress).Height(28).FontSize(12).Padding(0, 10).
+						Tooltip("直接按当前预设压缩队列图片").
+						OnClick(s.compressFromFloating)
+					quietButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
+						OnClick(s.showMainWindow)
+					item, selected := s.floatingSelectedImage()
+					quietButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 8).
+						Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
+						OnClick(s.openFloatingSelection)
+					if s.canCopyFloatingSelection() {
+						quietButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 8).
+							Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
+							OnClick(s.copyFloatingSelection)
+						dragExportControl(c, "floating-drag", "拖出图片", "拖出",
+							"按住将所选压缩结果拖到 Finder 或其他应用",
+							28, 12, 400, false,
+							func() transfer.Data {
+								sel, ok := s.floatingSelectedImage()
+								if !ok {
+									return transfer.Data{}
+								}
+								return s.floatingItemDragExportData(sel)
+							}, s.dragExportOptions())
 					}
-					dragChip.Children(func() {
-						ui.Icon(c, toolbarDragIcon).Size(13, 13).TextColor(theme.TextMuted).Shrink(0)
-						ui.Text(c, "拖出").FontSize(12).TextColor(theme.Text).SingleLine()
-					})
-				}
-				ui.Box(c).Grow(1)
-				quietButton(c, "floating-downloads", "下载位置", 28, false).
+				})
+				quietButton(c, "floating-downloads", "下载位置", 28, false).FontSize(12).Padding(0, 8).
 					Tooltip("打开网页原图下载文件夹").
 					OnClick(s.openDownloadedImagesDir)
 			})
@@ -563,7 +556,10 @@ func (s *application) floatingHeader(c *ui.Context) {
 						s.floating.filter = index
 					}
 				}
-			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
+			}, ui.PopoverMenuButtonOptions{
+				At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
+				Panel: func(panel ui.Element) { stylePopoverPanel(panel, c) },
+			})
 		if s.floating.filter != batchFilterAll {
 			filter.Selected(true).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 		}
@@ -574,7 +570,10 @@ func (s *application) floatingHeader(c *ui.Context) {
 						s.floating.sort = option.mode
 					}
 				}
-			}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
+			}, ui.PopoverMenuButtonOptions{
+				At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
+				Panel: func(panel ui.Element) { stylePopoverPanel(panel, c) },
+			})
 		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
@@ -624,22 +623,25 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 		}
 		return s.floatingImage(indices[position]).relPath
 	}
+	baseTheme := c.Theme()
 	var gallery ui.Element
-	if s.floating.listView {
-		state := &s.floating.list
-		state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
-		gallery = ui.List(c.Key("floating-gallery-list"), state, len(indices)+1).
-			Label("悬浮窗图片列表").FillWidth().Grow(1).Gap(4)
-		gallery.Rows(func(row ui.ListRow) {
-			s.floatingGalleryItem(row.Context, indices, row.Index, true)
-		})
-	} else {
-		state := &s.floating.grid
-		state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
-		gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 128,
-			func(position int) { s.floatingGalleryItem(c, indices, position, false) }).
-			Label("悬浮窗图片网格").FillWidth().Grow(1)
-	}
+	ui.Themed(c, customSelectionListTheme(c)).FillWidth().Grow(1).MinHeight(0).Background(ui.Transparent).Children(func() {
+		if s.floating.listView {
+			state := &s.floating.list
+			state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
+			gallery = ui.List(c.Key("floating-gallery-list"), state, len(indices)+1).
+				Label("悬浮窗图片列表").Fill().Gap(4)
+			gallery.Rows(func(row ui.ListRow) {
+				s.floatingGalleryItem(row.Context, indices, row.Index, true, baseTheme)
+			})
+		} else {
+			state := &s.floating.grid
+			state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
+			gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 128,
+				func(position int) { s.floatingGalleryItem(c, indices, position, false, baseTheme) }).
+				Label("悬浮窗图片网格").Fill()
+		}
+	})
 	if s.floating.cursor >= 0 && s.floating.cursor < len(indices) {
 		s.floating.selected = s.floatingImage(indices[s.floating.cursor]).path
 	}
@@ -652,113 +654,122 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 	}
 }
 
-func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position int, list bool) {
-	theme := c.Theme()
-	if position == len(indices) {
-		_, selected := s.floatingSelectedImage()
-		foreground, iconColor := theme.Text, theme.TextMuted
-		button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(innerRadius(c)).
-			Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
-			Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
-			Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
-			OnClick(s.revealFloatingSelection)
-		if button.Hovered() && selected && !s.modalOpen() {
-			button.Background(glassControlHover(c))
-		}
-		if s.floating.cursor == position {
-			button.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
-		}
-		if list {
-			button.Height(56).Row().Gap(8)
-		}
-		button.Children(func() {
-			floatingIcon(c, "reveal", 16, iconColor)
-			ui.Text(c, floatingRevealLabel()).FontSize(13).TextColor(foreground)
-		})
-		return
-	}
-	item := s.floatingImage(indices[position])
-	bitmap := s.floatingBitmap(item)
-	selected := s.floating.cursor == position
-	background, border := glassCardSurface(c), glassBorder(c)
-	foreground, secondary := theme.Text, metadataColor(c)
-	if selected {
-		background, border = glassSelectionBackground(c), selectionBorder(c)
-	}
-	tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(innerRadius(c)).Background(background).
-		Border(1, border).Tooltip(item.path)
-	if tile.Hovered() && !selected {
-		tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-	}
+func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position int, list bool, baseTheme *ui.Theme) {
+	wrapper := ui.Themed(c, baseTheme).Background(ui.Transparent)
 	if list {
-		tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
+		wrapper.FillWidth()
+	} else {
+		wrapper.Fill()
 	}
-	tile.Children(func() {
-		image := ui.Column(c).Grow(1).FillWidth().Center()
-		if list {
-			image.Grow(0).Size(56, 40).Shrink(0)
-		} else {
-			image.Height(48).Grow(0).Shrink(0)
+	wrapper.Children(func() {
+		theme := c.Theme()
+		if position == len(indices) {
+			_, selected := s.floatingSelectedImage()
+			foreground, iconColor := theme.Text, theme.TextMuted
+			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(innerRadius(c)).
+				Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+				Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
+				Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
+				OnClick(s.revealFloatingSelection)
+			if button.Hovered() && selected && !s.modalOpen() {
+				button.Background(glassControlHover(c))
+			}
+			if s.floating.cursor == position {
+				button.Background(cardSelectionBackground(c)).Border(1.5, selectionBorder(c))
+			}
+			if list {
+				button.Height(56).Row().Gap(8)
+			}
+			button.Children(func() {
+				floatingIcon(c, "reveal", 16, iconColor)
+				ui.Text(c, floatingRevealLabel()).FontSize(13).TextColor(foreground)
+			})
+			return
 		}
-		image.Children(func() {
-			if bitmap != nil {
-				maxWidth, maxHeight := float32(96), float32(48)
-				if list {
-					maxWidth, maxHeight = 56, 40
-				}
-				width, height := bitmap.Size()
-				scale := min(maxWidth/float32(width), maxHeight/float32(height))
-				ui.Image(c, bitmap).Size(float32(width)*scale, float32(height)*scale).
-					Fit(ui.Contain).Radius(4).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
+		item := s.floatingImage(indices[position])
+		bitmap := s.floatingBitmap(item)
+		selected := s.floating.cursor == position
+		background, border := glassCardSurface(c), glassBorder(c)
+		borderWidth := float32(1)
+		foreground, secondary := theme.Text, metadataColor(c)
+		if selected {
+			background, border, borderWidth = cardSelectionBackground(c), selectionBorder(c), 1.5
+		}
+		tile := ui.Column(c).Fill().Padding(8).Gap(4).Radius(innerRadius(c)).Background(background).
+			Border(borderWidth, border).Tooltip(item.path)
+		if tile.Hovered() && !selected {
+			tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+		}
+		if list {
+			tile.Row().Height(56).Gap(8).AlignItems(ui.Center)
+		}
+		tile.Children(func() {
+			image := ui.Column(c).Grow(1).FillWidth().Center()
+			if list {
+				image.Grow(0).Size(56, 40).Shrink(0)
 			} else {
-				floatingIcon(c, "photo", 32, secondary)
-				if item.invalidInput {
-					ui.Text(c, "无预览").FontSize(12).TextColor(secondary)
+				image.Height(48).Grow(0).Shrink(0)
+			}
+			image.Children(func() {
+				if bitmap != nil {
+					maxWidth, maxHeight := float32(96), float32(48)
+					if list {
+						maxWidth, maxHeight = 56, 40
+					}
+					width, height := bitmap.Size()
+					scale := min(maxWidth/float32(width), maxHeight/float32(height))
+					ui.Image(c, bitmap).Size(float32(width)*scale, float32(height)*scale).
+						Fit(ui.Contain).Radius(4).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
+				} else {
+					floatingIcon(c, "photo", 32, secondary)
+					if item.invalidInput {
+						ui.Text(c, "无预览").FontSize(12).TextColor(secondary)
+					}
 				}
+			})
+			details := ui.Column(c).FillWidth().Gap(4)
+			if list {
+				details.Width(0).Grow(1)
 			}
-		})
-		details := ui.Column(c).FillWidth().Gap(4)
-		if list {
-			details.Width(0).Grow(1)
-		}
-		details.Children(func() {
-			filename := ui.Text(c, filepath.Base(item.relPath)).FontSize(13).FontWeight(500).
-				TextColor(foreground).SingleLine().TruncateMiddle().FillWidth()
-			detail := formatSize(item.originalSize)
-			if item.status == batchDone && item.outputSize > 0 {
-				detail += " → " + formatSize(item.outputSize)
-			} else if item.width > 0 && item.height > 0 {
-				detail += fmt.Sprintf(" · %d×%d", item.width, item.height)
-			}
-			if item.status == batchFailed {
-				detail = "失败 · " + detail
-				secondary = theme.Danger
-			}
-			detailTooltip := detail
-			if item.errMsg != "" {
-				detailTooltip += "\n" + item.errMsg
-			}
-			displayDetail := detail
-			if !list {
-				// Keep each measured size and its unit together in narrow cells.
-				displayDetail = formatSize(item.originalSize)
+			details.Children(func() {
+				filename := ui.Text(c, filepath.Base(item.relPath)).FontSize(13).FontWeight(500).
+					TextColor(foreground).SingleLine().TruncateMiddle().FillWidth()
+				detail := formatSize(item.originalSize)
 				if item.status == batchDone && item.outputSize > 0 {
-					displayDetail += "\n→ " + formatSize(item.outputSize)
+					detail += " → " + formatSize(item.outputSize)
 				} else if item.width > 0 && item.height > 0 {
-					displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
+					detail += fmt.Sprintf(" · %d×%d", item.width, item.height)
 				}
 				if item.status == batchFailed {
-					displayDetail = "失败 · " + displayDetail
+					detail = "失败 · " + detail
+					secondary = theme.Danger
 				}
-			}
-			metadata := ui.Text(c, displayDetail).FontSize(12).FontFeatures("tnum").TextColor(secondary).
-				FillWidth().Tooltip(detailTooltip)
-			if list {
-				metadata.SingleLine().TruncateMiddle()
-			} else {
-				filename.TextAlign(ui.Center)
-				metadata.MaxLines(2).TextAlign(ui.Center)
-			}
+				detailTooltip := detail
+				if item.errMsg != "" {
+					detailTooltip += "\n" + item.errMsg
+				}
+				displayDetail := detail
+				if !list {
+					// Keep each measured size and its unit together in narrow cells.
+					displayDetail = formatSize(item.originalSize)
+					if item.status == batchDone && item.outputSize > 0 {
+						displayDetail += "\n→ " + formatSize(item.outputSize)
+					} else if item.width > 0 && item.height > 0 {
+						displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
+					}
+					if item.status == batchFailed {
+						displayDetail = "失败 · " + displayDetail
+					}
+				}
+				metadata := ui.Text(c, displayDetail).FontSize(12).FontFeatures("tnum").TextColor(secondary).
+					FillWidth().Tooltip(detailTooltip)
+				if list {
+					metadata.SingleLine().TruncateMiddle()
+				} else {
+					filename.TextAlign(ui.Center)
+					metadata.MaxLines(2).TextAlign(ui.Center)
+				}
+			})
 		})
 	})
 }

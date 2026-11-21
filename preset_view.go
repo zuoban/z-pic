@@ -14,11 +14,12 @@ import (
 )
 
 var (
-	presetPlusIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg>`))
-	presetCheckIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 4.9 8.6 9.5 3.6"/></svg>`))
-	presetQualityIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5h2.5m3.5 0h6M2 11h6m3.5 0H14"/><circle cx="6.25" cy="5" r="1.75"/><circle cx="9.75" cy="11" r="1.75"/></svg>`))
-	presetSaveIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.25A1.25 1.25 0 0 1 3.75 3h2.6l1.4 1.5h4.5A1.25 1.25 0 0 1 13.5 5.75v6A1.25 1.25 0 0 1 12.25 13h-8.5A1.25 1.25 0 0 1 2.5 11.75Z"/></svg>`))
-	presetInfoIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v3.5M8 5.1v.15"/></svg>`))
+	presetPlusIcon       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg>`))
+	presetCheckIcon      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2 4.9 8.6 9.5 3.6"/></svg>`))
+	presetQualityIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5h2.5m3.5 0h6M2 11h6m3.5 0H14"/><circle cx="6.25" cy="5" r="1.75"/><circle cx="9.75" cy="11" r="1.75"/></svg>`))
+	presetSaveIcon       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.25A1.25 1.25 0 0 1 3.75 3h2.6l1.4 1.5h4.5A1.25 1.25 0 0 1 13.5 5.75v6A1.25 1.25 0 0 1 12.25 13h-8.5A1.25 1.25 0 0 1 2.5 11.75Z"/></svg>`))
+	presetProcessingIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8h5M8 5.5v5"/></svg>`))
+	presetInfoIcon       = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v3.5M8 5.1v.15"/></svg>`))
 )
 
 func presetActiveIndicator(c *ui.Context) {
@@ -307,6 +308,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 				Tooltip(losslessNote).Changed() {
 				s.editor.message = ""
 			}
+			ui.Box(c).Size(1, 14).Background(glassDivider(c))
 			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
 				FontFeatures("tnum").TextColor(t.Text).SingleLine()
 		})
@@ -385,12 +387,13 @@ var resizeDimensionPresets = [...]struct {
 func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPreset) {
 	t := c.Theme()
 	locked := s.settingsDraftLocked()
-	settingsPanel(c, "settings-processing-panel").Children(func() {
+	settingsPanel(c, "settings-processing-panel").Gap(8).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, presetProcessingIcon).Size(16, 16).TextColor(t.TextMuted)
 			ui.Text(c, "格式与优化").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 		})
 		// Output format
-		ui.Column(c).FillWidth().Gap(6).Children(func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Text(c, "输出格式").FontSize(settingsFontSize(c, 13)).FontWeight(500)
 			formats := []compress.OutputFormat{
 				compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
@@ -437,10 +440,13 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			}
 			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		s.presetResizeSection(c, preset)
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		s.presetTargetSizeSection(c, preset)
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
 		// Metadata policy
-		ui.Column(c).FillWidth().Gap(6).Children(func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Text(c, "元数据").FontSize(settingsFontSize(c, 13)).FontWeight(500)
 			metaIdx := 0
 			switch preset.metadata {
@@ -472,7 +478,7 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 				}
 				metaNote = "同格式 " + formats + " 尽量保留元数据。转换时保留兼容色彩配置并校正方向。"
 			}
-			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).MaxLines(2)
+			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
 	})
 }
@@ -489,7 +495,7 @@ func (s *application) presetResizeSection(c *ui.Context, preset *compressionPres
 		editor.message = ""
 	}
 	reveal := editor.focusField == presetResizeModeField && !locked
-	section := ui.Column(c).FillWidth().Gap(6)
+	section := ui.Column(c).FillWidth().Gap(8)
 	section.Children(func() {
 		ui.Text(c, "尺寸缩放").FontSize(settingsFontSize(c, 13)).FontWeight(500)
 		modes, selected := settingsSegmentsWithSelection(c, presetResizeModeField, "尺寸缩放", &mode, locked,
@@ -507,8 +513,13 @@ func (s *application) presetResizeSection(c *ui.Context, preset *compressionPres
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "长边快捷值（px）").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
 				for _, choice := range resizeDimensionPresets[1:] {
-					button := settingsButton(c, "resize-quick-"+choice.label, choice.label, 30, locked).
-						Width(0).MinWidth(0).Grow(1).PaddingX(4)
+					active := mode == resizeLongEdge && preset.maxDimension == choice.value
+					button := settingsButton(c, "resize-quick-"+choice.label, choice.label, 32, locked).
+						Width(0).MinWidth(0).Grow(1).PaddingX(8).FontFeatures("tnum").Selected(active)
+					if active {
+						button.FontWeight(500).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(c.Theme().Text)
+						settingsGlassControl(button, c, 32, locked, c.Theme().Accent.Alpha(0.14))
+					}
 					if button.Clicked() {
 						mode = resizeLongEdge
 						setLimits(resizeLimits{maxDimension: choice.value})
@@ -536,7 +547,7 @@ func (s *application) presetResizeSection(c *ui.Context, preset *compressionPres
 				}{target, mode}
 				input = ui.TextInput(c.Key(key), text).LabelledBy(label).Description(note).
 					Width(settingsFontSize(c, 112)).Height(settingsControlHeight(c, 32)).
-					FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+					FontSize(settingsFontSize(c, 13)).FontFeatures("tnum").Padding(0, 12).Disabled(locked)
 				styleGlassField(input, c, 32)
 				s.focusSettingsField(input, presetResizeValueField)
 				if input.Changed() {
@@ -568,7 +579,7 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 	text := &target.sizeText
 	_, problem := compress.ParseTargetSize(*text)
 	locked := s.settingsDraftLocked()
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		limit := "不限制"
 		if preset.targetSizeBytes > 0 {
 			limit = "≤ " + compress.FormatTargetSize(preset.targetSizeBytes)
@@ -597,7 +608,7 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 			label := ui.Text(c, "自定义上限").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
 			input = ui.TextInput(c.Key("preset-target-size-input"), text).LabelledBy(label).
 				Placeholder("如 300KB / 1.5MiB").Width(settingsFontSize(c, 168)).Height(settingsControlHeight(c, 32)).
-				FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+				FontSize(settingsFontSize(c, 13)).FontFeatures("tnum").Padding(0, 12).Disabled(locked)
 			styleGlassField(input, c, 32)
 			s.focusSettingsField(input, "preset-target-size-input")
 			if pickedSize {
@@ -629,9 +640,11 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 func (s *application) presetTargetResizeFields(c *ui.Context, preset *compressionPreset, text *string) {
 	locked := s.settingsDraftLocked()
 	enabled := preset.targetResizeMinDimension != 0
+	toggledOn := false
 	if ui.Checkbox(c.Key("preset-target-resize"), &enabled, "超出目标时自动缩小").
 		FontSize(settingsFontSize(c, 13)).Disabled(locked).Changed() {
 		if enabled {
+			toggledOn = true
 			preset.targetResizeMinDimension = defaultPresetTargetResizeMinDimension
 			if floor, err := parseTargetResizeMinDimension(*text); err == nil {
 				preset.targetResizeMinDimension = floor
@@ -651,9 +664,12 @@ func (s *application) presetTargetResizeFields(c *ui.Context, preset *compressio
 		label := ui.Text(c, "长边下限（px）").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
 		input = ui.TextInput(c.Key(presetTargetResizeMinField), text).LabelledBy(label).
 			Width(settingsFontSize(c, 112)).Height(settingsControlHeight(c, 32)).
-			FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+			FontSize(settingsFontSize(c, 13)).FontFeatures("tnum").Padding(0, 12).Disabled(locked)
 		styleGlassField(input, c, 32)
 		s.focusSettingsField(input, presetTargetResizeMinField)
+		if toggledOn {
+			input.ScrollIntoView()
+		}
 		if input.Changed() {
 			floor, problem = parseTargetResizeMinDimension(*text)
 			if problem == nil {
