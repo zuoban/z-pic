@@ -62,7 +62,11 @@ func TestStyleToolbarFitsNativeChrome(t *testing.T) {
 				t.Fatal("main toolbar missing")
 			}
 			var controls []ui.AccessInfo
-			for _, label := range []string{"重新压缩", "继续压缩", "粘贴图片", "悬浮窗", "设置"} {
+			labels := []string{"重新压缩", "继续压缩", "粘贴图片", "悬浮窗", "设置"}
+			if app.clipboardPNGCompressionAvailable() {
+				labels = append(labels, "压缩剪贴板图片")
+			}
+			for _, label := range labels {
 				control, ok := tester.AccessByRole(ui.RoleButton, label)
 				if !ok || control.Offscreen || control.Bounds.X < 80 ||
 					control.Bounds.X+control.Bounds.W > float32(width) ||

@@ -204,6 +204,9 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			shortcuts := []struct{ label, key string }{
 				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
 			}
+			if s.clipboardPNGCompressionAvailable() {
+				shortcuts = append(shortcuts, struct{ label, key string }{"压缩剪贴板图片", "⇧V"})
+			}
 			renderRow := func(label, key string) {
 				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 28)).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).

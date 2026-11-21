@@ -44,6 +44,25 @@ var (
 	pngIENDChunk = [12]byte{0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82}
 )
 
+// CompressClipboardPNG compresses a static PNG snapshot using the preset's
+// PNG, lossless, metadata, and size settings. The result reports the selected
+// PNG's actual byte count. Keep data immutable while using the result, which
+// may retain the input bytes.
+func CompressClipboardPNG(ctx context.Context, data []byte, options Options) (*Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("压缩已取消：%w", err)
+	}
+	options.OutputFormat = OutputFormatPNG
+	options.SkipOverwriteSnapshot = true
+	if err := validateOptions(options); err != nil {
+		return nil, err
+	}
+	if !bytes.HasPrefix(data, pngSignature[:]) {
+		return nil, errors.New("仅支持压缩剪贴板中的静态 PNG 图片")
+	}
+	return compressData(ctx, data, "", "", options, nil)
+}
+
 func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

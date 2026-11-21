@@ -92,6 +92,8 @@ type application struct {
 	applyNativeTheme      func(mygo.ThemeSource)
 	writeClipboardImage   func([]byte) error
 	readClipboardImages   func() (transfer.Data, error)
+	readClipboardPNG      func() ([]byte, int64, error)
+	replaceClipboardPNG   func([]byte, int64) error
 	clipboardToast        *ui.Toast
 	clipboardImporting    bool
 	clipboardOutcome      clipboardImportOutcome

@@ -150,23 +150,8 @@ func validateRequest(ctx context.Context, path string, options Options) (string,
 	if options.Quality < 1 || options.Quality > 100 {
 		return "", fmt.Errorf("压缩质量必须在 1 到 100 之间")
 	}
-	if err := options.PNG.Validate(); err != nil {
+	if err := validateOptions(options); err != nil {
 		return "", err
-	}
-	if err := options.Metadata.Validate(); err != nil {
-		return "", err
-	}
-	if err := options.OutputFormat.Validate(); err != nil {
-		return "", err
-	}
-	if err := ValidateMaxDimension(options.MaxDimension); err != nil {
-		return "", err
-	}
-	if err := ValidateTargetSizeBytes(options.TargetSizeBytes); err != nil {
-		return "", err
-	}
-	if err := ValidateMaxDimension(options.TargetResizeMinDimension); err != nil {
-		return "", fmt.Errorf("目标体积缩放的最小边长设置无效：%w", err)
 	}
 	if path == "" {
 		return "", fmt.Errorf("图片路径不能为空")
@@ -179,6 +164,28 @@ func validateRequest(ctx context.Context, path string, options Options) (string,
 		return "", fmt.Errorf("无法解析图片路径：%w", err)
 	}
 	return sourcePath, nil
+}
+
+func validateOptions(options Options) error {
+	if err := options.PNG.Validate(); err != nil {
+		return err
+	}
+	if err := options.Metadata.Validate(); err != nil {
+		return err
+	}
+	if err := options.OutputFormat.Validate(); err != nil {
+		return err
+	}
+	if err := ValidateMaxDimension(options.MaxDimension); err != nil {
+		return err
+	}
+	if err := ValidateTargetSizeBytes(options.TargetSizeBytes); err != nil {
+		return err
+	}
+	if err := ValidateMaxDimension(options.TargetResizeMinDimension); err != nil {
+		return fmt.Errorf("目标体积缩放的最小边长设置无效：%w", err)
+	}
+	return nil
 }
 
 func compressData(ctx context.Context, data []byte, path, sourcePath string, options Options, preview *image.Image) (*Result, error) {

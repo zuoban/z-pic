@@ -14,13 +14,14 @@ import (
 const mainTitleBarHeight = 52
 
 var (
-	toolbarCompressIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l4 4M2 6h4V2M14 14l-4-4m0 4v-4h4"/></svg>`))
-	toolbarRestartIcon  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 6a5.25 5.25 0 1 0 .15 3.5M13 2.5V6H9.5"/></svg>`))
-	toolbarContinueIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l7 5-7 5Z"/></svg>`))
-	toolbarFloatingIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><rect x="8" y="7" width="4" height="4" rx=".5"/></svg>`))
-	toolbarSettingsIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.75h3l.4 1.75 1.2.7 1.7-.5 1.5 2.6L13 7.5v1l1.3 1.2-1.5 2.6-1.7-.5-1.2.7-.4 1.75h-3l-.4-1.75-1.2-.7-1.7.5-1.5-2.6L3 8.5v-1L1.7 6.3l1.5-2.6 1.7.5 1.2-.7Z"/><circle cx="8" cy="8" r="2"/></svg>`))
-	toolbarPasteIcon    = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="1.5" width="6" height="3" rx="1"/><path d="M5 3H3.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H11M8 7v4m-2-2h4"/></svg>`))
-	toolbarDragIcon     = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6-6M8 4h4v4M12 10v2.5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1H6"/></svg>`))
+	toolbarCompressIcon          = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l4 4M2 6h4V2M14 14l-4-4m0 4v-4h4"/></svg>`))
+	toolbarRestartIcon           = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 6a5.25 5.25 0 1 0 .15 3.5M13 2.5V6H9.5"/></svg>`))
+	toolbarContinueIcon          = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l7 5-7 5Z"/></svg>`))
+	toolbarFloatingIcon          = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><rect x="8" y="7" width="4" height="4" rx=".5"/></svg>`))
+	toolbarSettingsIcon          = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 1.75h3l.4 1.75 1.2.7 1.7-.5 1.5 2.6L13 7.5v1l1.3 1.2-1.5 2.6-1.7-.5-1.2.7-.4 1.75h-3l-.4-1.75-1.2-.7-1.7.5-1.5-2.6L3 8.5v-1L1.7 6.3l1.5-2.6 1.7.5 1.2-.7Z"/><circle cx="8" cy="8" r="2"/></svg>`))
+	toolbarPasteIcon             = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="1.5" width="6" height="3" rx="1"/><path d="M5 3H3.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H11M8 7v4m-2-2h4"/></svg>`))
+	toolbarClipboardCompressIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="1.5" width="6" height="3" rx="1"/><path d="M5 3H3.5a1 1 0 0 0-1 1v9.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H11M5.5 7l2 2m0-2v2h-2m5 3-2-2m0 2v-2h2"/></svg>`))
+	toolbarDragIcon              = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10l6-6M8 4h4v4M12 10v2.5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1H6"/></svg>`))
 )
 
 func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
@@ -81,6 +82,9 @@ func (s *application) view(c *ui.Context) {
 	if !s.modalOpen() {
 		c.OnWindowShortcut(ui.Cmd, ui.KeyO, s.chooseFile)
 		c.OnWindowShortcut(ui.Cmd, ui.KeyV, s.pasteImages)
+		if !c.FocusTakesText() && s.canCompressClipboardPNG() {
+			c.OnWindowShortcut(ui.Cmd|ui.Shift, ui.KeyV, s.compressClipboardPNG)
+		}
 		if !c.FocusTakesText() && s.canCopyResult() {
 			c.OnWindowShortcut(ui.Cmd, ui.KeyC, s.copyResult)
 		}
@@ -174,6 +178,17 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 			toolbarButtonContent(c, pasteButton, "粘贴图片", toolbarPasteIcon)
 		} else {
 			pasteButton.Children(func() { ui.Icon(c, toolbarPasteIcon).Size(16, 16) })
+		}
+		if s.clipboardPNGCompressionAvailable() {
+			const label = "压缩剪贴板图片"
+			button := quietToolbarButton(c, "compress-clipboard-png", "", !s.canCompressClipboardPNG()).
+				Label(label).KeyShortcuts(ui.Cmd|ui.Shift, ui.KeyV).
+				Tooltip("压缩剪贴板中的单张 PNG 并写回 · ⌘⇧V").OnClick(s.compressClipboardPNG)
+			if availWidth >= 850 || mobile {
+				toolbarButtonContent(c, button, label, toolbarClipboardCompressIcon)
+			} else {
+				button.Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(16, 16) })
+			}
 		}
 		floatingLabel := "悬浮窗"
 		if s.floatingOpen {
