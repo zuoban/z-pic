@@ -40,7 +40,7 @@ func shouldRunCLI(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "compress", "presets", "version", "help", "-h", "--help", "-v", "--version":
+	case "compress", "watch", "presets", "version", "help", "-h", "--help", "-v", "--version":
 		return true
 	default:
 		return false
@@ -67,6 +67,8 @@ func runCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return runCLIPresets(args[1:], stdout, stderr)
 	case "compress":
 		return runCLICompress(ctx, args[1:], stdout, stderr)
+	case "watch":
+		return runCLIWatch(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "未知命令：%s\n运行 \"z-pic help\" 查看可用命令。\n", args[0])
 		return 2
@@ -82,6 +84,8 @@ func printRootCLIHelp(w io.Writer) {
 用法:
   z-pic [图片或文件夹 ...]           启动桌面界面（可选直接加载文件）
   z-pic compress [选项] <路径 ...>   无界面批量压缩图片或文件夹
+  z-pic watch --output-dir <目录> [选项] <输入目录>
+                                    持续压缩新到达的图片
   z-pic presets [选项]               列出已保存的压缩预设
   z-pic version [--json]             显示版本信息
   z-pic help [命令]                  显示帮助信息
@@ -92,6 +96,7 @@ func printRootCLIHelp(w io.Writer) {
   z-pic compress --max-size 300KB hero.jpg
   z-pic compress --preset 均衡 --in-place ./images
   z-pic compress --dry-run --json ./photos
+  z-pic watch --output-dir ./dist --max-size '500 KiB' ./inbox
 
 运行 "z-pic help <命令>" 查看具体选项。
 `, appVersion, formats)
@@ -105,6 +110,9 @@ func runCLIHelp(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "compress":
 		printCompressCLIHelp(stdout)
+		return 0
+	case "watch":
+		printWatchCLIHelp(stdout)
 		return 0
 	case "presets":
 		printPresetsCLIHelp(stdout)
@@ -477,47 +485,150 @@ func expectedExtMatchesFormat(ext, format string) bool {
 	}
 }
 
+type cliCompressionFlags struct {
+	presetName      string
+	settingsPath    string
+	quality         int
+	lossless        bool
+	format          string
+	maxDim          int
+	maxWidth        int
+	maxHeight       int
+	scalePercent    int
+	maxSize         string
+	targetResizeMin int
+	metadata        string
+}
+
+func (f *cliCompressionFlags) bind(fs *flag.FlagSet) {
+	fs.StringVar(&f.presetName, "preset", "", "preset name")
+	fs.StringVar(&f.presetName, "p", "", "preset name")
+	fs.StringVar(&f.settingsPath, "settings", "", "settings file path")
+	fs.IntVar(&f.quality, "quality", 80, "quality 1-100")
+	fs.IntVar(&f.quality, "q", 80, "quality 1-100")
+	fs.BoolVar(&f.lossless, "lossless", false, "lossless compression")
+	fs.StringVar(&f.format, "format", "", "output format: "+cliOutputFormats+" (jpg is an alias for jpeg)")
+	fs.IntVar(&f.maxDim, "max-dim", 0, "max long-edge dimension in pixels")
+	fs.IntVar(&f.maxWidth, "max-width", 0, "max displayed width in pixels")
+	fs.IntVar(&f.maxHeight, "max-height", 0, "max displayed height in pixels")
+	fs.IntVar(&f.scalePercent, "scale-percent", 0, "resize to a percentage of the original dimensions")
+	fs.StringVar(&f.maxSize, "max-size", "", "target output size")
+	fs.IntVar(&f.targetResizeMin, "target-resize-min", 0, "minimum long edge for automatic target-size resizing")
+	fs.StringVar(&f.metadata, "metadata", "", "metadata policy: keep-all|keep-icc|strip")
+}
+
+func (f cliCompressionFlags) loadSettings(setFlags map[string]bool) (appSettings, error) {
+	if f.presetName == "" && !setFlags["settings"] {
+		return appSettings{}, nil
+	}
+	cfg, _, err := loadCLISettings(f.settingsPath)
+	if err != nil {
+		return appSettings{}, fmt.Errorf("读取设置失败：%w", err)
+	}
+	return cfg, nil
+}
+
+func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) (compress.Options, *compressionPreset, error) {
+	opts := compress.Options{Quality: 80, PNG: compress.DefaultPNGOptions()}
+	var basePreset *compressionPreset
+	if f.presetName != "" {
+		for i := range cfg.presets {
+			if cfg.presets[i].name == f.presetName {
+				basePreset = &cfg.presets[i]
+				break
+			}
+		}
+		if basePreset == nil {
+			return opts, nil, fmt.Errorf("找不到预设 %q；运行 \"z-pic presets\" 查看可用预设。", f.presetName)
+		}
+		opts = compress.Options{
+			Quality:                  int(basePreset.quality),
+			PNG:                      basePreset.png,
+			Lossless:                 basePreset.lossless,
+			Metadata:                 basePreset.metadata,
+			OutputFormat:             basePreset.outputFormat,
+			MaxDimension:             basePreset.maxDimension,
+			MaxWidth:                 basePreset.maxWidth,
+			MaxHeight:                basePreset.maxHeight,
+			ScalePercent:             basePreset.scalePercent,
+			TargetSizeBytes:          basePreset.targetSizeBytes,
+			TargetResizeMinDimension: basePreset.targetResizeMinDimension,
+		}
+	}
+
+	if setFlags["quality"] || setFlags["q"] {
+		if f.quality < 1 || f.quality > 100 {
+			return opts, nil, errors.New("参数错误：--quality 必须在 1 到 100 之间。")
+		}
+		opts.Quality = f.quality
+		opts.PNG = cliPNGOptionsForQuality(f.quality)
+	}
+	if setFlags["lossless"] {
+		opts.Lossless = f.lossless
+	}
+	if setFlags["format"] {
+		parsed, err := parseCLIOutputFormat(f.format)
+		if err != nil {
+			return opts, nil, fmt.Errorf("参数错误：%w", err)
+		}
+		opts.OutputFormat = parsed
+	}
+	var resizeFlag string
+	for _, name := range [...]string{"max-dim", "max-width", "max-height", "scale-percent"} {
+		if !setFlags[name] {
+			continue
+		}
+		if resizeFlag != "" {
+			return opts, nil, fmt.Errorf("参数冲突：--%s 与 --%s 不能同时使用。", resizeFlag, name)
+		}
+		resizeFlag = name
+	}
+	if resizeFlag != "" {
+		if err := compress.ValidateResizeOptions(f.maxDim, f.maxWidth, f.maxHeight, f.scalePercent); err != nil {
+			return opts, nil, fmt.Errorf("参数错误：--%s：%w", resizeFlag, err)
+		}
+		opts.MaxDimension, opts.MaxWidth, opts.MaxHeight, opts.ScalePercent = f.maxDim, f.maxWidth, f.maxHeight, f.scalePercent
+	}
+	if setFlags["max-size"] {
+		parsed, err := compress.ParseTargetSize(f.maxSize)
+		if err != nil {
+			return opts, nil, fmt.Errorf("参数错误：%w", err)
+		}
+		opts.TargetSizeBytes = parsed
+	}
+	if setFlags["target-resize-min"] {
+		if err := compress.ValidateMaxDimension(f.targetResizeMin); err != nil {
+			return opts, nil, fmt.Errorf("参数错误：--target-resize-min 必须为 0（关闭）或 %d 到 %d 之间的像素数。", compress.MinResizeDimension, compress.MaxResizeDimension)
+		}
+		opts.TargetResizeMinDimension = f.targetResizeMin
+	}
+	if setFlags["metadata"] {
+		parsed, err := parseCLIMetadataPolicy(f.metadata)
+		if err != nil {
+			return opts, nil, fmt.Errorf("参数错误：%w", err)
+		}
+		opts.Metadata = parsed
+	}
+	return opts, basePreset, nil
+}
+
 func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("compress", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
+	var compressionFlags cliCompressionFlags
+	compressionFlags.bind(fs)
 	var (
-		presetName      string
-		settingsPath    string
-		quality         int
-		lossless        bool
-		formatFlag      string
-		maxDim          int
-		maxWidth        int
-		maxHeight       int
-		scalePercent    int
-		maxSizeFlag     string
-		targetResizeMin int
-		metadataFlag    string
-		outputPath      string
-		inPlace         bool
-		useTrash        bool
-		suffix          string
-		noRecursive     bool
-		dryRun          bool
-		jobs            int
-		jsonOut         bool
-		quiet           bool
+		outputPath  string
+		inPlace     bool
+		useTrash    bool
+		suffix      string
+		noRecursive bool
+		dryRun      bool
+		jobs        int
+		jsonOut     bool
+		quiet       bool
 	)
-	fs.StringVar(&presetName, "preset", "", "preset name")
-	fs.StringVar(&presetName, "p", "", "preset name")
-	fs.StringVar(&settingsPath, "settings", "", "settings file path")
-	fs.IntVar(&quality, "quality", 80, "quality 1-100")
-	fs.IntVar(&quality, "q", 80, "quality 1-100")
-	fs.BoolVar(&lossless, "lossless", false, "lossless compression")
-	fs.StringVar(&formatFlag, "format", "", "output format: "+cliOutputFormats+" (jpg is an alias for jpeg)")
-	fs.IntVar(&maxDim, "max-dim", 0, "max long-edge dimension in pixels")
-	fs.IntVar(&maxWidth, "max-width", 0, "max displayed width in pixels")
-	fs.IntVar(&maxHeight, "max-height", 0, "max displayed height in pixels")
-	fs.IntVar(&scalePercent, "scale-percent", 0, "resize to a percentage of the original dimensions")
-	fs.StringVar(&maxSizeFlag, "max-size", "", "target output size")
-	fs.IntVar(&targetResizeMin, "target-resize-min", 0, "minimum long edge for automatic target-size resizing")
-	fs.StringVar(&metadataFlag, "metadata", "", "metadata policy: keep-all|keep-icc|strip")
 	fs.StringVar(&outputPath, "output", "", "output file or directory")
 	fs.StringVar(&outputPath, "o", "", "output file or directory")
 	fs.BoolVar(&inPlace, "in-place", false, "overwrite source files in place when smaller")
@@ -530,15 +641,8 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.BoolVar(&jsonOut, "json", false, "JSON report")
 	fs.BoolVar(&quiet, "quiet", false, "suppress normal output")
 
-	reordered := reorderCLIFlags(args, map[string]bool{
-		"p": true, "preset": true, "settings": true,
-		"q": true, "quality": true, "format": true,
-		"max-dim": true, "max-width": true, "max-height": true, "scale-percent": true,
-		"max-size": true, "target-resize-min": true, "metadata": true,
-		"o": true, "output": true, "suffix": true,
-		"j": true, "jobs": true,
-	})
-	if err := fs.Parse(reordered); err != nil {
+	setFlags, err := parseCLIFlags(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCompressCLIHelp(stdout)
 			return 0
@@ -555,8 +659,6 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "请提供至少一个图片文件或文件夹。\n运行 \"z-pic help compress\" 查看用法。")
 		return 2
 	}
-	setFlags := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
 	if inPlace && outputPath != "" {
 		fmt.Fprintln(stderr, "参数冲突：--in-place 与 --output 不能同时使用。")
@@ -575,110 +677,18 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 2
 	}
 
-	var cfg appSettings
-	if presetName != "" || setFlags["settings"] {
-		var err error
-		cfg, _, err = loadCLISettings(settingsPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "读取设置失败：%v\n", err)
-			return 2
-		}
-		if inPlace && !setFlags["trash"] {
-			useTrash = cfg.backupToTrash
-		}
+	cfg, err := compressionFlags.loadSettings(setFlags)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
-
-	opts := compress.Options{
-		Quality: 80,
-		PNG:     compress.DefaultPNGOptions(),
+	if inPlace && !setFlags["trash"] {
+		useTrash = cfg.backupToTrash
 	}
-	var basePreset *compressionPreset
-	if presetName != "" {
-		for i := range cfg.presets {
-			if cfg.presets[i].name == presetName {
-				p := cfg.presets[i]
-				basePreset = &p
-				break
-			}
-		}
-		if basePreset == nil {
-			fmt.Fprintf(stderr, "找不到预设 %q；运行 \"z-pic presets\" 查看可用预设。\n", presetName)
-			return 2
-		}
-		opts = compress.Options{
-			Quality:                  int(basePreset.quality),
-			PNG:                      basePreset.png,
-			Lossless:                 basePreset.lossless,
-			Metadata:                 basePreset.metadata,
-			OutputFormat:             basePreset.outputFormat,
-			MaxDimension:             basePreset.maxDimension,
-			MaxWidth:                 basePreset.maxWidth,
-			MaxHeight:                basePreset.maxHeight,
-			ScalePercent:             basePreset.scalePercent,
-			TargetSizeBytes:          basePreset.targetSizeBytes,
-			TargetResizeMinDimension: basePreset.targetResizeMinDimension,
-		}
-	}
-
-	if setFlags["quality"] || setFlags["q"] {
-		if quality < 1 || quality > 100 {
-			fmt.Fprintln(stderr, "参数错误：--quality 必须在 1 到 100 之间。")
-			return 2
-		}
-		opts.Quality = quality
-		opts.PNG = cliPNGOptionsForQuality(quality)
-	}
-	if setFlags["lossless"] {
-		opts.Lossless = lossless
-	}
-	if setFlags["format"] {
-		parsed, err := parseCLIOutputFormat(formatFlag)
-		if err != nil {
-			fmt.Fprintf(stderr, "参数错误：%v\n", err)
-			return 2
-		}
-		opts.OutputFormat = parsed
-	}
-	var resizeFlag string
-	for _, name := range [...]string{"max-dim", "max-width", "max-height", "scale-percent"} {
-		if !setFlags[name] {
-			continue
-		}
-		if resizeFlag != "" {
-			fmt.Fprintf(stderr, "参数冲突：--%s 与 --%s 不能同时使用。\n", resizeFlag, name)
-			return 2
-		}
-		resizeFlag = name
-	}
-	if resizeFlag != "" {
-		if err := compress.ValidateResizeOptions(maxDim, maxWidth, maxHeight, scalePercent); err != nil {
-			fmt.Fprintf(stderr, "参数错误：--%s：%v\n", resizeFlag, err)
-			return 2
-		}
-		opts.MaxDimension, opts.MaxWidth, opts.MaxHeight, opts.ScalePercent = maxDim, maxWidth, maxHeight, scalePercent
-	}
-	if setFlags["max-size"] {
-		parsed, err := compress.ParseTargetSize(maxSizeFlag)
-		if err != nil {
-			fmt.Fprintf(stderr, "参数错误：%v\n", err)
-			return 2
-		}
-		opts.TargetSizeBytes = parsed
-	}
-	if setFlags["target-resize-min"] {
-		if err := compress.ValidateMaxDimension(targetResizeMin); err != nil {
-			fmt.Fprintf(stderr, "参数错误：--target-resize-min 必须为 0（关闭）或 %d 到 %d 之间的像素数。\n", compress.MinResizeDimension, compress.MaxResizeDimension)
-			return 2
-		}
-		opts.TargetResizeMinDimension = targetResizeMin
-	}
-	if setFlags["metadata"] {
-		parsed, err := parseCLIMetadataPolicy(metadataFlag)
-		if err != nil {
-			fmt.Fprintf(stderr, "参数错误：%v\n", err)
-			return 2
-		}
-		opts.Metadata = parsed
+	opts, basePreset, err := compressionFlags.options(cfg, setFlags)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
 
 	scan, err := scanBatchPathsWithOptions(ctx, inputs, nil, nil, 0, !noRecursive)
@@ -828,7 +838,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	report := cliCompressReport{
 		DryRun:          dryRun,
 		InPlace:         inPlace,
-		Preset:          presetName,
+		Preset:          compressionFlags.presetName,
 		Total:           len(files),
 		TargetSizeBytes: opts.TargetSizeBytes,
 		Truncated:       scan.truncated,
@@ -970,23 +980,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			if quiet {
 				continue
 			}
-			tag := "OK       "
-			if f.Status == "unchanged" {
-				tag = "UNCHANGED"
-			}
-			arrow := ""
-			if f.Output != "" {
-				arrow = " -> " + f.Output
-			}
-			notes := ""
-			if f.TargetResized {
-				notes = fmt.Sprintf(" [自动缩小 %d × %d → %d × %d]", f.OriginalWidth, f.OriginalHeight, f.Width, f.Height)
-			}
-			if f.TargetSizeMissed {
-				notes += " [未达目标]"
-			}
-			fmt.Fprintf(stdout, "%s  %s  %s -> %s (%+.1f%%)%s%s\n",
-				tag, f.Input, formatSize(f.OriginalBytes), formatSize(f.OutputBytes), -f.SavedPercent, arrow, notes)
+			printCLIFileResult(stdout, f)
 		}
 		if !quiet {
 			prefix := "完成"
@@ -1013,6 +1007,26 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	return 0
 }
 
+func printCLIFileResult(w io.Writer, f cliFileReport) {
+	tag := "OK       "
+	if f.Status == "unchanged" {
+		tag = "UNCHANGED"
+	}
+	arrow := ""
+	if f.Output != "" {
+		arrow = " -> " + f.Output
+	}
+	notes := ""
+	if f.TargetResized {
+		notes = fmt.Sprintf(" [自动缩小 %d × %d → %d × %d]", f.OriginalWidth, f.OriginalHeight, f.Width, f.Height)
+	}
+	if f.TargetSizeMissed {
+		notes += " [未达目标]"
+	}
+	fmt.Fprintf(w, "%s  %s  %s -> %s (%+.1f%%)%s%s\n",
+		tag, f.Input, formatSize(f.OriginalBytes), formatSize(f.OutputBytes), -f.SavedPercent, arrow, notes)
+}
+
 func writeCLIJSON(stdout, stderr io.Writer, v any) int {
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
@@ -1022,6 +1036,20 @@ func writeCLIJSON(stdout, stderr io.Writer, v any) int {
 		return 1
 	}
 	return 0
+}
+
+func parseCLIFlags(fs *flag.FlagSet, args []string) (map[string]bool, error) {
+	valueFlags := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) {
+		boolFlag, ok := f.Value.(interface{ IsBoolFlag() bool })
+		valueFlags[f.Name] = !ok || !boolFlag.IsBoolFlag()
+	})
+	if err := fs.Parse(reorderCLIFlags(args, valueFlags)); err != nil {
+		return nil, err
+	}
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	return setFlags, nil
 }
 
 func reorderCLIFlags(args []string, valueFlags map[string]bool) []string {

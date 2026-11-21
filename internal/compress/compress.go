@@ -931,14 +931,30 @@ func readInput(ctx context.Context, path string) ([]byte, error) {
 
 // Save creates a new file and never overwrites an existing path. Failed writes
 // or closes remove the file created by this call.
-func (r *Result) Save(path string) (err error) {
+func (r *Result) Save(path string) error {
+	return r.save(path, nil)
+}
+
+// SaveInRoot creates a new file relative to an open directory. It keeps the
+// write and failure cleanup in that directory if the directory's path changes.
+func (r *Result) SaveInRoot(root *os.Root, name string) error {
+	return r.save(name, root)
+}
+
+func (r *Result) save(path string, root *os.Root) (err error) {
 	if r == nil || len(r.Data) == 0 {
 		return fmt.Errorf("没有可保存的压缩结果")
 	}
 	if path == "" {
 		return fmt.Errorf("保存路径不能为空")
 	}
-	destination, err := filepath.Abs(path)
+	openFile, remove := os.OpenFile, os.Remove
+	absolutePath := path
+	if root != nil {
+		openFile, remove = root.OpenFile, root.Remove
+		absolutePath = filepath.Join(root.Name(), path)
+	}
+	destination, err := filepath.Abs(absolutePath)
 	if err != nil {
 		return fmt.Errorf("无法解析保存路径：%w", err)
 	}
@@ -952,7 +968,10 @@ func (r *Result) Save(path string) (err error) {
 	if destination == source {
 		return fmt.Errorf("不能覆盖源图片，请选择新的保存路径")
 	}
-	f, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if root == nil {
+		path = destination
+	}
+	f, err := openFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("无法创建输出文件（不能覆盖已有文件）：%w", err)
 	}
@@ -961,7 +980,7 @@ func (r *Result) Save(path string) (err error) {
 			err = fmt.Errorf("关闭输出文件失败：%w", closeErr)
 		}
 		if err != nil {
-			if removeErr := os.Remove(destination); removeErr != nil {
+			if removeErr := remove(path); removeErr != nil {
 				err = fmt.Errorf("%w；清理未完成的输出文件失败：%v", err, removeErr)
 			}
 		}
