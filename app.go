@@ -40,37 +40,38 @@ type selectedImage struct {
 // Application state is read and changed on MyGo's main thread. Background work
 // receives immutable values and delivers its result through Window.Update.
 type application struct {
-	window          *mygo.Window
-	settingsWindow  *mygo.Window
-	file            *selectedImage
-	quality         float64
-	scheme          string
-	theme           themeMode
-	png             compress.PNGOptions
-	lossless        bool
-	metadata        compress.MetadataPolicy
-	outputFormat    compress.OutputFormat
-	maxDimension    int
-	targetSizeBytes int64
-	autoCompress    bool
-	backupToTrash   bool
-	output          presetSaveOptions
-	settingsOpen    bool
-	settingsFile    string
-	settingsError   string
-	presets         []compressionPreset
-	editor          *settingsEditor
-	result          *compress.Result
-	preview         *ui.Bitmap
-	comparison      comparisonView
-	busy            bool
-	phase           string
-	message         string
-	failed          bool
-	cancel          context.CancelFunc
-	canceling       bool
-	closed          bool
-	saves           sync.WaitGroup
+	window                   *mygo.Window
+	settingsWindow           *mygo.Window
+	file                     *selectedImage
+	quality                  float64
+	scheme                   string
+	theme                    themeMode
+	png                      compress.PNGOptions
+	lossless                 bool
+	metadata                 compress.MetadataPolicy
+	outputFormat             compress.OutputFormat
+	maxDimension             int
+	targetSizeBytes          int64
+	targetResizeMinDimension int
+	autoCompress             bool
+	backupToTrash            bool
+	output                   presetSaveOptions
+	settingsOpen             bool
+	settingsFile             string
+	settingsError            string
+	presets                  []compressionPreset
+	editor                   *settingsEditor
+	result                   *compress.Result
+	preview                  *ui.Bitmap
+	comparison               comparisonView
+	busy                     bool
+	phase                    string
+	message                  string
+	failed                   bool
+	cancel                   context.CancelFunc
+	canceling                bool
+	closed                   bool
+	saves                    sync.WaitGroup
 
 	confirmOverwrite      bool
 	overwritten           bool

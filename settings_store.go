@@ -41,16 +41,17 @@ type appSettings struct {
 }
 
 type storedPreset struct {
-	Name            string                  `json:"name"`
-	Quality         float64                 `json:"quality"`
-	PNG             compress.PNGOptions     `json:"png"`
-	Lossless        bool                    `json:"lossless,omitempty"`
-	Metadata        compress.MetadataPolicy `json:"metadata,omitempty"`
-	OutputFormat    compress.OutputFormat   `json:"output_format,omitempty"`
-	MaxDimension    int                     `json:"max_dimension,omitempty"`
-	TargetSizeBytes int64                   `json:"target_size_bytes,omitempty"`
-	Output          *presetSaveOptions      `json:"output,omitempty"`
-	Favorite        bool                    `json:"favorite,omitempty"`
+	Name                     string                  `json:"name"`
+	Quality                  float64                 `json:"quality"`
+	PNG                      compress.PNGOptions     `json:"png"`
+	Lossless                 bool                    `json:"lossless,omitempty"`
+	Metadata                 compress.MetadataPolicy `json:"metadata,omitempty"`
+	OutputFormat             compress.OutputFormat   `json:"output_format,omitempty"`
+	MaxDimension             int                     `json:"max_dimension,omitempty"`
+	TargetSizeBytes          int64                   `json:"target_size_bytes,omitempty"`
+	TargetResizeMinDimension int                     `json:"target_resize_min_dimension,omitempty"`
+	Output                   *presetSaveOptions      `json:"output,omitempty"`
+	Favorite                 bool                    `json:"favorite,omitempty"`
 }
 
 func settingsFilePath() (string, error) {
@@ -123,6 +124,9 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		}
 		if err := compress.ValidateTargetSizeBytes(preset.targetSizeBytes); err != nil {
 			return invalid("preset-target-size", fmt.Errorf("预设「%s」的目标体积无效：%w", preset.name, err))
+		}
+		if err := compress.ValidateMaxDimension(preset.targetResizeMinDimension); err != nil {
+			return invalid(presetTargetResizeMinField, fmt.Errorf("预设「%s」的自动缩小长边下限须为 %d–%d px", preset.name, compress.MinResizeDimension, compress.MaxResizeDimension))
 		}
 		if field, err := preset.output.validateField(); err != nil {
 			return invalid(field, fmt.Errorf("预设「%s」的保存设置无效：%w", preset.name, err))
@@ -243,14 +247,15 @@ func loadFullSettings(path string) (appSettings, error) {
 	presets := make([]compressionPreset, len(stored.Presets))
 	for index, preset := range stored.Presets {
 		presets[index] = compressionPreset{
-			name:            preset.Name,
-			quality:         preset.Quality,
-			png:             preset.PNG,
-			lossless:        preset.Lossless,
-			metadata:        preset.Metadata,
-			outputFormat:    preset.OutputFormat,
-			maxDimension:    preset.MaxDimension,
-			targetSizeBytes: preset.TargetSizeBytes,
+			name:                     preset.Name,
+			quality:                  preset.Quality,
+			png:                      preset.PNG,
+			lossless:                 preset.Lossless,
+			metadata:                 preset.Metadata,
+			outputFormat:             preset.OutputFormat,
+			maxDimension:             preset.MaxDimension,
+			targetSizeBytes:          preset.TargetSizeBytes,
+			targetResizeMinDimension: preset.TargetResizeMinDimension,
 		}
 		if preset.Output != nil {
 			presets[index].output = *preset.Output
@@ -409,14 +414,15 @@ func saveFullSettings(path string, cfg appSettings) error {
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{
-			Name:            preset.name,
-			Quality:         preset.quality,
-			PNG:             preset.png,
-			Lossless:        preset.lossless,
-			Metadata:        preset.metadata,
-			OutputFormat:    preset.outputFormat,
-			MaxDimension:    preset.maxDimension,
-			TargetSizeBytes: preset.targetSizeBytes,
+			Name:                     preset.name,
+			Quality:                  preset.quality,
+			PNG:                      preset.png,
+			Lossless:                 preset.lossless,
+			Metadata:                 preset.metadata,
+			OutputFormat:             preset.outputFormat,
+			MaxDimension:             preset.maxDimension,
+			TargetSizeBytes:          preset.targetSizeBytes,
+			TargetResizeMinDimension: preset.targetResizeMinDimension,
 		}
 		if preset.output != (presetSaveOptions{}) {
 			output := preset.output

@@ -30,6 +30,7 @@ func batchThreadsPerWorker(workers int) int {
 }
 
 type batchCompressionOutcome struct {
+	source  compress.ImageInfo
 	result  *compress.Result
 	err     error
 	started bool
@@ -177,11 +178,13 @@ func (s *application) runBatchTasksWithBackup(
 		}
 		name := filepath.Base(task.path)
 		started := false
+		var source compress.ImageInfo
 		result, release, err := compress.FileWithAcquire(
 			ctx,
 			task.path,
 			options,
 			func(info compress.ImageInfo) (func(), error) {
+				source = info
 				return s.imageMemory.acquire(ctx, imageMemoryEstimate(info, false))
 			},
 			func() {
@@ -200,7 +203,7 @@ func (s *application) runBatchTasksWithBackup(
 				})
 			},
 		)
-		return batchCompressionOutcome{result: result, err: err, started: started, release: release}
+		return batchCompressionOutcome{source: source, result: result, err: err, started: started, release: release}
 	}
 	runBatchPipeline(ctx, tasks, workers, process, func(task batchTask, outcome batchCompressionOutcome) {
 		if ctx.Err() != nil {
@@ -229,6 +232,8 @@ func saveBatchOutcomeWithBackup(task batchTask, outcome batchCompressionOutcome,
 		return update
 	}
 	result := outcome.result
+	format, width, height := result.Format, result.Width, result.Height
+	targetResized := result.TargetResized
 	unchanged, outputSize := result.Unchanged, result.OutputSize
 	saveAsCopy := outputMode == batchOutputFolder || destination != ""
 	if saveAsCopy {
@@ -243,6 +248,10 @@ func saveBatchOutcomeWithBackup(task batchTask, outcome batchCompressionOutcome,
 		update.savedPath = destination
 	} else if result.Unchanged || result.OutputSize >= result.OriginalSize {
 		outputSize, unchanged = result.OriginalSize, true
+		targetResized = false
+		if !result.Unchanged {
+			format, width, height = outcome.source.Format, outcome.source.Width, outcome.source.Height
+		}
 	} else {
 		if err := result.OverwriteWithBackup(backup); err != nil {
 			update.errMsg = err.Error()
@@ -250,7 +259,9 @@ func saveBatchOutcomeWithBackup(task batchTask, outcome batchCompressionOutcome,
 		}
 		update.overwritten = true
 	}
-	update.format, update.width, update.height = result.Format, result.Width, result.Height
+	update.source = outcome.source
+	update.format, update.width, update.height = format, width, height
+	update.targetResized = targetResized
 	update.originalSize, update.outputSize, update.unchanged = result.OriginalSize, outputSize, unchanged
 	update.targetSizeBytes = result.TargetSizeBytes
 	update.targetSizeMissed = result.TargetSizeBytes > 0 && outputSize > result.TargetSizeBytes

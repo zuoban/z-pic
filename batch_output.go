@@ -230,13 +230,16 @@ func (s *application) openBatchPreview(index int) {
 		var outputPreview *ui.Bitmap
 		if err == nil && item.status == batchDone {
 			result = &compress.Result{
-				SourcePath:   item.path,
-				Format:       item.format,
-				Width:        item.width,
-				Height:       item.height,
-				OriginalSize: item.originalSize,
-				OutputSize:   item.outputSize,
-				Unchanged:    item.unchanged,
+				SourcePath:       item.path,
+				Format:           item.format,
+				Width:            item.width,
+				Height:           item.height,
+				OriginalSize:     item.originalSize,
+				OutputSize:       item.outputSize,
+				Unchanged:        item.unchanged,
+				TargetResized:    item.targetResized,
+				TargetSizeBytes:  item.targetSizeBytes,
+				TargetSizeMissed: item.targetSizeMissed,
 			}
 			if item.overwritten {
 				outputPreview = selected.preview

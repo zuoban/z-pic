@@ -73,6 +73,9 @@ func presetProcessingSummary(preset compressionPreset) string {
 	}
 	if preset.targetSizeBytes > 0 {
 		parts = append(parts, "体积 ≤ "+compress.FormatTargetSize(preset.targetSizeBytes))
+		if preset.effectiveTargetResizeMinDimension() != 0 {
+			parts = append(parts, "自动缩小")
+		}
 	}
 	if preset.metadata != compress.MetadataKeepAll {
 		parts = append(parts, presetMetadataLabel(preset.metadata))
@@ -486,7 +489,8 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 
 func (s *application) presetTargetSizeSection(c *ui.Context, preset *compressionPreset) {
 	editor := s.editor
-	text := &editor.targetSizeTexts[editor.selected]
+	target := &editor.targets[editor.selected]
+	text := &target.sizeText
 	_, problem := compress.ParseTargetSize(*text)
 	locked := s.settingsDraftLocked()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -539,7 +543,61 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 			note = "无损模式下不会降低画质；若结果仍超出目标体积，完成后会给出提示。"
 		}
 		ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+		s.presetTargetResizeFields(c, preset, &target.resizeMinText)
 	})
+}
+
+func (s *application) presetTargetResizeFields(c *ui.Context, preset *compressionPreset, text *string) {
+	locked := s.settingsDraftLocked()
+	enabled := preset.targetResizeMinDimension != 0
+	if ui.Checkbox(c.Key("preset-target-resize"), &enabled, "超出目标时自动缩小").
+		FontSize(settingsFontSize(c, 13)).Disabled(locked).Changed() {
+		if enabled {
+			preset.targetResizeMinDimension = defaultPresetTargetResizeMinDimension
+			if floor, err := parseTargetResizeMinDimension(*text); err == nil {
+				preset.targetResizeMinDimension = floor
+			}
+		} else {
+			preset.targetResizeMinDimension = 0
+		}
+		s.editor.message = ""
+	}
+	if !enabled {
+		return
+	}
+
+	floor, problem := parseTargetResizeMinDimension(*text)
+	var input ui.Element
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		label := ui.Text(c, "长边下限（px）").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
+		input = ui.TextInput(c.Key(presetTargetResizeMinField), text).LabelledBy(label).
+			Width(settingsFontSize(c, 112)).Height(settingsControlHeight(c, 32)).
+			FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+		styleGlassField(input, c, 32)
+		s.focusSettingsField(input, presetTargetResizeMinField)
+		if input.Changed() {
+			floor, problem = parseTargetResizeMinDimension(*text)
+			if problem == nil {
+				preset.targetResizeMinDimension = floor
+			}
+			s.editor.message = ""
+		}
+	})
+	if problem != nil {
+		danger := c.Theme().Danger
+		input.Invalid(true).Border(1, danger).ErrorMessage(ui.Text(c, problem.Error()).
+			FontSize(settingsFontSize(c, 12)).TextColor(danger).FillWidth().MaxLines(2))
+	}
+	note := "体积仍超出目标时等比缩小，长边以设定值为下限。"
+	switch {
+	case preset.lossless:
+		note = "无损模式下暂停自动缩小。"
+	case preset.targetSizeBytes == 0:
+		note = "设置目标体积后生效。"
+	case problem == nil && preset.maxDimension > 0 && preset.maxDimension <= floor:
+		note = "尺寸上限低于或等于长边下限时，以尺寸上限为准。"
+	}
+	ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 }
 
 func presetSaveSegments(c *ui.Context, options *presetSaveOptions, disabled bool) bool {

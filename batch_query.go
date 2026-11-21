@@ -47,6 +47,7 @@ func snapshotOfBatchItem(item batchItem) batchItemSnapshot {
 		status:           item.status,
 		unchanged:        item.unchanged,
 		targetSizeMissed: item.targetSizeMissed,
+		targetResized:    item.targetResized,
 		invalidInput:     item.invalidInput,
 	}
 }
@@ -57,6 +58,7 @@ func samePendingBucketChange(prev, curr batchItemSnapshot) bool {
 		prev.outputSize != curr.outputSize ||
 		prev.unchanged != curr.unchanged ||
 		prev.targetSizeMissed != curr.targetSizeMissed ||
+		prev.targetResized != curr.targetResized ||
 		prev.invalidInput != curr.invalidInput {
 		return false
 	}
@@ -128,6 +130,9 @@ func (state *batchState) syncItemsCache() {
 			}
 			if item.targetSizeMissed {
 				summary.targetSizeMissed++
+			}
+			if item.targetResized {
+				summary.targetResized++
 			}
 		case batchFailed:
 			summary.failed++

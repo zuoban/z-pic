@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"image"
 	"image/color"
 
 	"zpic/internal/aviftools"
-	"zpic/internal/contextio"
 	"zpic/internal/heictools"
 )
 
@@ -60,17 +58,18 @@ func avifMetadataMode(policy MetadataPolicy) aviftools.MetadataMode {
 	}
 }
 
-func prepareAVIFPNG(ctx context.Context, pixelSource []byte, sourceFormat string, orientation int, needsResize bool, options Options) ([]byte, []byte, error) {
+func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize bool, options Options) ([]byte, []byte, error) {
+	pixelSource, sourceFormat := source.pixelSource, source.format
 	pngSource := sourceFormat == "png" || sourceFormat == "heic" || sourceFormat == "avif"
-	if pngSource && orientation == 1 && !needsResize {
+	if pngSource && source.orientation == 1 && !needsResize {
 		return pixelSource, nil, nil
 	}
 
-	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
+	decoded, err := source.decodePixels(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+		return nil, nil, err
 	}
-	resized, _, err := resizeImage(ctx, normalizeOrientation(decoded, orientation), options.MaxDimension)
+	resized, _, err := resizeImage(ctx, normalizeOrientation(decoded, source.orientation), options.MaxDimension)
 	if err != nil {
 		return nil, nil, fmt.Errorf("缩放图片已取消：%w", err)
 	}

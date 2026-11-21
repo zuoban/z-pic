@@ -289,12 +289,14 @@ func TestCLIPresetsTargetSize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	presets := testLegacyPresets()
 	presets[1].targetSizeBytes = 300_000
+	presets[1].targetResizeMinDimension = 640
 	if err := saveSettings(path, presets, presets[1].name); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	args := []string{"presets", "--settings", path}
-	if code := runCLIContext(t.Context(), args, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "体积 ≤ 300 KB") {
+	if code := runCLIContext(t.Context(), args, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "体积 ≤ 300 KB") ||
+		!strings.Contains(stdout.String(), "长边下限 640 px") {
 		t.Fatalf("presets text: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
@@ -303,7 +305,82 @@ func TestCLIPresetsTargetSize(t *testing.T) {
 		t.Fatalf("presets JSON: exit=%d stderr=%q", code, stderr.String())
 	}
 	var report cliPresetsReport
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || len(report.Presets) != len(presets) || report.Presets[1].TargetSizeBytes != 300_000 || report.Presets[0].TargetSizeBytes != 0 {
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || len(report.Presets) != len(presets) || report.Presets[1].TargetSizeBytes != 300_000 || report.Presets[0].TargetSizeBytes != 0 ||
+		report.Presets[1].TargetResizeMinDimension != 640 || report.Presets[0].TargetResizeMinDimension != 0 {
 		t.Fatalf("invalid presets JSON: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestCLITargetResize(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "photo.jpg")
+	original := writeCLITargetSizeJPEG(t, source)
+	preset := compressionPreset{
+		name: "上传", quality: 92, png: compress.DefaultPNGOptions(),
+		targetSizeBytes: 2 << 10, targetResizeMinDimension: 64,
+	}
+	denseSource := filepath.Join(dir, "dense.jpg")
+	writeTestJPEG(t, denseSource, 1024, 768, 100)
+	settings := filepath.Join(dir, "settings.json")
+	if err := saveSettings(settings, []compressionPreset{preset}, preset.name); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		flags           []string
+		resized, missed bool
+		target          int64
+		minWidth        int
+	}{
+		{"off by default", []string{"--max-size", "2KiB"}, false, true, 2048, 1024},
+		{"explicit opt-in", []string{"--max-size", "2KiB", "--target-resize-min", "64"}, true, false, 2048, 64},
+		{"preset inheritance", nil, true, false, 2048, 64},
+		{"floor override", []string{"--max-size", "1KiB", "--target-resize-min", "640"}, true, true, 1024, 640},
+		{"disable via flag", []string{"--target-resize-min", "0"}, false, true, 2048, 1024},
+		{"disable target", []string{"--max-size", "0"}, false, false, 0, 1024},
+		{"lossless", []string{"--lossless"}, false, true, 2048, 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "result.jpg")
+			input := source
+			if tc.name == "floor override" {
+				input = denseSource
+			}
+			args := []string{input, "-o", output}
+			if tc.name != "explicit opt-in" && tc.name != "off by default" {
+				args = append(args, "--settings", settings, "--preset", preset.name)
+			}
+			report := runFormatConvertCompress(t, 1, append(args, tc.flags...)...)
+			result := report.Files[0]
+			data := readFormatConvertFile(t, output)
+			cfg, err := jpeg.DecodeConfig(bytes.NewReader(data))
+			if err != nil || result.OutputBytes != int64(len(data)) || result.Width != cfg.Width || result.Height != cfg.Height {
+				t.Fatalf("report does not match saved JPEG: %+v, config=%+v, error=%v", result, cfg, err)
+			}
+			if report.TargetSizeBytes != tc.target || result.TargetResized != tc.resized || result.TargetSizeMissed != tc.missed ||
+				(tc.target > 0 && int64(len(data)) > tc.target) != tc.missed ||
+				cfg.Width < tc.minWidth || (cfg.Width < 1024) != tc.resized || cfg.Height != (cfg.Width*3+2)/4 {
+				t.Fatalf("unexpected target resize result: %+v", result)
+			}
+			if tc.resized && (result.OriginalWidth != 1024 || result.OriginalHeight != 768) {
+				t.Fatalf("missing original dimensions: %+v", result)
+			}
+		})
+	}
+	if !bytes.Equal(readFormatConvertFile(t, source), original) {
+		t.Fatal("target resize changed the source while saving a copy")
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"compress", denseSource, "--dry-run", "--max-size", "1KiB", "--target-resize-min", "640"}
+	if code := runCLIContext(t.Context(), args, &stdout, &stderr); code != 0 ||
+		!strings.Contains(stdout.String(), "[自动缩小 1024 × 768 → ") || !strings.Contains(stdout.String(), "[未达目标]") {
+		t.Fatalf("text resize report: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, invalid := range []string{"-1", "63", "16385"} {
+		stderr.Reset()
+		if code := runCLIContext(t.Context(), []string{"compress", source, "--target-resize-min", invalid}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "--target-resize-min") {
+			t.Errorf("invalid resize floor %q: exit=%d stderr=%q", invalid, code, stderr.String())
+		}
 	}
 }

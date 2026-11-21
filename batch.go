@@ -59,6 +59,8 @@ type batchItem struct {
 	sourceBase       string
 	prefixedDir      bool
 	sourceFormat     string
+	sourceWidth      int
+	sourceHeight     int
 	format           string
 	width            int
 	height           int
@@ -67,6 +69,7 @@ type batchItem struct {
 	status           batchStatus
 	unchanged        bool
 	targetSizeMissed bool
+	targetResized    bool
 	targetSizeBytes  int64
 	overwritten      bool
 	invalidInput     bool
@@ -127,6 +130,7 @@ type batchItemSnapshot struct {
 	status           batchStatus
 	unchanged        bool
 	targetSizeMissed bool
+	targetResized    bool
 	invalidInput     bool
 }
 
@@ -139,6 +143,7 @@ type batchStatsSummary struct {
 	invalidFailed    int
 	unchangedDone    int
 	targetSizeMissed int
+	targetResized    int
 	origTotal        int64
 	outTotal         int64
 	doneOrigTotal    int64
@@ -163,6 +168,7 @@ type batchTask struct {
 
 type batchItemUpdate struct {
 	index            int
+	source           compress.ImageInfo
 	status           batchStatus
 	format           string
 	width            int
@@ -171,6 +177,7 @@ type batchItemUpdate struct {
 	outputSize       int64
 	unchanged        bool
 	targetSizeMissed bool
+	targetResized    bool
 	targetSizeBytes  int64
 	overwritten      bool
 	savedPath        string
@@ -417,10 +424,17 @@ func resetBatchItemState(item *batchItem) bool {
 	if item.sourceFormat != "" {
 		item.format = item.sourceFormat
 	}
+	if item.sourceWidth > 0 && item.sourceHeight > 0 {
+		item.width, item.height = item.sourceWidth, item.sourceHeight
+	}
+	if item.overwritten {
+		item.originalSize = item.outputSize
+	}
 	item.status = batchPending
 	item.outputSize = 0
 	item.unchanged = false
 	item.targetSizeMissed, item.targetSizeBytes = false, 0
+	item.targetResized = false
 	item.overwritten = false
 	item.savedPath = ""
 	item.errMsg = ""
@@ -698,11 +712,17 @@ func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 		s.invalidateBatchThumbnail(item.path)
 	}
 	item.status = update.status
+	if update.source.Width > 0 && update.source.Height > 0 {
+		item.sourceWidth, item.sourceHeight = update.source.Width, update.source.Height
+	}
 	if update.format != "" {
 		item.format = update.format
 	}
 	if update.width > 0 && update.height > 0 {
 		item.width, item.height = update.width, update.height
+		if update.overwritten {
+			item.sourceWidth, item.sourceHeight = update.width, update.height
+		}
 	}
 	if update.originalSize > 0 {
 		item.originalSize = update.originalSize
@@ -710,6 +730,7 @@ func (s *application) applyBatchItemUpdate(update batchItemUpdate) {
 	item.outputSize = update.outputSize
 	item.unchanged = update.unchanged
 	item.targetSizeMissed, item.targetSizeBytes = update.targetSizeMissed, update.targetSizeBytes
+	item.targetResized = update.targetResized
 	item.overwritten = update.overwritten
 	item.savedPath = update.savedPath
 	item.errMsg = update.errMsg

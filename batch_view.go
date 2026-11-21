@@ -303,10 +303,6 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 							Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 					}
 				})
-				meta := strings.ToUpper(item.format)
-				if item.width > 0 && item.height > 0 {
-					meta += fmt.Sprintf(" · %d × %d", item.width, item.height)
-				}
 				width, _ := c.Size()
 				metaRow := ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center)
 				stackMetadata := width >= 720 && width < 960
@@ -314,7 +310,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int) {
 					metaRow.Column().Gap(4).AlignItems(ui.Stretch)
 				}
 				metaRow.Children(func() {
-					ui.Text(c, meta).FontSize(12).FontFeatures("tnum").
+					ui.Text(c, batchItemMetadata(item)).FontSize(12).FontFeatures("tnum").
 						TextColor(metadataColor(c)).SingleLine().Shrink(0)
 					if !stackMetadata {
 						ui.Text(c, "·").FontSize(12).TextColor(metadataColor(c)).Shrink(0)
@@ -392,12 +388,22 @@ func batchItemStatus(item batchItem, t *ui.Theme) (string, ui.Color) {
 	}
 }
 
+func batchItemMetadata(item batchItem) string {
+	meta := strings.ToUpper(item.format)
+	if item.width > 0 && item.height > 0 {
+		meta += fmt.Sprintf(" · %d × %d", item.width, item.height)
+	}
+	if item.status == batchDone && item.targetResized {
+		meta += " · 自动缩小"
+	}
+	return meta
+}
+
 func batchItemDetail(item batchItem, t *ui.Theme) (string, ui.Color) {
 	if item.status == batchFailed {
 		return item.errMsg, t.Danger
 	}
-	meta := fmt.Sprintf("%s · %d × %d", strings.ToUpper(item.format), item.width, item.height)
-	return fmt.Sprintf("%s · %s", meta, batchItemSizeDetail(item)), t.TextMuted
+	return batchItemMetadata(item) + " · " + batchItemSizeDetail(item), t.TextMuted
 }
 
 func batchItemSizeDetail(item batchItem) string {
@@ -568,11 +574,16 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size))
 			metaColor := metadataColor(c)
 			metaTooltip := meta
-			if s.result != nil {
-				if s.result.Unchanged {
+			if result := s.result; result != nil {
+				switch {
+				case result.TargetResized:
+					if s.comparison.mode != previewOriginal {
+						meta = outputPreviewMetadata(result)
+					}
+				case result.Unchanged:
 					meta += "  ·  未减小"
-				} else {
-					meta += " → " + formatSize(s.result.OutputSize)
+				default:
+					meta += " → " + formatSize(result.OutputSize)
 				}
 				metaTooltip = meta
 			} else if previewItem != nil && previewItem.status == batchFailed {
@@ -830,6 +841,9 @@ func (s *application) batchResultSummary(c *ui.Context) {
 				parts = append(parts, fmt.Sprintf("%d 张未减小保持原样", unchanged))
 			}
 		}
+		if resized := s.batch.cachedStats.targetResized; resized > 0 {
+			parts = append(parts, fmt.Sprintf("%d 张自动缩小", resized))
+		}
 		if missed := s.batch.cachedStats.targetSizeMissed; missed > 0 {
 			parts = append(parts, fmt.Sprintf("%d 张未达目标体积", missed))
 		}
@@ -852,6 +866,9 @@ func (s *application) batchOverwriteConfirmation(c *ui.Context) {
 	message := fmt.Sprintf("将压缩 %d 张图片；体积减小的文件会直接替换原文件，未减小的文件将保持不变。\n\n覆盖后无法通过本工具恢复原文件。", targetCount)
 	if s.backupToTrash {
 		message = fmt.Sprintf("将压缩 %d 张图片；体积减小的文件会先将原件移入废纸篓，再替换为压缩结果，未减小的文件将保持不变。", targetCount)
+	}
+	if s.compressionOptions().TargetResizeMinDimension > 0 {
+		message += "\n\n已启用自动缩小，部分图片的分辨率可能降低。"
 	}
 	if ui.AlertDialog(c.Key("batch-overwrite-confirmation"), &s.confirmBatchOverwrite,
 		"确认批量覆盖原图？", message, "覆盖原图", "取消") == 0 {

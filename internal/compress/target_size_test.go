@@ -132,9 +132,13 @@ func TestTargetSizeJPEGICC(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			result := compressTargetSizeFixture(t, data, path, Options{
 				Quality: targetSizeTestQuality, Metadata: test.metadata, TargetSizeBytes: target,
+				TargetResizeMinDimension: MinResizeDimension,
 			})
 			assertTargetSizeResult(t, result, target, false, "jpeg", image.Pt(128, 96))
 			assertTargetSizeLoweredQuality(t, result, targetSizeTestQuality)
+			if result.TargetResized {
+				t.Fatal("quality search met the target at the original dimensions")
+			}
 			assertConvertedJPEGICC(t, result.Data, test.wantICC)
 		})
 	}
@@ -155,11 +159,12 @@ func TestTargetSizeJPEGAlreadyFits(t *testing.T) {
 			options := Options{Quality: test.quality}
 			initial := compressTargetSizeFixture(t, data, "photo.jpg", options)
 			options.TargetSizeBytes = max(targetSizeTestMin, initial.OutputSize)
+			options.TargetResizeMinDimension = MinResizeDimension
 			result := compressTargetSizeFixture(t, data, "photo.jpg", options)
 			assertTargetSizeResult(t, result, options.TargetSizeBytes, false, "jpeg", image.Pt(128, 96))
-			if result.AppliedQuality != 0 || result.Unchanged != test.unchanged || !bytes.Equal(result.Data, initial.Data) {
-				t.Fatalf("initial output met target: applied quality=%d, unchanged=%v, same bytes=%v",
-					result.AppliedQuality, result.Unchanged, bytes.Equal(result.Data, initial.Data))
+			if result.TargetResized || result.AppliedQuality != 0 || result.Unchanged != test.unchanged || !bytes.Equal(result.Data, initial.Data) {
+				t.Fatalf("initial output met target: resized=%v, applied quality=%d, unchanged=%v, same bytes=%v",
+					result.TargetResized, result.AppliedQuality, result.Unchanged, bytes.Equal(result.Data, initial.Data))
 			}
 		})
 	}

@@ -349,17 +349,23 @@ func (s *application) previewPanel(c *ui.Context) {
 						SingleLine().TruncateMiddle().Tooltip(s.file.path)
 					meta := fmt.Sprintf("%s  ·  %d × %d  ·  %s",
 						strings.ToUpper(s.file.format), s.file.width, s.file.height, formatSize(s.file.size))
-					if s.result != nil {
-						if s.result.Format != "" && s.result.Format != s.file.format {
-							meta += "  →  " + strings.ToUpper(s.result.Format)
-						}
-						if s.result.Width > 0 && s.result.Height > 0 &&
-							(s.result.Width != s.file.width || s.result.Height != s.file.height) {
-							meta += fmt.Sprintf("  ·  %d × %d", s.result.Width, s.result.Height)
+					if result := s.result; result != nil {
+						if result.TargetResized {
+							if s.comparison.mode != previewOriginal {
+								meta = outputPreviewMetadata(result)
+							}
+						} else {
+							if result.Format != "" && result.Format != s.file.format {
+								meta += "  →  " + strings.ToUpper(result.Format)
+							}
+							if result.Width > 0 && result.Height > 0 &&
+								(result.Width != s.file.width || result.Height != s.file.height) {
+								meta += fmt.Sprintf("  ·  %d × %d", result.Width, result.Height)
+							}
 						}
 					}
 					ui.Text(c, meta).
-						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle()
+						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle().Tooltip(meta)
 				})
 				quietButton(c, "replace", "更换图片", 32, s.modalOpen()).
 					KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("更换图片 · " + shortcutLabel("O")).
@@ -577,15 +583,16 @@ func (s *application) workFeedback(c *ui.Context) {
 
 func (s *application) activePresetSnapshot() compressionPreset {
 	return compressionPreset{
-		name:            s.scheme,
-		quality:         s.quality,
-		png:             s.png,
-		lossless:        s.lossless,
-		metadata:        s.metadata,
-		outputFormat:    s.outputFormat,
-		maxDimension:    s.maxDimension,
-		targetSizeBytes: s.targetSizeBytes,
-		output:          s.output,
+		name:                     s.scheme,
+		quality:                  s.quality,
+		png:                      s.png,
+		lossless:                 s.lossless,
+		metadata:                 s.metadata,
+		outputFormat:             s.outputFormat,
+		maxDimension:             s.maxDimension,
+		targetSizeBytes:          s.targetSizeBytes,
+		targetResizeMinDimension: s.targetResizeMinDimension,
+		output:                   s.output,
 	}
 }
 
@@ -606,6 +613,10 @@ func quickDimensionLabel(maxDim int) string {
 		return "原尺寸"
 	}
 	return fmt.Sprintf("≤ %d", maxDim)
+}
+
+func outputPreviewMetadata(result *compress.Result) string {
+	return fmt.Sprintf("输出 %s · %d × %d · %s", strings.ToUpper(result.Format), result.Width, result.Height, formatSize(result.OutputSize))
 }
 
 func sizeGrowthHint(sourceFormat, resultFormat string) string {
@@ -835,6 +846,9 @@ func (s *application) overwriteConfirmation(c *ui.Context) {
 		message = fmt.Sprintf("将先将原文件移入废纸篓，再用压缩结果替换：\n%s\n\n%s → %s。",
 			s.file.path, formatSize(s.result.OriginalSize), formatSize(s.result.OutputSize))
 	}
+	if s.result.TargetResized {
+		message += fmt.Sprintf("\n\n本次自动缩小为 %d × %d px。", s.result.Width, s.result.Height)
+	}
 	// The last button receives the default focus, so Enter and Escape cancel.
 	if ui.AlertDialog(c.Key("overwrite-confirmation"), &s.confirmOverwrite,
 		"确认覆盖原图？", message, "覆盖原图", "取消") == 0 {
@@ -878,14 +892,14 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 		if note != "" {
 			notes = append(notes, note)
 		}
-		if s.file != nil {
-			if s.result.Format != "" && s.result.Format != s.file.format {
-				notes = append(notes, "转为 "+strings.ToUpper(s.result.Format))
-			}
-			if s.result.Width > 0 && s.result.Height > 0 &&
-				(s.result.Width != s.file.width || s.result.Height != s.file.height) {
-				notes = append(notes, fmt.Sprintf("%d × %d → %d × %d", s.file.width, s.file.height, s.result.Width, s.result.Height))
-			}
+		if s.file != nil && s.result.Format != "" && s.result.Format != s.file.format {
+			notes = append(notes, "转为 "+strings.ToUpper(s.result.Format))
+		}
+		if s.result.TargetResized {
+			notes = append(notes, fmt.Sprintf("已自动缩小至 %d × %d", s.result.Width, s.result.Height))
+		} else if s.file != nil && s.result.Width > 0 && s.result.Height > 0 &&
+			(s.result.Width != s.file.width || s.result.Height != s.file.height) {
+			notes = append(notes, fmt.Sprintf("%d × %d → %d × %d", s.file.width, s.file.height, s.result.Width, s.result.Height))
 		}
 		if s.result.TargetSizeMissed {
 			notes = append(notes, fmt.Sprintf("未达目标 ≤ %s", compress.FormatTargetSize(s.result.TargetSizeBytes)))

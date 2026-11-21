@@ -149,3 +149,39 @@ func searchTargetSize[T any](ctx context.Context, initial T, initialRank int, ta
 	}
 	return smallest, smallestRank, nil
 }
+
+const maxTargetResizeAttempts = 4
+
+func searchTargetResize(ctx context.Context, baseline *encodedImage, target int64, minDimension int, encode func(int) (*encodedImage, error)) (*encodedImage, error) {
+	smallest := baseline
+	longEdge := max(baseline.width, baseline.height)
+	for attempt := 1; attempt <= maxTargetResizeAttempts && longEdge > minDimension; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// Probe in descending order, with a final attempt at the minimum.
+		if attempt < maxTargetResizeAttempts {
+			longEdge = max(minDimension, longEdge*4/5)
+		} else {
+			longEdge = minDimension
+		}
+		candidate, err := encode(longEdge)
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		if err != nil {
+			// A failed optional probe cannot supersede the valid baseline.
+			continue
+		}
+		if int64(len(candidate.data)) <= target {
+			return candidate, nil
+		}
+		if len(candidate.data) < len(smallest.data) {
+			smallest = candidate
+		}
+	}
+	return smallest, nil
+}

@@ -34,15 +34,16 @@ const (
 )
 
 type Options struct {
-	Quality               int // JPEG, WebP, and AVIF quality in [1, 100].
-	PNG                   PNGOptions
-	Lossless              bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
-	Metadata              MetadataPolicy // "", "icc", or "strip".
-	OutputFormat          OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
-	MaxDimension          int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
-	TargetSizeBytes       int64          // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
-	Threads               int            // Optional native encoder thread cap; <= 0 selects automatic default.
-	SkipOverwriteSnapshot bool           // Skip SHA-256 overwrite snapshot when caller only writes copies.
+	Quality                  int // JPEG, WebP, and AVIF quality in [1, 100].
+	PNG                      PNGOptions
+	Lossless                 bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
+	Metadata                 MetadataPolicy // "", "icc", or "strip".
+	OutputFormat             OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
+	MaxDimension             int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
+	TargetSizeBytes          int64          // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
+	TargetResizeMinDimension int            // 0 = disabled; otherwise [64, 16384] minimum long edge for lossy target-size fallback.
+	Threads                  int            // Optional native encoder thread cap; <= 0 selects automatic default.
+	SkipOverwriteSnapshot    bool           // Skip SHA-256 overwrite snapshot when caller only writes copies.
 }
 
 // PNGOptions controls lossy color quantization. The zero value uses the
@@ -67,7 +68,8 @@ type Result struct {
 	Unchanged        bool
 	TargetSizeBytes  int64
 	TargetSizeMissed bool
-	AppliedQuality   int // Lower JPEG/WebP/AVIF quality selected to approach the target.
+	TargetResized    bool // The selected output used automatic downscaling for the target.
+	AppliedQuality   int  // Lower JPEG/WebP/AVIF quality selected to approach the target.
 
 	sourcePath   string             // Absolute path captured before the caller can change cwd.
 	sourceFormat string             // Original decoded format, used to guard Overwrite.
@@ -163,6 +165,9 @@ func validateRequest(ctx context.Context, path string, options Options) (string,
 	if err := ValidateTargetSizeBytes(options.TargetSizeBytes); err != nil {
 		return "", err
 	}
+	if err := ValidateMaxDimension(options.TargetResizeMinDimension); err != nil {
+		return "", fmt.Errorf("目标体积缩放的最小边长设置无效：%w", err)
+	}
 	if path == "" {
 		return "", fmt.Errorf("图片路径不能为空")
 	}
@@ -235,12 +240,127 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("压缩已取消：%w", err)
 	}
-	sourceFormat := format
-	targetFormat := ResolveOutputFormat(sourceFormat, options.OutputFormat, options.Lossless)
-	converting := targetFormat != sourceFormat
-	if converting && sourceFormat == "png" {
+	targetFormat := ResolveOutputFormat(format, options.OutputFormat, options.Lossless)
+	if format == "png" && targetFormat != format {
 		sourceOrient = pngOrientation(data)
 	}
+	source := compressionSource{
+		data: data, pixelSource: pixelSource, config: config,
+		format: format, targetFormat: targetFormat, orientation: sourceOrient,
+	}
+	longEdge := max(config.Width, config.Height)
+	if options.MaxDimension > 0 {
+		longEdge = min(longEdge, options.MaxDimension)
+	}
+	minDimension := options.TargetResizeMinDimension
+	canTargetResize := !options.Lossless && options.TargetSizeBytes > 0 && minDimension > 0 && longEdge > minDimension
+	baselinePreview := preview
+	if canTargetResize {
+		// The preview must come from the winning candidate.
+		baselinePreview = nil
+	}
+	baseline, err := source.encodeAtDimension(ctx, options, baselinePreview)
+	if err != nil {
+		return nil, err
+	}
+	selected := baseline
+	if canTargetResize && int64(len(baseline.data)) > options.TargetSizeBytes {
+		if format == "png" && targetFormat == "png" {
+			source.orientation = pngOrientation(data)
+		}
+		selected, err = searchTargetResize(ctx, baseline, options.TargetSizeBytes, minDimension, func(longEdge int) (*encodedImage, error) {
+			probe := options
+			probe.MaxDimension = longEdge
+			return source.encodeAtDimension(ctx, probe, nil)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("压缩已取消：%w", err)
+		}
+	}
+	result := &Result{
+		SourcePath:      path,
+		Format:          targetFormat,
+		Width:           selected.width,
+		Height:          selected.height,
+		OriginalSize:    int64(len(data)),
+		OutputSize:      int64(len(selected.data)),
+		Data:            selected.data,
+		Unchanged:       selected.unchanged,
+		TargetSizeBytes: options.TargetSizeBytes,
+		TargetResized:   selected != baseline,
+		sourcePath:      sourcePath,
+		sourceFormat:    format,
+	}
+	result.TargetSizeMissed = result.TargetSizeBytes > 0 && result.OutputSize > result.TargetSizeBytes
+	if !result.Unchanged && selected.appliedQuality > 0 && selected.appliedQuality < options.Quality {
+		result.AppliedQuality = selected.appliedQuality
+	}
+	if preview != nil && !result.Unchanged && targetFormat == "avif" {
+		pngData, err := aviftools.DecodePNG(ctx, result.Data, options.Threads)
+		if err == nil {
+			*preview, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngData)))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("无法生成预览：%w", err)
+		}
+	}
+	if !options.SkipOverwriteSnapshot {
+		result.snapshot = captureOverwriteSnapshot(data, result.Data)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("压缩已取消：%w", err)
+	}
+	return result, nil
+}
+
+type compressionSource struct {
+	data, pixelSource    []byte
+	config               image.Config
+	format, targetFormat string
+	orientation          int
+	pixels               image.Image
+}
+
+// decodePixels reuses the source pixels across all dimension probes. JPEG
+// also reuses the orientation and alpha preparation required by its encoder.
+func (source *compressionSource) decodePixels(ctx context.Context) (image.Image, error) {
+	if source.pixels != nil {
+		return source.pixels, nil
+	}
+	img, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(source.pixelSource)))
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+	}
+	if source.targetFormat == "jpeg" {
+		img, err = orientForJPEGEncode(ctx, img, source.orientation)
+		if err != nil {
+			return nil, fmt.Errorf("调整图片方向已取消：%w", err)
+		}
+		if source.format != source.targetFormat {
+			img, err = flattenAlphaForJPEG(ctx, img)
+			if err != nil {
+				return nil, fmt.Errorf("处理图片透明度已取消：%w", err)
+			}
+		}
+	}
+	source.pixels = img
+	return img, nil
+}
+
+type encodedImage struct {
+	data           []byte
+	width, height  int
+	appliedQuality int
+	unchanged      bool
+}
+
+func (source *compressionSource) encodeAtDimension(ctx context.Context, options Options, preview *image.Image) (*encodedImage, error) {
+	data, pixelSource, config := source.data, source.pixelSource, source.config
+	sourceFormat, targetFormat, sourceOrient := source.format, source.targetFormat, source.orientation
+	converting := targetFormat != sourceFormat
 	width, height := config.Width, config.Height
 	if sourceOrient >= 5 && sourceOrient <= 8 {
 		width, height = height, width
@@ -249,8 +369,11 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	transforming := converting || needsResize
 	forcedOutput := false
 
-	var encoded []byte
-	var appliedQuality int
+	var (
+		encoded        []byte
+		appliedQuality int
+		err            error
+	)
 	switch targetFormat {
 	case "avif":
 		if !aviftools.Available() {
@@ -263,7 +386,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				break
 			}
 		}
-		pngInput, icc, prepErr := prepareAVIFPNG(ctx, pixelSource, sourceFormat, sourceOrient, needsResize, options)
+		pngInput, icc, prepErr := source.prepareAVIFPNG(ctx, needsResize, options)
 		if prepErr != nil {
 			err = prepErr
 			break
@@ -285,13 +408,9 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		needsWebPReencodeFromPixels := converting || needsResize ||
 			(sourceFormat == "webp" && sourceOrient > 1 && options.Metadata != MetadataKeepAll)
 		if needsWebPReencodeFromPixels {
-			var decoded image.Image
-			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
-			if cancelErr := ctx.Err(); cancelErr != nil {
-				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
-			}
-			if err != nil {
-				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+			decoded, decodeErr := source.decodePixels(ctx)
+			if decodeErr != nil {
+				return nil, decodeErr
 			}
 			oriented := normalizeOrientation(decoded, sourceOrient)
 			var resized image.Image
@@ -435,22 +554,9 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				encoded = data
 			}
 		} else {
-			img, _, decodeErr := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
-			if cancelErr := ctx.Err(); cancelErr != nil {
-				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
-			}
+			img, decodeErr := source.decodePixels(ctx)
 			if decodeErr != nil {
-				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
-			}
-			img, err = orientForJPEGEncode(ctx, img, sourceOrient)
-			if err != nil {
-				return nil, fmt.Errorf("调整图片方向已取消：%w", err)
-			}
-			if converting {
-				img, err = flattenAlphaForJPEG(ctx, img)
-				if err != nil {
-					return nil, fmt.Errorf("处理图片透明度已取消：%w", err)
-				}
+				return nil, decodeErr
 			}
 			if needsResize {
 				img, _, err = resizeImage(ctx, img, options.MaxDimension)
@@ -491,13 +597,9 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		needsPNGReencode := sourceFormat == "jpeg" || sourceFormat == "webp" ||
 			needsResize || (converting && sourceOrient > 1)
 		if needsPNGReencode {
-			var decoded image.Image
-			decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
-			if cancelErr := ctx.Err(); cancelErr != nil {
-				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
-			}
-			if err != nil {
-				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
+			decoded, decodeErr := source.decodePixels(ctx)
+			if decodeErr != nil {
+				return nil, decodeErr
 			}
 			oriented := normalizeOrientation(decoded, sourceOrient)
 			var resized image.Image
@@ -554,39 +656,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if err != nil {
 		return nil, fmt.Errorf("图片编码失败：%w", err)
 	}
-	result := &Result{
-		SourcePath:      path,
-		Format:          targetFormat,
-		Width:           width,
-		Height:          height,
-		OriginalSize:    int64(len(data)),
-		Data:            encoded,
-		TargetSizeBytes: options.TargetSizeBytes,
-		sourcePath:      sourcePath,
-		sourceFormat:    sourceFormat,
+	unchanged := !transforming && !forcedOutput && len(encoded) >= len(data)
+	if unchanged {
+		encoded = data
 	}
-	if !transforming && !forcedOutput && len(result.Data) >= len(data) {
-		result.Data = data
-		result.Unchanged = true
-	}
-	if preview != nil && !result.Unchanged && targetFormat == "avif" {
-		pngData, err := aviftools.DecodePNG(ctx, result.Data, options.Threads)
-		if err == nil {
-			*preview, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngData)))
-		}
-		if err != nil {
-			return nil, fmt.Errorf("无法生成预览：%w", err)
-		}
-	}
-	result.OutputSize = int64(len(result.Data))
-	result.TargetSizeMissed = result.TargetSizeBytes > 0 && result.OutputSize > result.TargetSizeBytes
-	if !result.Unchanged && appliedQuality > 0 && appliedQuality < options.Quality {
-		result.AppliedQuality = appliedQuality
-	}
-	if !options.SkipOverwriteSnapshot {
-		result.snapshot = captureOverwriteSnapshot(data, result.Data)
-	}
-	return result, nil
+	return &encodedImage{
+		data: encoded, width: width, height: height,
+		appliedQuality: appliedQuality, unchanged: unchanged,
+	}, nil
 }
 
 func pngStripMode(policy MetadataPolicy) pngtools.StripMode {
