@@ -1,0 +1,77 @@
+name: macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-dmg-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 50
+    environment: ${{ github.event_name == 'push' && 'macos-release' || 'macos-preview' }}
+    outputs:
+      notarized: ${{ steps.package.outputs.notarized }}
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Package and verify the Apple silicon DMG
+        id: package
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_P12_BASE64 || '' }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ github.event_name == 'push' && secrets.MACOS_NOTARY_KEY_P8_BASE64 || '' }}
+          MACOS_NOTARY_KEY_ID: ${{ github.event_name == 'push' && secrets.MACOS_NOTARY_KEY_ID || '' }}
+          MACOS_NOTARY_ISSUER_ID: ${{ github.event_name == 'push' && secrets.MACOS_NOTARY_ISSUER_ID || '' }}
+        run: bash scripts/package-macos-dmg.sh
+      - name: Upload DMG and SHA-256
+        id: artifact
+        if: github.event_name == 'workflow_dispatch' || steps.package.outputs.notarized == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: z-pic-macos-arm64-${{ steps.package.outputs.notarized == 'true' && 'notarized' || 'preview' }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.package.outputs.dmg }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: package
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.package.outputs.notarized == 'true' && needs.package.outputs.artifact-id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ needs.package.outputs.artifact-id }}
+          path: macos-release
+      - name: Publish verified assets to GitHub Releases
+        working-directory: macos-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          images=( *.dmg )
+          [[ "${#images[@]}" == 1 && -f "${images[0]}" ]]
+          dmg="${images[0]}"
+          sha256sum --check -- "$dmg.sha256"
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$dmg.sha256" --verify-tag --generate-notes \
+            --notes '随包编码器的对应源码位于本版本 Source code 归档的 `scripts/sources/`，构建说明位于 `scripts/`。'

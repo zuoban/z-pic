@@ -2,6 +2,21 @@
 
 使用 MyGo 原生 UI 构建的本地桌面图片压缩工具，支持单张与批量处理静态 JPEG / PNG / WebP，macOS ARM64 上的静态 AVIF 读写，以及 macOS 上的 HEIC / HEIF 输入，不需要前端构建工具或图片处理服务。
 
+## 下载与安装
+
+DMG 适用于搭载 Apple 芯片并运行 **macOS 13.0 或更新版本**的 Mac。
+
+- 正式版从 GitHub Releases 下载 `.dmg` 和同名的 `.dmg.sha256`，应用与镜像均使用 Developer ID 签名，镜像附带 Apple 公证票据。
+- 试装版在 GitHub 仓库的「Actions → macOS DMG」选择目标分支并点击「Run workflow」。构建完成后，从该次运行的「Artifacts」下载并解压 `z-pic-macos-arm64-preview-*`，取出其中的 DMG 和 SHA-256 文件。对应版本的编码器源码和构建说明在该次运行的提交中，分别位于 `scripts/sources/` 和 `scripts/`。
+
+将两个文件放在同一目录。以 `0.1.0` 为例，可在该目录运行以下命令校验镜像。
+
+```sh
+shasum -a 256 -c z-pic-0.1.0-arm64.dmg.sha256
+```
+
+看到 `OK` 后双击 DMG，将「Z Pic」拖到「应用程序」，再从「应用程序」打开。等待主窗口出现后，可以推出磁盘映像。试装版使用临时签名。若 macOS 拦截已确认来源的试装版，尝试打开后可在「系统设置 → 隐私与安全性」中对该应用选择「仍要打开」。
+
 ## 使用
 
 1. 选择单张图片进入单图模式；选择多张图片、选择文件夹或直接拖入多图 / 文件夹则进入批量模式（也可拖放追加到现有队列）。点击顶部「粘贴图片」或按 `⌘V` / `Ctrl+V`，可将剪贴板中的截图、JPEG / PNG / WebP 图片或复制的图片文件加入批量队列；已有图片会保留，重复文件自动去重。无文件路径的剪贴板图片会先保存到「下载/Z Pic」，导入成功或失败均有浮动通知。在搜索框等文本输入区域，粘贴快捷键仍用于粘贴文字。
@@ -193,10 +208,31 @@ bash scripts/prepare-pngtools.sh --verify
 bash scripts/prepare-webptools.sh --verify
 bash scripts/prepare-jpegtools.sh --verify
 bash scripts/prepare-aviftools.sh --verify
-go tool mygo build -skip-dmg -skip-notarize -sign -
 ```
 
-打包产物位于 `dist/`。以上命令在 macOS 使用临时签名生成本地运行的应用，不进行公证。第三方声明与许可证文本随应用资源一起打包，上游源码归档保留在 `scripts/sources/` 供离线复现而不打入 `.app` 包体。首个验证目标是当前开发环境 macOS ARM64；其他系统需准备对应原生工具，再分别进行原生窗口、文件对话框和安装包验证。
+### macOS Apple 芯片 DMG
+
+在 Apple 芯片 Mac 上安装仓库要求的 Go 和 Xcode 命令行工具后，即可本地打包。
+
+```sh
+bash scripts/package-macos-dmg.sh
+```
+
+每次运行生成独立的 `build/macos-dmg/run.*/darwin-arm64/` 目录，里面包含 `Z Pic.app`、`z-pic-<版本>-arm64.dmg` 和对应的 `.dmg.sha256`。脚本使用 MyGo v0.9.0 打包，校验镜像，挂载后检查应用签名、架构、版本、「应用程序」链接及全部第三方许可证，并运行包内 CLI 的 `version` 命令。编码器源码归档保留在 `scripts/sources/`，通过发布版本的 Source code 归档提供。
+
+### GitHub Releases
+
+推送与 `mygo.json` 的 `version` 一致的 `vX.Y.Z` 标签会触发 `macOS DMG` 工作流。要启用正式发布，在仓库的「Settings → Environments」创建 `macos-release`，将部署范围限制为可信发布标签，并配置以下 Environment Secrets。
+
+| Secret | 内容 |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12_BASE64` | Base64 编码的 `.p12`，包含一张 Developer ID Application 证书及其私钥 |
+| `MACOS_CERTIFICATE_PASSWORD` | 导出 `.p12` 时使用的密码 |
+| `MACOS_NOTARY_KEY_P8_BASE64` | Base64 编码的 App Store Connect 团队 API 私钥 `.p8` |
+| `MACOS_NOTARY_KEY_ID` | 该 API 密钥的 Key ID |
+| `MACOS_NOTARY_ISSUER_ID` | 该团队 API 密钥的 Issuer ID |
+
+标签构建收到完整配置后会签名应用和 DMG，等待 Apple 公证通过，将公证票据附到 DMG，验证 Gatekeeper 评估结果，然后把 DMG 和 SHA-256 文件作为同名标签的 Release 附件发布。未配置 Secrets 时，标签运行只在运行器上打包并校验。配置不完整或任一验证失败时，工作流以失败结束。手动运行使用临时签名生成试装附件。
 
 原生窗口端到端测试可使用只在 `e2e` 构建中启用的 MyGo automation 插件，正式构建不导入该插件：
 
