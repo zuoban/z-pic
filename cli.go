@@ -541,19 +541,7 @@ func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) 
 		if basePreset == nil {
 			return opts, nil, fmt.Errorf("找不到预设 %q；运行 \"z-pic presets\" 查看可用预设。", f.presetName)
 		}
-		opts = compress.Options{
-			Quality:                  int(basePreset.quality),
-			PNG:                      basePreset.png,
-			Lossless:                 basePreset.lossless,
-			Metadata:                 basePreset.metadata,
-			OutputFormat:             basePreset.outputFormat,
-			MaxDimension:             basePreset.maxDimension,
-			MaxWidth:                 basePreset.maxWidth,
-			MaxHeight:                basePreset.maxHeight,
-			ScalePercent:             basePreset.scalePercent,
-			TargetSizeBytes:          basePreset.targetSizeBytes,
-			TargetResizeMinDimension: basePreset.targetResizeMinDimension,
-		}
+		opts = basePreset.compressionOptions()
 	}
 
 	if setFlags["quality"] || setFlags["q"] {

@@ -20,14 +20,15 @@ import (
 const maxSettingsBytes = 1 << 20
 
 type storedSettings struct {
-	Version        int            `json:"version"`
-	Selected       string         `json:"selected"`
-	Presets        []storedPreset `json:"presets"`
-	BatchOutputDir string         `json:"batch_output_dir,omitempty"`
-	Theme          string         `json:"theme,omitempty"`
-	AutoCompress   bool           `json:"auto_compress,omitempty"`
-	BackupToTrash  bool           `json:"backup_to_trash,omitempty"`
-	DownloadDir    string         `json:"download_dir,omitempty"`
+	Version        int                 `json:"version"`
+	Selected       string              `json:"selected"`
+	Presets        []storedPreset      `json:"presets"`
+	BatchOutputDir string              `json:"batch_output_dir,omitempty"`
+	Theme          string              `json:"theme,omitempty"`
+	AutoCompress   bool                `json:"auto_compress,omitempty"`
+	BackupToTrash  bool                `json:"backup_to_trash,omitempty"`
+	DownloadDir    string              `json:"download_dir,omitempty"`
+	Watch          folderWatchSettings `json:"watch,omitzero"`
 }
 
 type appSettings struct {
@@ -38,6 +39,7 @@ type appSettings struct {
 	autoCompress   bool
 	backupToTrash  bool
 	downloadDir    string
+	watch          folderWatchSettings
 }
 
 type storedPreset struct {
@@ -278,6 +280,7 @@ func loadFullSettings(path string) (appSettings, error) {
 		autoCompress:   stored.AutoCompress,
 		backupToTrash:  stored.BackupToTrash,
 		downloadDir:    normalizeDownloadDir(stored.DownloadDir),
+		watch:          stored.Watch,
 	}, nil
 }
 
@@ -417,6 +420,7 @@ func saveFullSettings(path string, cfg appSettings) error {
 		AutoCompress:   cfg.autoCompress,
 		BackupToTrash:  cfg.backupToTrash,
 		DownloadDir:    normalizeDownloadDir(cfg.downloadDir),
+		Watch:          cfg.watch,
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{

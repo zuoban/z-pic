@@ -61,6 +61,7 @@ type application struct {
 	settingsError            string
 	presets                  []compressionPreset
 	editor                   *settingsEditor
+	watch                    desktopFolderWatch
 	result                   *compress.Result
 	preview                  *ui.Bitmap
 	comparison               comparisonView

@@ -127,6 +127,7 @@ func (s *application) view(c *ui.Context) {
 					s.controlsPanel(c, showBatchOutput)
 				})
 			}
+			s.folderWatchStatusBar(c)
 			ui.Row(c).Height(20).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "本机压缩 · 网页图片仅在下载时联网").FontSize(12).
 					TextColor(chromeMetadataColor(c)).Width(0).Grow(1).SingleLine().

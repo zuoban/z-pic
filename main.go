@@ -35,6 +35,7 @@ func main() {
 			app.dropFiles([]string{path})
 		})
 	})
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { app.closeFolderWatch() })
 	mygo.App.WhenReady(func() {
 		app.window = mygo.NewWindow(mygo.WindowOptions{
 			Title:           "Z Pic · 图片压缩",
@@ -52,6 +53,7 @@ func main() {
 		})
 		app.window.OnClosed(func() {
 			app.closed = true
+			app.stopFolderWatch()
 			if app.cancel != nil {
 				app.cancel()
 			}
@@ -74,6 +76,7 @@ func main() {
 		}
 	})
 	err := mygo.App.Run()
+	app.closeFolderWatch()
 	app.saves.Wait()
 	app.cleanupDragStaging()
 	if err != nil {

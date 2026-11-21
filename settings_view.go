@@ -30,13 +30,18 @@ func (s *application) settingsView(c *ui.Context) {
 	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("应用设置").Children(func() {
 		ui.Column(c).FillWidth().Background(panelSurface(c)).Children(func() {
 			s.settingsNavigation(c)
-			ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-			s.settingsPresetSelection(c)
+			if s.editor.section != settingsFolderWatch {
+				ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+				s.settingsPresetSelection(c)
+			}
 		})
 		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-		if s.editor.section == settingsPresets {
+		switch s.editor.section {
+		case settingsPresets:
 			s.presetSettingsContent(c)
-		} else {
+		case settingsFolderWatch:
+			s.folderWatchSettingsContent(c)
+		default:
 			s.generalSettingsContent(c)
 		}
 		s.settingsFooter(c)
@@ -99,8 +104,8 @@ func (s *application) settingsNavigation(c *ui.Context) {
 	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 52)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
 		section := int(s.editor.section)
-		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设").
-			Width(settingsFontSize(c, 200))
+		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设", "文件夹监听").
+			Width(settingsFontSize(c, 282))
 		s.editor.section = settingsSection(section)
 	})
 }

@@ -32,6 +32,22 @@ type compressionPreset struct {
 	output                   presetSaveOptions
 }
 
+func (p compressionPreset) compressionOptions() compress.Options {
+	return compress.Options{
+		Quality:                  int(p.quality),
+		PNG:                      p.png,
+		Lossless:                 p.lossless,
+		Metadata:                 p.metadata,
+		OutputFormat:             p.outputFormat,
+		MaxDimension:             p.maxDimension,
+		MaxWidth:                 p.maxWidth,
+		MaxHeight:                p.maxHeight,
+		ScalePercent:             p.scalePercent,
+		TargetSizeBytes:          p.targetSizeBytes,
+		TargetResizeMinDimension: p.targetResizeMinDimension,
+	}
+}
+
 type resizeLimits struct {
 	maxDimension int
 	maxWidth     int
@@ -151,6 +167,7 @@ type settingsSection int
 const (
 	settingsGeneral settingsSection = iota
 	settingsPresets
+	settingsFolderWatch
 )
 
 type settingsEditor struct {
@@ -159,6 +176,8 @@ type settingsEditor struct {
 	autoCompress  bool
 	backupToTrash bool
 	downloadDir   string
+	watch         folderWatchSettings
+	watchMessage  string
 	presets       []compressionPreset
 	targets       []*presetTargetDraft
 	selected      int
@@ -295,7 +314,7 @@ func (s *application) settingsHaveChanges() bool {
 	if e.theme.normalized() != s.effectiveThemeMode() ||
 		e.autoCompress != s.autoCompress ||
 		e.backupToTrash != s.backupToTrash ||
-		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) ||
+		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) || e.watch != s.watch.settings ||
 		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme {
 		return true
 	}
@@ -331,6 +350,7 @@ func (s *application) restoreSettings() {
 	s.autoCompress = cfg.autoCompress
 	s.backupToTrash = cfg.backupToTrash
 	s.downloadDir = normalizeDownloadDir(cfg.downloadDir)
+	s.watch.settings = cfg.watch
 	s.syncTheme(cfg.theme)
 	s.applyScheme(cfg.selected)
 }
@@ -363,11 +383,16 @@ func (s *application) setSettingsOpen(open bool) {
 			active = index
 		}
 	}
+	watch := s.watch.settings
+	if session := s.watch.session; session != nil {
+		watch = session.settings
+	}
 	s.editor = &settingsEditor{
 		theme:         s.effectiveThemeMode(),
 		autoCompress:  s.autoCompress,
 		backupToTrash: s.backupToTrash,
 		downloadDir:   s.downloadDir,
+		watch:         watch,
 		presets:       slices.Clone(s.presets),
 		targets:       targets,
 		selected:      active,
@@ -749,7 +774,11 @@ func (s *application) saveSettingsEdits() {
 		}
 		s.settingsFile = path
 	}
-	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, downloadDir); err != nil {
+	watch := s.editor.watch
+	if watch.Preset == "" && (watch.InputDir != "" || watch.OutputDir != "") {
+		watch.Preset = s.scheme
+	}
+	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, downloadDir, watch); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
@@ -757,6 +786,7 @@ func (s *application) saveSettingsEdits() {
 	s.autoCompress = s.editor.autoCompress
 	s.backupToTrash = s.editor.backupToTrash
 	s.downloadDir = downloadDir
+	s.watch.settings = watch
 	if s.settingsError != "" {
 		s.setMessage("设置已保存。", false)
 	}
@@ -767,10 +797,10 @@ func (s *application) saveSettingsEdits() {
 }
 
 func (s *application) saveCurrentSettings(presets []compressionPreset, selected, batchOutputDir string, theme themeMode) error {
-	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress, s.backupToTrash, s.downloadDir)
+	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress, s.backupToTrash, s.downloadDir, s.watch.settings)
 }
 
-func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress, backupToTrash bool, downloadDir string) error {
+func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress, backupToTrash bool, downloadDir string, watch folderWatchSettings) error {
 	return saveFullSettings(s.settingsFile, appSettings{
 		presets:        presets,
 		selected:       selected,
@@ -779,24 +809,16 @@ func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected
 		autoCompress:   autoCompress,
 		backupToTrash:  backupToTrash,
 		downloadDir:    normalizeDownloadDir(downloadDir),
+		watch:          watch,
 	})
 }
 
 // Capture all settings on the UI thread before launching compression.
 func (s *application) compressionOptions() compress.Options {
-	return compress.Options{
-		Quality:                  int(s.quality),
-		PNG:                      s.png,
-		Lossless:                 s.lossless,
-		Metadata:                 s.metadata,
-		OutputFormat:             s.outputFormat,
-		MaxDimension:             s.maxDimension,
-		MaxWidth:                 s.maxWidth,
-		MaxHeight:                s.maxHeight,
-		ScalePercent:             s.scalePercent,
-		TargetSizeBytes:          s.targetSizeBytes,
-		TargetResizeMinDimension: s.activePresetSnapshot().effectiveTargetResizeMinDimension(),
-	}
+	preset := s.activePresetSnapshot()
+	options := preset.compressionOptions()
+	options.TargetResizeMinDimension = preset.effectiveTargetResizeMinDimension()
+	return options
 }
 
 func usableBatchOutputDir(path string) string {
