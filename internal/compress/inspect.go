@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync"
 
+	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
 	"zpic/internal/heictools"
 )
@@ -21,7 +22,7 @@ var jpegInspectBufPool = sync.Pool{
 	},
 }
 
-// ImageInfo describes validated static JPEG, PNG or WebP metadata read from headers.
+// ImageInfo describes a supported static image with validated headers.
 type ImageInfo struct {
 	Path   string
 	Format string
@@ -41,12 +42,12 @@ func Inspect(ctx context.Context, path string) (ImageInfo, error) {
 	return info, nil
 }
 
-// InspectBytes validates static JPEG/PNG/WebP/HEIC headers in memory.
+// InspectBytes validates static JPEG/PNG/WebP/HEIC/AVIF headers in memory.
 func InspectBytes(ctx context.Context, data []byte) (ImageInfo, error) {
 	return InspectReader(ctx, bytes.NewReader(data), int64(len(data)))
 }
 
-// InspectReader validates static JPEG/PNG/WebP/HEIC headers on an already-open
+// InspectReader validates static JPEG/PNG/WebP/HEIC/AVIF headers on an already-open
 // seekable stream of known byte length without reopening the path.
 func InspectReader(ctx context.Context, r io.ReadSeeker, size int64) (ImageInfo, error) {
 	if err := ctx.Err(); err != nil {
@@ -134,7 +135,7 @@ func inspectStream(ctx context.Context, f io.ReadSeeker, size int64) (string, in
 	var head [33]byte
 	n, err := io.ReadFull(contextio.NewReader(ctx, f), head[:])
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return "", 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+		return "", 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 	}
 	switch {
 	case n >= 8 && [8]byte(head[:8]) == pngSignature:
@@ -161,7 +162,17 @@ func inspectStream(ctx context.Context, f io.ReadSeeker, size int64) (string, in
 			return "", 0, 0, err
 		}
 		return "jpeg", width, height, nil
-	case n >= 12 && heictools.SniffFTYP(head[:n]):
+	case aviftools.SniffFTYP(head[:n]):
+		avifInfo, err := aviftools.Inspect(ctx, f, size)
+		if err == nil {
+			if !aviftools.Available() {
+				return "", 0, 0, aviftools.ErrUnsupportedPlatform
+			}
+			return "avif", avifInfo.Width, avifInfo.Height, nil
+		}
+		if !errors.Is(err, aviftools.ErrNotAVIF) {
+			return "", 0, 0, err
+		}
 		heicInfo, err := heictools.Inspect(ctx, f, size)
 		if err != nil {
 			return "", 0, 0, err
@@ -171,9 +182,9 @@ func inspectStream(ctx context.Context, f io.ReadSeeker, size int64) (string, in
 		}
 		return "heic", heicInfo.Width, heicInfo.Height, nil
 	case n >= 6 && (string(head[:6]) == "GIF87a" || string(head[:6]) == "GIF89a"):
-		return "", 0, 0, fmt.Errorf("不支持 gif 图片，仅支持静态 JPEG/PNG/WebP")
+		return "", 0, 0, fmt.Errorf("不支持 gif 图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF")
 	default:
-		return "", 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		return "", 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF")
 	}
 }
 
@@ -182,14 +193,14 @@ func parsePNGIHDR(head []byte) (int, int, error) {
 		binary.BigEndian.Uint32(head[8:12]) != 13 ||
 		string(head[12:16]) != "IHDR" ||
 		crc32.ChecksumIEEE(head[12:29]) != binary.BigEndian.Uint32(head[29:33]) {
-		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：PNG IHDR 损坏")
+		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：PNG IHDR 损坏")
 	}
 	width := int(int32(binary.BigEndian.Uint32(head[16:20])))
 	height := int(int32(binary.BigEndian.Uint32(head[20:24])))
 	bitDepth, colorType := head[24], head[25]
 	compression, filter, interlace := head[26], head[27], head[28]
 	if compression != 0 || filter != 0 || interlace > 1 || !validPNGColorBitDepth(colorType, bitDepth) {
-		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：PNG 参数不支持")
+		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：PNG 参数不支持")
 	}
 	if width <= 0 || height <= 0 || uint64(width) > uint64(maxPixels)/uint64(height) {
 		return 0, 0, errors.New("图片超过 3200 万像素限制或尺寸无效")
@@ -281,7 +292,7 @@ func (b *pooledByteReader) discard(count int) error {
 // matching standard library image/jpeg support with zero heap allocations.
 func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, int, error) {
 	if size < 4 {
-		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP")
+		return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF")
 	}
 	if _, err := f.Seek(2, io.SeekStart); err != nil {
 		return 0, 0, fmt.Errorf("无法读取图片头部：%w", err)
@@ -303,23 +314,23 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 			if foundSOF && err == io.EOF {
 				break
 			}
-			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 		}
 		if b != 0xff {
-			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 标记损坏")
+			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 标记损坏")
 		}
 		for b == 0xff {
 			b, err = reader.nextByte()
 			if err != nil {
-				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 			}
 		}
 		if b == 0x00 || b == 0xd8 {
-			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 结构无效")
 		}
 		if b == 0xd9 || b == 0xda {
 			if !foundSOF {
-				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 结构无效")
 			}
 			break
 		}
@@ -327,21 +338,21 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 			continue
 		}
 		if err := reader.readFull(lenBytes[:]); err != nil {
-			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 		}
 		payloadLen := int(binary.BigEndian.Uint16(lenBytes[:])) - 2
 		if payloadLen < 0 {
-			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 段长度无效")
+			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 段长度无效")
 		}
 		if b == 0xe1 && !foundExif && payloadLen >= 14 {
 			var exifHead [6]byte
 			if err := reader.readFull(exifHead[:]); err != nil {
-				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 			}
 			if string(exifHead[:]) == "Exif\x00\x00" {
 				tiffBuf := make([]byte, payloadLen-6)
 				if err := reader.readFull(tiffBuf); err != nil {
-					return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+					return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 				}
 				orientation = tiffOrientation(tiffBuf)
 				foundExif = true
@@ -351,26 +362,26 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 				continue
 			}
 			if err := reader.discard(payloadLen - 6); err != nil {
-				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 			}
 			continue
 		}
 		if b == 0xc0 || b == 0xc2 {
 			if foundSOF {
-				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 结构无效")
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 结构无效")
 			}
 			if payloadLen < 6 || payloadLen > len(sof) {
-				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 帧头无效")
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 帧头无效")
 			}
 			if err := reader.readFull(sof[:payloadLen]); err != nil {
-				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+				return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 			}
 			precision := sof[0]
 			hVal := int(binary.BigEndian.Uint16(sof[1:3]))
 			wVal := int(binary.BigEndian.Uint16(sof[3:5]))
 			nComp := int(sof[5])
 			if precision != 8 || (nComp != 1 && nComp != 3 && nComp != 4) || payloadLen != 6+3*nComp {
-				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 采样不支持")
+				return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 采样不支持")
 			}
 			var seenIDs [256]bool
 			for i := range nComp {
@@ -378,7 +389,7 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 				hv := sof[6+3*i+1]
 				h, v := hv>>4, hv&0x0f
 				if seenIDs[id] || h < 1 || h > 4 || v < 1 || v > 4 {
-					return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：JPEG 分量无效")
+					return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：JPEG 分量无效")
 				}
 				seenIDs[id] = true
 			}
@@ -393,10 +404,10 @@ func inspectJPEGStream(ctx context.Context, f io.ReadSeeker, size int64) (int, i
 			continue
 		}
 		if b >= 0xc1 && b <= 0xcf && b != 0xc4 && b != 0xc8 && b != 0xcc {
-			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP：不支持的 JPEG 编码模式")
+			return 0, 0, errors.New("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：不支持的 JPEG 编码模式")
 		}
 		if err := reader.discard(payloadLen); err != nil {
-			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP：%w", err)
+			return 0, 0, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 		}
 	}
 	if orientation >= 5 && orientation <= 8 {

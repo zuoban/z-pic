@@ -33,11 +33,23 @@ func hasSupportedHeader(header []byte) bool {
 		(len(header) >= 12 && string(header[:4]) == "RIFF" && string(header[8:12]) == "WEBP") {
 		return true
 	}
-	return compress.SupportsHEIC() && compress.SniffHEICHeader(header)
+	return (compress.SupportsHEIC() && compress.SniffHEICHeader(header)) ||
+		(compress.SupportsAVIF() && compress.SniffAVIFHeader(header))
 }
 
-// Remote and byte inputs are saved
-// unchanged only after header inspection and full static JPEG/PNG/WebP decoding.
+func unsupportedStaticImageError() error {
+	formats := "JPEG/PNG/WebP"
+	if compress.SupportsAVIF() {
+		formats += "/AVIF"
+	}
+	if compress.SupportsHEIC() {
+		formats += "/HEIC"
+	}
+	return fmt.Errorf("无法识别图片，仅支持静态 %s", formats)
+}
+
+// Remote and byte inputs are saved verbatim after header inspection and
+// full decoding of the supported static image.
 // The caller owns successful downloaded files and their eventual removal.
 func Resolve(ctx context.Context, item Item, dir string) (path string, downloaded bool, err error) {
 	return ResolveWithTransport(ctx, item, dir, nil)
@@ -397,7 +409,7 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 			return nil, err
 		}
 		if !hasSupportedHeader(header) {
-			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC")
+			return nil, unsupportedStaticImageError()
 		}
 		reader = buffered
 	} else {
@@ -409,7 +421,7 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 		}
 		header := item.Data[:min(12, len(item.Data))]
 		if !hasSupportedHeader(header) {
-			return nil, fmt.Errorf("无法识别图片，仅支持静态 JPEG/PNG/WebP/HEIC")
+			return nil, unsupportedStaticImageError()
 		}
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -474,8 +486,8 @@ func (resolver *Resolver) Stage(ctx context.Context, item Item) (*StagedItem, er
 		extension = ".jpg"
 	case "webp":
 		extension = ".webp"
-	case "heic":
-		extension = ".heic"
+	case "heic", "avif":
+		extension = "." + format
 	}
 	keepTemp = true
 	return &StagedItem{tempName: tempName, name: name, extension: extension}, nil

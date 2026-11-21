@@ -104,7 +104,7 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		names[preset.name] = true
 		if math.IsNaN(preset.quality) || math.IsInf(preset.quality, 0) ||
 			preset.quality < 1 || preset.quality > 100 || math.Trunc(preset.quality) != preset.quality {
-			return invalid("quality-level", fmt.Errorf("预设「%s」的 JPEG / WebP 质量必须是 1 到 100 之间的整数", preset.name))
+			return invalid("quality-level", fmt.Errorf("预设「%s」的有损质量必须是 1 到 100 之间的整数", preset.name))
 		}
 		if preset.png == (compress.PNGOptions{}) {
 			return invalid("quality-level", fmt.Errorf("预设「%s」必须指定完整的 PNG 参数", preset.name))

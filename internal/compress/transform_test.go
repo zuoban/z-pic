@@ -115,7 +115,7 @@ func TestValidateNewOptions(t *testing.T) {
 	if _, err := Bytes(context.Background(), []byte("x"), "/tmp/a.jpg", Options{Quality: 80, Metadata: "bad"}); err == nil {
 		t.Fatal("invalid MetadataPolicy must fail")
 	}
-	if _, err := Bytes(context.Background(), []byte("x"), "/tmp/a.jpg", Options{Quality: 80, OutputFormat: "avif"}); err == nil {
+	if _, err := Bytes(context.Background(), []byte("x"), "/tmp/a.jpg", Options{Quality: 80, OutputFormat: "bmp"}); err == nil {
 		t.Fatal("invalid OutputFormat must fail")
 	}
 	for _, dim := range []int{-1, 1, 63, 16385} {

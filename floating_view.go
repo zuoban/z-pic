@@ -392,6 +392,9 @@ func (s *application) floatingView(c *ui.Context) {
 		},
 		Operations: transfer.Copy,
 	}
+	if compress.SupportsAVIF() {
+		options.Formats = append(options.Formats, "image/avif")
+	}
 	background := windowRootBackground(c)
 	root := ui.Column(c).Fill().Padding(8).Gap(4).Background(background)
 	over := false
@@ -471,7 +474,7 @@ func (s *application) floatingView(c *ui.Context) {
 		ui.Row(c).FillWidth().Center().Children(func() {
 			countBtn := ui.ButtonBase(c.Key("floating-count")).Height(28).Padding(0, 12).Gap(4).
 				Radius(badgeRadius(28)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).
-				Tooltip("展开图片 · 支持本地及网页 JPEG / PNG / WebP").
+				Tooltip("展开图片 · 支持本地 " + strings.Join(supportedImageFormats(), " / ") + " 或网页图片").
 				OnClick(func() { s.setFloatingExpanded(true) })
 			if over {
 				countBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
@@ -599,10 +602,7 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 			floatingIcon(c, "photo", 40, chromeMutedColor(c))
 			if s.floatingImageCount() == 0 {
 				ui.Text(c, "拖入图片").FontSize(14).FontWeight(500)
-				formats := "本地或网页图片 · JPEG / PNG / WebP"
-				if compress.SupportsHEIC() {
-					formats = "本地或网页图片 · JPEG / PNG / WebP / HEIC"
-				}
+				formats := "本地 " + strings.Join(supportedImageFormats(), " / ") + " 或网页图片"
 				ui.Text(c, formats).FontSize(12).TextColor(chromeMetadataColor(c))
 			} else {
 				ui.Text(c, "没有符合筛选条件的图片").FontSize(14)

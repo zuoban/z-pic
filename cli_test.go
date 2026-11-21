@@ -459,7 +459,7 @@ func TestCLICompressPresetAndValidationErrors(t *testing.T) {
 		{"compress", "--in-place", "-o", dir, src},
 		{"compress", "--in-place", "--suffix", "-x", src},
 		{"compress", "-q", "150", src},
-		{"compress", "--format", "avif", src},
+		{"compress", "--format", "bmp", src},
 		{"compress", "--metadata", "unknown", src},
 		{"compress", "--preset", "不存在", "--settings", settingsPath, src},
 		{"compress", "--format", "webp", "-o", filepath.Join(dir, "wrong.jpg"), src},

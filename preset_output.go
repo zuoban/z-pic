@@ -98,6 +98,8 @@ func outputExtensionForFormat(format string) string {
 		return ".png"
 	case "webp":
 		return ".webp"
+	case "avif":
+		return ".avif"
 	default:
 		return ""
 	}
@@ -124,6 +126,10 @@ func replaceFilenameExtensionFor(name, sourceFormat string, targetFormat compres
 			}
 		case compress.OutputFormatWebP:
 			if strings.EqualFold(ext, ".webp") {
+				return name
+			}
+		case compress.OutputFormatAVIF:
+			if strings.EqualFold(ext, ".avif") {
 				return name
 			}
 		}

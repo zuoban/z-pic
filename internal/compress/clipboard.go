@@ -14,8 +14,8 @@ import (
 	"io"
 	"sync"
 
+	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
-	"zpic/internal/heictools"
 )
 
 type pngEncoderPool struct {
@@ -51,16 +51,13 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 	if len(data) > maxInputSize {
 		return nil, fmt.Errorf("图片超过 64 MiB 限制")
 	}
-	if heictools.SniffFTYP(data) {
-		if _, err := heictools.InspectBytes(ctx, data); err != nil {
-			return nil, err
-		}
-		if !heictools.Available() {
-			return nil, heictools.ErrUnsupportedPlatform
-		}
-		pngBytes, err := heictools.DecodePNG(ctx, data)
+	if aviftools.SniffFTYP(data) {
+		pngBytes, format, err := decodeBMFFPNG(ctx, data, 0)
 		if err != nil {
 			return nil, err
+		}
+		if format == "avif" {
+			return pngBytes, nil
 		}
 		orient := pngOrientation(pngBytes)
 		if orient == 1 && len(pngBytes) <= maxInputSize {
@@ -84,7 +81,7 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("无法读取图片：%w", err)
 	}
 	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, fmt.Errorf("仅支持 JPEG、PNG 和 WebP 图片")
+		return nil, fmt.Errorf("仅支持 JPEG、PNG、WebP、HEIC 和 AVIF 图片")
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
 		return nil, fmt.Errorf("图片超过 3200 万像素限制或尺寸无效")

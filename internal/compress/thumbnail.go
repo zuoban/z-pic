@@ -8,13 +8,14 @@ import (
 	"image/color"
 	"math"
 
+	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
 	"zpic/internal/heictools"
 	"zpic/internal/imageinput"
 )
 
-// Thumbnail decodes a static JPEG, PNG or WebP into an independent raster, fitting
-// its display orientation within maxEdge without upscaling.
+// Thumbnail decodes a supported static image into an independent raster,
+// fitting its display orientation within maxEdge without upscaling.
 func Thumbnail(ctx context.Context, path string, maxEdge int) (image.Image, error) {
 	return ThumbnailWithAcquire(ctx, path, maxEdge, nil)
 }
@@ -55,46 +56,38 @@ func ThumbnailWithAcquire(ctx context.Context, path string, maxEdge int, acquire
 			return nil, err
 		}
 	}
-	config, format, err := inspectBytes(ctx, data)
+	_, format, err := inspectBytes(ctx, data)
 	if err != nil {
 		return nil, err
 	}
-	_ = config
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var decoded image.Image
+	pixelSource := data
 	orientation := 1
-	if format == "heic" {
-		pngBytes, heicErr := heictools.DecodeThumbnailPNG(ctx, data, maxEdge)
-		if cancelErr := ctx.Err(); cancelErr != nil {
-			return nil, cancelErr
-		}
-		if heicErr != nil {
-			return nil, heicErr
-		}
-		decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes)))
-		if cancelErr := ctx.Err(); cancelErr != nil {
-			return nil, cancelErr
-		}
-		if err != nil {
-			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
-		}
-		orientation = pngOrientation(pngBytes)
-	} else {
-		decoded, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(data)))
-		if cancelErr := ctx.Err(); cancelErr != nil {
-			return nil, cancelErr
-		}
-		if err != nil {
-			return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
-		}
-		switch format {
-		case "jpeg":
-			orientation = jpegOrientation(data)
-		case "webp":
-			orientation = webpOrientation(data)
-		}
+	switch format {
+	case "heic":
+		pixelSource, err = heictools.DecodeThumbnailPNG(ctx, data, maxEdge)
+		orientation = pngOrientation(pixelSource)
+	case "avif":
+		pixelSource, err = aviftools.DecodePNG(ctx, data, 0)
+	case "jpeg":
+		orientation = jpegOrientation(data)
+	case "webp":
+		orientation = webpOrientation(data)
+	}
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		return nil, cancelErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		return nil, cancelErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("图片数据损坏或无法解码：%w", err)
 	}
 	output, err := thumbnailRaster(ctx, decoded, maxEdge)
 	if err != nil {

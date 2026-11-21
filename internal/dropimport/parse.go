@@ -227,7 +227,7 @@ func parseItem(ctx context.Context, source transfer.Item, budget *int) (items []
 			}
 		}
 	}
-	for _, format := range []transfer.Format{transfer.PNG, "image/jpeg", "image/webp", "image/heic", "image/heif"} {
+	for _, format := range []transfer.Format{transfer.PNG, "image/jpeg", "image/webp", "image/heic", "image/heif", "image/avif"} {
 		if payload := read(format, maxImage); len(payload) > 0 {
 			return []Item{{Data: payload}}, nil
 		}
@@ -236,7 +236,7 @@ func parseItem(ctx context.Context, source transfer.Item, budget *int) (items []
 }
 
 func unsupported() error {
-	return fmt.Errorf("无法导入此拖放内容：请拖入本地 JPEG/PNG/WebP/HEIC、图片的 HTTP(S) 直链或图片数据；blob 图片请先保存到本地再拖入")
+	return fmt.Errorf("无法导入此拖放内容：请拖入本地 JPEG/PNG/WebP/HEIC/AVIF、图片的 HTTP(S) 直链或图片数据；blob 图片请先保存到本地再拖入")
 }
 
 func lines(text string) iter.Seq[string] {
@@ -306,7 +306,12 @@ func httpURL(raw string) (*url.URL, error) {
 func reference(raw string) (Item, error) {
 	if strings.HasPrefix(raw, "data:") {
 		header, encoded, ok := strings.Cut(raw, ",")
-		if !ok || (header != "data:image/png;base64" && header != "data:image/jpeg;base64" && header != "data:image/webp;base64") {
+		if !ok {
+			return Item{}, unsupported()
+		}
+		switch header {
+		case "data:image/png;base64", "data:image/jpeg;base64", "data:image/webp;base64", "data:image/avif;base64":
+		default:
 			return Item{}, unsupported()
 		}
 		payload, err := base64.StdEncoding.DecodeString(encoded)

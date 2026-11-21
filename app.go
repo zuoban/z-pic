@@ -167,11 +167,30 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 	})
 }
 
-func supportedFileFilter() mygo.FileFilter {
-	if compress.SupportsHEIC() {
-		return mygo.FileFilter{Name: "JPEG / PNG / WebP / HEIC 图片", Extensions: []string{"jpg", "jpeg", "png", "webp", "heic", "heif"}}
+func supportedImageFormats() []string {
+	formats := []string{"JPEG", "PNG", "WebP"}
+	if compress.SupportsAVIF() {
+		formats = append(formats, "AVIF")
 	}
-	return mygo.FileFilter{Name: "JPEG / PNG / WebP 图片", Extensions: []string{"jpg", "jpeg", "png", "webp"}}
+	if compress.SupportsHEIC() {
+		formats = append(formats, "HEIC")
+	}
+	return formats
+}
+
+func noSupportedImagesMessage() string {
+	return "未找到可处理的 " + strings.Join(supportedImageFormats(), " / ") + " 图片。"
+}
+
+func supportedFileFilter() mygo.FileFilter {
+	extensions := []string{"jpg", "jpeg", "png", "webp"}
+	if compress.SupportsAVIF() {
+		extensions = append(extensions, "avif")
+	}
+	if compress.SupportsHEIC() {
+		extensions = append(extensions, "heic", "heif")
+	}
+	return mygo.FileFilter{Name: strings.Join(supportedImageFormats(), " / ") + " 图片", Extensions: extensions}
 }
 
 func (s *application) chooseFile() {
@@ -342,7 +361,7 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 		width  int
 		height int
 	)
-	if compress.SniffHEICHeader(data) {
+	if compress.SniffAVIFHeader(data) || compress.SniffHEICHeader(data) {
 		info, inspectErr := compress.InspectBytes(ctx, data)
 		if inspectErr != nil {
 			return nil, inspectErr
@@ -354,10 +373,7 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 			return nil, errors.New("无法识别图片，文件可能已经损坏")
 		}
 		if fmtName != "jpeg" && fmtName != "png" && fmtName != "webp" {
-			if compress.SupportsHEIC() {
-				return nil, errors.New("目前仅支持 JPEG、PNG、WebP 和 HEIC 图片")
-			}
-			return nil, errors.New("目前仅支持 JPEG、PNG 和 WebP 图片")
+			return nil, fmt.Errorf("目前仅支持 %s 图片", strings.Join(supportedImageFormats(), " / "))
 		}
 		if config.Width <= 0 || config.Height <= 0 || config.Width > maxPixels/config.Height {
 			return nil, errors.New("图片超过 3200 万像素，请选择较小的图片")
@@ -399,7 +415,7 @@ func (s *application) readSelectionWithBudget(ctx context.Context, path string, 
 }
 
 func decodePreviewBitmap(ctx context.Context, data []byte, format string) (*ui.Bitmap, error) {
-	if format == "heic" {
+	if format == "heic" || format == "avif" {
 		decoded, err := compress.DecodePreviewImage(ctx, data)
 		if err != nil {
 			return nil, err
@@ -538,11 +554,9 @@ func (s *application) saveCopy() {
 	result := s.result
 	s.busy, s.phase = true, "请选择保存位置"
 	go func() {
-		ext := ".jpg"
-		if result.Format == "png" {
-			ext = ".png"
-		} else if result.Format == "webp" {
-			ext = ".webp"
+		ext := outputExtensionForFormat(result.Format)
+		if ext == "" {
+			ext = ".jpg"
 		}
 		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
 			Parent:            s.window,

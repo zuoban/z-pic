@@ -56,6 +56,8 @@ func presetOutputFormatLabel(format compress.OutputFormat) string {
 		return "转为 PNG"
 	case compress.OutputFormatWebP:
 		return "转为 WebP"
+	case compress.OutputFormatAVIF:
+		return "转为 AVIF"
 	default:
 		return "保持原格式"
 	}
@@ -259,9 +261,21 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 	})
 }
 
+func lossyQualityFormats() string {
+	if compress.SupportsAVIF() {
+		return "JPEG / WebP / AVIF"
+	}
+	return "JPEG / WebP"
+}
+
 func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset) {
 	t := c.Theme()
 	locked := s.settingsDraftLocked()
+	losslessFormats := "PNG、WebP"
+	if compress.SupportsAVIF() {
+		losslessFormats += "、AVIF"
+	}
+	losslessNote := losslessFormats + " 支持无损。同格式 JPEG 可无损优化，转为 JPEG 使用有损编码。"
 	settingsPanel(c, "settings-quality-panel").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetQualityIcon).Size(16, 16).TextColor(t.TextMuted)
@@ -271,17 +285,17 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			ui.Box(c).Grow(1)
 			if ui.Checkbox(c.Key("preset-lossless"), &preset.lossless, "无损").
 				FontSize(settingsFontSize(c, 12)).Disabled(locked).
-				Tooltip("PNG 和 WebP 无损处理；JPEG 原图无损优化，其他格式转 JPEG 仍有损").Changed() {
+				Tooltip(losslessNote).Changed() {
 				s.editor.message = ""
 			}
 			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
 				FontFeatures("tnum").TextColor(t.Text).SingleLine()
 		})
 		value := float64(qualityLevel(*preset))
-		description := fmt.Sprintf("JPEG / WebP 质量 %.0f；PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", preset.quality,
+		description := fmt.Sprintf("%s 质量 %.0f，PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", lossyQualityFormats(), preset.quality,
 			preset.png.MinQuality, preset.png.MaxQuality, preset.png.Colors)
 		if preset.lossless {
-			description = "无损模式下 PNG 仅执行 Oxipng 优化，WebP 使用无损编码，同格式 JPEG 使用 MozJPEG 无损优化；转为 JPEG 仍有损。"
+			description = losslessNote
 		} else if presetQualityLabel(*preset) == "自定义质量" {
 			description = "已保留自定义参数；调整滑块后将使用对应档位。" + description
 		}
@@ -323,9 +337,9 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 			s.editQualityLevel(int(math.Round(value)))
 		}
 		if preset.lossless {
-			note := "PNG、WebP 与同格式 JPEG 无损处理；转换为 JPEG 仍有损。"
+			note := losslessNote
 			if compress.SupportsHEIC() {
-				note = "PNG、WebP 与同格式 JPEG 无损处理；保持原格式时 HEIC 输出无损 PNG，转换为 JPEG 仍有损。"
+				note += "HEIC 选择保持原格式时输出无损 PNG。"
 			}
 			ui.Text(c, note).
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
@@ -359,17 +373,21 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 		// Output format
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
 			ui.Text(c, "输出格式").FontSize(settingsFontSize(c, 13)).FontWeight(500)
-			formats := [...]compress.OutputFormat{
+			formats := []compress.OutputFormat{
 				compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
 			}
+			if compress.SupportsAVIF() || preset.outputFormat == compress.OutputFormatAVIF {
+				formats = append(formats, compress.OutputFormatAVIF)
+			}
 			fmtIdx := 0
+			labels := make([]string, len(formats))
 			for i, format := range formats {
+				labels[i] = presetOutputFormatLabel(format)
 				if preset.outputFormat == format {
 					fmtIdx = i
-					break
 				}
 			}
-			seg := settingsSegments(c, "preset-output-format", "输出格式", &fmtIdx, locked, "保持原格式", "转为 JPEG", "转为 PNG", "转为 WebP").FillWidth()
+			seg := settingsSegments(c, "preset-output-format", "输出格式", &fmtIdx, locked, labels...).FillWidth()
 			s.focusSettingsField(seg, "preset-output-format")
 			if seg.Changed() && fmtIdx >= 0 && fmtIdx < len(formats) {
 				preset.outputFormat = formats[fmtIdx]
@@ -383,10 +401,19 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 				note = "转换为 PNG 时保留原文件，同格式图片可覆盖。"
 			case compress.OutputFormatWebP:
 				note = "转换为 WebP 时保留原文件，同格式图片可覆盖。"
+			case compress.OutputFormatAVIF:
+				note = "转换为 AVIF 时保留原文件。同格式图片在体积减小时可覆盖。"
+				if !compress.SupportsAVIF() {
+					note = "当前平台暂不支持 AVIF 编码。"
+				}
 			default:
-				note = "JPEG / PNG / WebP 保持原格式。"
+				formats := "JPEG / PNG / WebP"
+				if compress.SupportsAVIF() {
+					formats += " / AVIF"
+				}
+				note = formats + " 保持原格式。"
 				if compress.SupportsHEIC() {
-					note = "HEIC 自动转为 JPEG（无损时为 PNG），并保留原文件。"
+					note += "HEIC 自动转为 JPEG（无损时为 PNG），并保留原文件。"
 				}
 			}
 			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
@@ -446,7 +473,11 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			case compress.MetadataStrip:
 				metaNote = "移除全部元数据与色彩配置，以换取最小体积。"
 			default:
-				metaNote = "同格式 PNG 与 WebP 保留元数据；转换格式时保留兼容色彩配置并校正方向。"
+				formats := "PNG、WebP"
+				if compress.SupportsAVIF() {
+					formats += "、AVIF"
+				}
+				metaNote = "同格式 " + formats + " 尽量保留元数据。转换时保留兼容色彩配置并校正方向。"
 			}
 			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).MaxLines(2)
 		})
@@ -503,7 +534,7 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 			input.Invalid(true).Border(1, danger).ErrorMessage(ui.Text(c, problem.Error()).
 				FontSize(settingsFontSize(c, 12)).TextColor(danger).FillWidth().MaxLines(2))
 		}
-		note := "超出上限时自动降低 JPEG / WebP 质量或 PNG 色彩档位逼近目标；留空表示不限制。"
+		note := "超出上限时自动降低 " + lossyQualityFormats() + " 质量或 PNG 色彩档位。留空表示不限制。"
 		if preset.lossless {
 			note = "无损模式下不会降低画质；若结果仍超出目标体积，完成后会给出提示。"
 		}

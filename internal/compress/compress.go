@@ -1,6 +1,6 @@
-// Package compress compresses static JPEG, PNG, and WebP images, and accepts
-// HEIC/HEIF input on macOS. Re-encoding into JPEG, PNG, or WebP can normalize
-// EXIF orientation and downscale to a configured long edge.
+// Package compress compresses static JPEG, PNG, WebP, and AVIF images and
+// accepts HEIC/HEIF input on macOS. Re-encoding can normalize orientation and
+// downscale to a configured long edge.
 package compress
 
 import (
@@ -20,8 +20,8 @@ import (
 
 	_ "golang.org/x/image/webp"
 
+	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
-	"zpic/internal/heictools"
 	"zpic/internal/imageinput"
 	"zpic/internal/jpegtools"
 	"zpic/internal/pngtools"
@@ -34,11 +34,11 @@ const (
 )
 
 type Options struct {
-	Quality               int // JPEG and WebP quality in [1, 100].
+	Quality               int // JPEG, WebP, and AVIF quality in [1, 100].
 	PNG                   PNGOptions
-	Lossless              bool           // PNG: Oxipng only. WebP: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
+	Lossless              bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
 	Metadata              MetadataPolicy // "", "icc", or "strip".
-	OutputFormat          OutputFormat   // "" (keep), "jpeg", "png", or "webp".
+	OutputFormat          OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
 	MaxDimension          int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
 	TargetSizeBytes       int64          // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
 	Threads               int            // Optional native encoder thread cap; <= 0 selects automatic default.
@@ -67,7 +67,7 @@ type Result struct {
 	Unchanged        bool
 	TargetSizeBytes  int64
 	TargetSizeMissed bool
-	AppliedQuality   int // Lower JPEG/WebP quality selected to approach the target.
+	AppliedQuality   int // Lower JPEG/WebP/AVIF quality selected to approach the target.
 
 	sourcePath   string             // Absolute path captured before the caller can change cwd.
 	sourceFormat string             // Original decoded format, used to guard Overwrite.
@@ -77,7 +77,7 @@ type Result struct {
 // File reads an image and compresses it into the selected output format.
 // Quality must be in [1, 100]. The zero PNGOptions value uses the balanced
 // quantization defaults. Decoding and Go encoding check cancellation on reads/writes.
-// Native PNG/WebP processes are canceled with ctx.
+// Native codec processes are canceled with ctx.
 func File(ctx context.Context, path string, options Options) (*Result, error) {
 	sourcePath, err := validateRequest(ctx, path, options)
 	if err != nil {
@@ -190,14 +190,8 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		pixelSource  = data
 		sourceOrient = 1
 	)
-	if heictools.SniffFTYP(data) {
-		if _, err = heictools.InspectBytes(ctx, data); err != nil {
-			return nil, err
-		}
-		if !heictools.Available() {
-			return nil, heictools.ErrUnsupportedPlatform
-		}
-		pixelSource, err = heictools.DecodePNG(ctx, data)
+	if SniffAVIFHeader(data) {
+		pixelSource, format, err = decodeBMFFPNG(ctx, data, options.Threads)
 		if err != nil {
 			if cancelErr := ctx.Err(); cancelErr != nil {
 				return nil, fmt.Errorf("压缩已取消：%w", cancelErr)
@@ -206,21 +200,16 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		}
 		config, _, err = image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(pixelSource)))
 		if err != nil {
-			return nil, fmt.Errorf("HEIC 解码输出无效：%w", err)
+			return nil, fmt.Errorf("%s 解码输出无效：%w", strings.ToUpper(format), err)
 		}
-		if config.Width <= 0 || config.Height <= 0 ||
-			uint64(config.Width) > uint64(maxPixels)/uint64(config.Height) {
-			return nil, fmt.Errorf("图片像素超过限制（最多 32,000,000 像素）或尺寸无效")
-		}
-		format = "heic"
 		sourceOrient = pngOrientation(pixelSource)
 	} else {
 		config, format, err = image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 		if err != nil {
-			return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP/HEIC：%w", err)
+			return nil, fmt.Errorf("无法识别或读取图片头部，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF：%w", err)
 		}
 		if format != "jpeg" && format != "png" && format != "webp" {
-			return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP/HEIC", format)
+			return nil, fmt.Errorf("不支持 %s 图片，仅支持静态 JPEG/PNG/WebP/HEIC/AVIF", format)
 		}
 		// Divide before multiplying so a malicious header cannot overflow.
 		if config.Width <= 0 || config.Height <= 0 ||
@@ -256,13 +245,42 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if sourceOrient >= 5 && sourceOrient <= 8 {
 		width, height = height, width
 	}
-	_, _, needsResize := resizedDimensions(width, height, options.MaxDimension)
+	resizedWidth, resizedHeight, needsResize := resizedDimensions(width, height, options.MaxDimension)
 	transforming := converting || needsResize
 	forcedOutput := false
 
 	var encoded []byte
 	var appliedQuality int
 	switch targetFormat {
+	case "avif":
+		if !aviftools.Available() {
+			return nil, aviftools.ErrUnsupportedPlatform
+		}
+		mode := avifMetadataMode(options.Metadata)
+		if !transforming && mode != aviftools.MetadataAll {
+			forcedOutput, err = aviftools.HasStrippableMetadata(ctx, data, mode)
+			if err != nil {
+				break
+			}
+		}
+		pngInput, icc, prepErr := prepareAVIFPNG(ctx, pixelSource, sourceFormat, sourceOrient, needsResize, options)
+		if prepErr != nil {
+			err = prepErr
+			break
+		}
+		width, height = resizedWidth, resizedHeight
+		encoded, appliedQuality, err = encodeWithTargetSize(ctx, options, func(quality int) ([]byte, error) {
+			return aviftools.EncodePNG(ctx, pngInput, aviftools.EncodeOptions{
+				Quality:  quality,
+				Lossless: options.Lossless,
+				Metadata: mode,
+				ICC:      icc,
+				Threads:  options.Threads,
+			})
+		})
+		if err == nil {
+			err = validateAVIFOutput(ctx, encoded, width, height, mode)
+		}
 	case "webp":
 		needsWebPReencodeFromPixels := converting || needsResize ||
 			(sourceFormat == "webp" && sourceOrient > 1 && options.Metadata != MetadataKeepAll)
@@ -288,7 +306,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				switch sourceFormat {
 				case "jpeg":
 					icc = extractJPEGICCProfile(data, 3)
-				case "png", "heic":
+				case "png", "heic", "avif":
 					icc = extractPNGICCProfile(pixelSource)
 				case "webp":
 					icc = extractWebPICCProfile(data)
@@ -454,7 +472,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				switch sourceFormat {
 				case "jpeg":
 					iccSegments, iccBytes = jpegCompatibleICCSegments(data, outputComponents)
-				case "png", "heic":
+				case "png", "heic", "avif":
 					icc := extractPNGICCProfileForComponents(pixelSource, outputComponents)
 					iccSegments, iccBytes = buildJPEGICCSegments(icc, outputComponents)
 				case "webp":
@@ -490,7 +508,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			var colorChunks [][]byte
 			if options.Metadata != MetadataStrip {
 				switch sourceFormat {
-				case "png", "heic":
+				case "png", "heic", "avif":
 					colorChunks = extractPNGColorChunks(pixelSource)
 				case "jpeg", "webp":
 					components := 3
@@ -550,6 +568,15 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if !transforming && !forcedOutput && len(result.Data) >= len(data) {
 		result.Data = data
 		result.Unchanged = true
+	}
+	if preview != nil && !result.Unchanged && targetFormat == "avif" {
+		pngData, err := aviftools.DecodePNG(ctx, result.Data, options.Threads)
+		if err == nil {
+			*preview, _, err = image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngData)))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("无法生成预览：%w", err)
+		}
 	}
 	result.OutputSize = int64(len(result.Data))
 	result.TargetSizeMissed = result.TargetSizeBytes > 0 && result.OutputSize > result.TargetSizeBytes

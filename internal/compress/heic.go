@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"strings"
 
+	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
 	"zpic/internal/heictools"
 )
@@ -22,12 +24,12 @@ func SniffHEICHeader(head []byte) bool {
 	return heictools.SniffFTYP(head)
 }
 
-// ResolveOutputFormat returns an explicit JPEG, PNG, or WebP choice as-is.
+// ResolveOutputFormat returns an explicit output format choice as-is.
 // With OutputFormatKeep it preserves the source format, except HEIC is exported
 // as PNG in lossless mode and JPEG otherwise.
 func ResolveOutputFormat(sourceFormat string, outputFormat OutputFormat, lossless bool) string {
 	switch outputFormat {
-	case OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP:
+	case OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP, OutputFormatAVIF:
 		return string(outputFormat)
 	}
 	if sourceFormat == "heic" {
@@ -39,9 +41,9 @@ func ResolveOutputFormat(sourceFormat string, outputFormat OutputFormat, lossles
 	return sourceFormat
 }
 
-// DecodePreviewImage decodes a static HEIC image into an upright raster for UI preview.
+// DecodePreviewImage decodes a static HEIC or AVIF into an upright raster.
 func DecodePreviewImage(ctx context.Context, data []byte) (image.Image, error) {
-	pngBytes, err := heictools.DecodePNG(ctx, data)
+	pngBytes, format, err := decodeBMFFPNG(ctx, data, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -50,36 +52,21 @@ func DecodePreviewImage(ctx context.Context, data []byte) (image.Image, error) {
 		return nil, cancelErr
 	}
 	if err != nil {
-		return nil, fmt.Errorf("HEIC 图片数据损坏或无法解码：%w", err)
+		return nil, fmt.Errorf("%s 图片数据损坏或无法解码：%w", strings.ToUpper(format), err)
 	}
-	orient := pngOrientation(pngBytes)
-	return normalizeOrientation(decoded, orient), nil
+	if format == "heic" {
+		decoded = normalizeOrientation(decoded, pngOrientation(pngBytes))
+	}
+	return decoded, nil
 }
 
-// VerifyImageData validates headers and full pixel decodability for any supported
-// static image format (JPEG, PNG, WebP, or HEIC on macOS) in memory.
+// VerifyImageData validates headers and full pixel decodability in memory.
 func VerifyImageData(ctx context.Context, data []byte) (string, error) {
 	info, err := InspectBytes(ctx, data)
 	if err != nil {
 		return "", err
 	}
-	if info.Format == "heic" {
-		pngBytes, err := heictools.DecodePNG(ctx, data)
-		if err != nil {
-			return "", err
-		}
-		if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes))); err != nil {
-			return "", fmt.Errorf("图片数据损坏：%w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		return "heic", nil
-	}
-	if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); err != nil {
-		return "", fmt.Errorf("图片数据损坏：%w", err)
-	}
-	if err := ctx.Err(); err != nil {
+	if err := verifyImagePixels(ctx, data, info.Format); err != nil {
 		return "", err
 	}
 	return info.Format, nil
@@ -95,35 +82,45 @@ func VerifyImageReader(ctx context.Context, r io.ReadSeeker, size int64) (ImageI
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return ImageInfo{}, err
 	}
-	if info.Format == "heic" {
-		buf := make([]byte, 0, size)
-		dataBuf := bytes.NewBuffer(buf)
-		n, err := io.Copy(dataBuf, io.LimitReader(contextio.NewReader(ctx, r), maxInputSize+1))
+	if info.Format == "heic" || info.Format == "avif" {
+		data := bytes.NewBuffer(make([]byte, 0, size))
+		n, err := io.Copy(data, io.LimitReader(contextio.NewReader(ctx, r), maxInputSize+1))
 		if err != nil {
 			return ImageInfo{}, err
 		}
 		if n > maxInputSize {
 			return ImageInfo{}, fmt.Errorf("图片超过 64 MiB 限制")
 		}
-		pngBytes, err := heictools.DecodePNG(ctx, dataBuf.Bytes())
-		if err != nil {
-			return ImageInfo{}, err
-		}
-		if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes))); err != nil {
-			return ImageInfo{}, fmt.Errorf("图片数据损坏：%w", err)
-		}
-		if err := ctx.Err(); err != nil {
+		if err := verifyImagePixels(ctx, data.Bytes(), info.Format); err != nil {
 			return ImageInfo{}, err
 		}
 		return info, nil
 	}
-	if _, _, err := image.Decode(contextio.NewReader(ctx, r)); err != nil {
-		return ImageInfo{}, fmt.Errorf("图片数据损坏：%w", err)
-	}
-	if err := ctx.Err(); err != nil {
+	if err := verifyImageDecode(ctx, r); err != nil {
 		return ImageInfo{}, err
 	}
 	return info, nil
+}
+
+func verifyImagePixels(ctx context.Context, data []byte, format string) error {
+	var err error
+	switch format {
+	case "heic":
+		data, err = heictools.DecodePNG(ctx, data)
+	case "avif":
+		data, err = aviftools.DecodePNG(ctx, data, 0)
+	}
+	if err != nil {
+		return err
+	}
+	return verifyImageDecode(ctx, bytes.NewReader(data))
+}
+
+func verifyImageDecode(ctx context.Context, r io.Reader) error {
+	if _, _, err := image.Decode(contextio.NewReader(ctx, r)); err != nil {
+		return fmt.Errorf("图片数据损坏：%w", err)
+	}
+	return ctx.Err()
 }
 
 // pngOrientation reads the TIFF IFD0 Orientation tag from a PNG eXIf chunk,

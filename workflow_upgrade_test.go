@@ -84,7 +84,7 @@ func TestSettingsRoundTripAndEditorForCompressionOptionsAndAutoCompress(t *testi
 	// Reject invalid persisted values.
 	for name, mutate := range map[string]func(*compressionPreset){
 		"bad-metadata": func(p *compressionPreset) { p.metadata = "bogus" },
-		"bad-format":   func(p *compressionPreset) { p.outputFormat = "avif" },
+		"bad-format":   func(p *compressionPreset) { p.outputFormat = "bmp" },
 		"bad-dim-low":  func(p *compressionPreset) { p.maxDimension = 32 },
 		"bad-dim-high": func(p *compressionPreset) { p.maxDimension = 20000 },
 	} {

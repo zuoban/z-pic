@@ -77,11 +77,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 			s.setMessage("所选图片均已在批量队列中。", false)
 		} else {
 			s.clipboardOutcome = clipboardOutcomeFailed
-			if compress.SupportsHEIC() {
-				s.setMessage("未找到可处理的 JPEG、PNG、WebP 或 HEIC 图片。", true)
-			} else {
-				s.setMessage("未找到可处理的 JPEG、PNG 或 WebP 图片。", true)
-			}
+			s.setMessage(noSupportedImagesMessage(), true)
 		}
 		return
 	}
@@ -482,6 +478,8 @@ func isSupportedImageExt(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".jpg", ".jpeg", ".png", ".webp":
 		return true
+	case ".avif":
+		return compress.SupportsAVIF()
 	case ".heic", ".heif":
 		return compress.SupportsHEIC()
 	default:

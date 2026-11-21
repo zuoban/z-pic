@@ -38,6 +38,8 @@ jobs:
         run: bash scripts/prepare-jpegtools.sh --verify
       - name: Verify bundled PNG tools
         run: bash scripts/prepare-pngtools.sh --verify
+      - name: Verify bundled AVIF tools
+        run: bash scripts/prepare-aviftools.sh --verify
       - name: Build application
         run: go build ./...
 

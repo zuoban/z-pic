@@ -23,6 +23,7 @@ func TestResolveOutputFormatMatrix(t *testing.T) {
 		{"png", [2]string{"png", "png"}},
 		{"webp", [2]string{"webp", "webp"}},
 		{"heic", [2]string{"jpeg", "png"}},
+		{"avif", [2]string{"avif", "avif"}},
 	} {
 		for _, target := range []struct {
 			name   string
@@ -33,6 +34,7 @@ func TestResolveOutputFormatMatrix(t *testing.T) {
 			{"jpeg", OutputFormatJPEG, [2]string{"jpeg", "jpeg"}},
 			{"png", OutputFormatPNG, [2]string{"png", "png"}},
 			{"webp", OutputFormatWebP, [2]string{"webp", "webp"}},
+			{"avif", OutputFormatAVIF, [2]string{"avif", "avif"}},
 		} {
 			for mode, want := range target.want {
 				lossless := mode == 1

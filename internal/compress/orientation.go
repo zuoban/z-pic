@@ -11,43 +11,47 @@ import (
 // jpegOrientation reads only Exif TIFF IFD0 in APP1 segments before image data.
 // Missing or malformed metadata is treated as the normal display orientation.
 func jpegOrientation(data []byte) int {
+	return tiffOrientation(jpegAPP1Payload(data, "Exif\x00\x00"))
+}
+
+func jpegAPP1Payload(data []byte, signature string) []byte {
 	if len(data) < 2 || data[0] != 0xff || data[1] != 0xd8 {
-		return 1
+		return nil
 	}
 	for offset := 2; offset < len(data); {
 		if data[offset] != 0xff {
-			return 1
+			return nil
 		}
 		for offset < len(data) && data[offset] == 0xff {
 			offset++
 		}
 		if offset >= len(data) {
-			return 1
+			return nil
 		}
 		marker := data[offset]
 		offset++
 		switch {
 		case marker == 0xda || marker == 0xd9:
-			return 1
+			return nil
 		case marker == 0x01 || marker >= 0xd0 && marker <= 0xd7:
 			continue
 		case marker == 0 || marker == 0xd8:
-			return 1
+			return nil
 		}
 		if len(data)-offset < 2 {
-			return 1
+			return nil
 		}
 		length := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 		if length < 2 || length > len(data)-offset {
-			return 1
+			return nil
 		}
 		segment := data[offset+2 : offset+length]
-		if marker == 0xe1 && bytes.HasPrefix(segment, []byte("Exif\x00\x00")) {
-			return tiffOrientation(segment[6:])
+		if marker == 0xe1 && bytes.HasPrefix(segment, []byte(signature)) {
+			return segment[len(signature):]
 		}
 		offset += length
 	}
-	return 1
+	return nil
 }
 
 func exifPayloadOrientation(payload []byte) int {
@@ -64,25 +68,29 @@ func WebPOrientation(data []byte) int {
 }
 
 func webpOrientation(data []byte) int {
+	return exifPayloadOrientation(webpChunkPayload(data, "EXIF"))
+}
+
+func webpChunkPayload(data []byte, name string) []byte {
 	if len(data) < 20 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
-		return 1
+		return nil
 	}
 	for offset := 12; offset <= len(data)-8; {
 		kind := string(data[offset : offset+4])
 		length := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
 		if length < 0 || length > len(data)-offset-8 {
-			return 1
+			return nil
 		}
-		if kind == "EXIF" {
-			return exifPayloadOrientation(data[offset+8 : offset+8+length])
+		if kind == name {
+			return data[offset+8 : offset+8+length]
 		}
 		padded := length + length%2
 		if padded > len(data)-offset-8 {
-			return 1
+			return nil
 		}
 		offset += 8 + padded
 	}
-	return 1
+	return nil
 }
 
 // NormalizeOrientation wraps img with an upright coordinate mapping when orientation is in [2, 8].

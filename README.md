@@ -1,6 +1,6 @@
 # Z Pic
 
-使用 MyGo 原生 UI 构建的本地桌面图片压缩工具，支持单张与批量处理静态 JPEG / PNG / WebP，以及 macOS 上的 HEIC / HEIF 输入，不需要前端构建工具或图片处理服务。
+使用 MyGo 原生 UI 构建的本地桌面图片压缩工具，支持单张与批量处理静态 JPEG / PNG / WebP，macOS ARM64 上的静态 AVIF 读写，以及 macOS 上的 HEIC / HEIF 输入，不需要前端构建工具或图片处理服务。
 
 ## 使用
 
@@ -63,7 +63,7 @@
 
 设置文件在 JSON 解码前拒绝无效 UTF-8 和未配对的 UTF-16 转义，避免名称或输出路径被静默替换；合法 emoji 与转义反斜杠仍正常读取。同一 JSON 对象中的重复字段（包括转义键名和大小写折叠后相同的字段）会被拒绝，避免后值静默覆盖前值。
 
-输入限制为 64 MiB、3200 万像素。默认保持原尺寸与原格式，也可按预设启用长边等比缩放、无损模式、JPEG / PNG / WebP 格式转换及元数据策略。JPEG 会按 EXIF 方向规范化像素，并在非「移除全部」策略下保留色彩空间匹配的完整合法 ICC 色彩配置文件（如 RGB/YCbCr 的 Display P3 与灰度的 GRAY，拒绝向重编码后的 3 通道 JPEG 回注 CMYK 等冲突 ICC）；WebP 剥离 EXIF 时会自动校正显示方向。未触发缩放、格式转换或强制元数据剥离且结果未变小时保留原始数据并禁用覆盖。“另存副本”始终拒绝覆盖源文件或任何已有文件。JPEG/WebP 转为剪贴板 PNG 时，生成的数据同样限制为 64 MiB；超过限制会显示错误，保留现有剪贴板内容。
+输入限制为 64 MiB、3200 万像素。默认保持原尺寸与原格式，也可按预设启用长边等比缩放、无损模式、JPEG / PNG / WebP / AVIF 格式转换及元数据策略（AVIF 编解码在已捆绑工具的 macOS ARM64 上提供）。JPEG 会按 EXIF 方向规范化像素，并在非「移除全部」策略下保留色彩空间匹配的完整合法 ICC 色彩配置文件（如 RGB/YCbCr 的 Display P3 与灰度的 GRAY，拒绝向重编码后的 3 通道 JPEG 回注 CMYK 等冲突 ICC）；WebP 剥离 EXIF 时会自动校正显示方向。未触发缩放、格式转换或强制元数据剥离且结果未变小时保留原始数据并禁用覆盖。“另存副本”始终拒绝覆盖源文件或任何已有文件。JPEG/WebP 转为剪贴板 PNG 时，生成的数据同样限制为 64 MiB；超过限制会显示错误，保留现有剪贴板内容。
 
 “另存副本”的默认名称最多检查 1000 个已有名称，耗尽后提供可编辑建议；名称建议不预留文件，最终保存始终通过排他创建拒绝覆盖。
 
@@ -87,11 +87,13 @@ WebP 头部检查还读取 VP8/VP8L 实际帧尺寸，拒绝与 VP8X 画布不�
 
 切换到压缩参数不同的预设或保存当前参数修改后，旧压缩结果清除并恢复原图预览，需要重新压缩；重复选择和改名保留结果。处理过程中禁止维护预设。没有体积收益时显示“未减小（0.0%）”，工具执行失败时显示错误。
 
-暂不提供动画 PNG/WebP、AVIF 或 GIF。HEIC / HEIF 支持仅限静态图片，动画和序列不支持。
+AVIF 使用捆绑的 **libavif 1.4.2 + libaom 3.14.1**（`avifenc` / `avifdec`，macOS ARM64），支持有损与无损模式、目标体积二分搜索、透明度、ICC/EXIF/XMP 元数据策略，以及与 JPEG / PNG / WebP / HEIC 的双向转换；同格式 AVIF 在满足缩小条件时支持覆盖原图，仅接受静态 AVIF（动画 `avis` / 含 `moov` 的序列会明确拒绝）。
+
+暂不提供动画 PNG/WebP/AVIF 或 GIF。HEIC / HEIF 支持仅限静态图片，动画和序列不支持。
 
 ## 命令行（无界面 CLI）与系统集成
 
-应用打包后通过 `mygo.json` 注册了 JPEG / PNG / WebP / HEIC / HEIF 文件关联，支持从系统「打开方式」或拖入 Dock 图标直接启动或追加到现有窗口；HEIC / HEIF 解码仅在 macOS 上提供。
+应用打包后通过 `mygo.json` 注册了 JPEG / PNG / WebP / AVIF / HEIC / HEIF 文件关联，支持从系统「打开方式」或拖入 Dock 图标直接启动或追加到现有窗口；AVIF 编解码在 macOS ARM64 上提供，HEIC / HEIF 解码仅在 macOS 上提供。
 
 无需启动图形界面即可直接运行命令行批处理（适合脚本、CI、Raycast 或自动化流程）：
 
@@ -119,6 +121,9 @@ z-pic compress --preset 均衡 --max-size 0 ./photos
 # 转为 JPEG（jpg 是 jpeg 的别名），透明区域填充白色
 z-pic compress --format jpg -o photo.jpg photo.png
 
+# 转为 AVIF（macOS ARM64）
+z-pic compress --format avif -o photo.avif photo.png
+
 # 转为 PNG；输出文件扩展名必须与目标格式匹配
 z-pic compress --format png -o photo.png photo.webp
 
@@ -135,7 +140,7 @@ z-pic compress --in-place --trash -q 80 ./images
 z-pic compress --no-recursive ./images
 ```
 
-`--format` 接受 `keep`、`jpeg`（别名 `jpg`）、`png` 和 `webp`；默认 `keep` 对 HEIC / HEIF 使用上述 JPEG 或 PNG 回退规则。`--max-dim` 接受 **64–16384** 像素，`0` 保留原尺寸。默认递归扫描目录，`--no-recursive` 只扫描每个指定目录的顶层。
+`--format` 接受 `keep`、`jpeg`（别名 `jpg`）、`png`、`webp` 和 `avif`；默认 `keep` 对 HEIC / HEIF 使用上述 JPEG 或 PNG 回退规则。`--max-dim` 接受 **64–16384** 像素，`0` 保留原尺寸。默认递归扫描目录，`--no-recursive` 只扫描每个指定目录的顶层。
 
 `--max-size` 覆盖 `--preset` 所选预设的目标体积，`0` 关闭。桌面预设和 CLI 共用单位规则。纯数字或带 `B` 的数值按字节计，`KB` / `MB` 按 1000 进位，`KiB` / `MiB` 和简写 `K` / `M` 按 1024 进位。启用时可设置 **1 KiB–64 MiB**。
 
@@ -149,7 +154,7 @@ z-pic compress --no-recursive ./images
 
 Go 模块要求 **Go 1.27.3 或更高版本**，MyGo 固定为 v0.9.0。支持自动工具链管理的 Go 安装会按需下载所需版本。
 
-当前仓库内置 macOS ARM64 的 Oxipng **10.2.1**、pngquant **3.0.3**、cwebp **1.6.0** 与 MozJPEG **4.1.5**（`cjpeg` / `jpegtran`）。该平台直接运行或打包即可，用户无需安装 Rust、Homebrew 或命令行优化器；运行过程中不下载工具。其他平台需要先准备对应系统与架构的原生工具，不能直接使用 macOS 二进制（未捆绑 MozJPEG 时 JPEG 自动回退至 Go 标准库编码）。
+当前仓库内置 macOS ARM64 的 Oxipng **10.2.1**、pngquant **3.0.3**、cwebp **1.6.0**、MozJPEG **4.1.5**（`cjpeg` / `jpegtran`）与 libavif **1.4.2** + libaom **3.14.1**（`avifenc` / `avifdec`）。该平台直接运行或打包即可，用户无需安装 Rust、Homebrew 或命令行优化器；运行过程中不下载工具。其他平台需要先准备对应系统与架构的原生工具，不能直接使用 macOS 二进制（未捆绑 MozJPEG 时 JPEG 自动回退至 Go 标准库编码）。
 
 ```sh
 go mod download
@@ -175,6 +180,8 @@ WebP 工具的源码、许可证与离线构建方式见 [scripts/WEBPTOOLS.md](
 
 MozJPEG 工具的源码、许可证与离线构建方式见 [scripts/JPEGTOOLS.md](scripts/JPEGTOOLS.md) 和 [scripts/prepare-jpegtools.sh](scripts/prepare-jpegtools.sh)。`cjpeg` 与 `jpegtran` 静态链接 MozJPEG 并启用 NEON SIMD，仅依赖系统动态库；可用 `bash scripts/prepare-jpegtools.sh --verify` 核对捆绑工具与源码校验值。
 
+AVIF 工具的源码、许可证与离线构建方式见 [scripts/AVIFTOOLS.md](scripts/AVIFTOOLS.md) 和 [scripts/prepare-aviftools.sh](scripts/prepare-aviftools.sh)。`avifenc` 与 `avifdec` 静态链接 libavif、libaom、libpng 和 MozJPEG，仅依赖系统动态库；可用 `bash scripts/prepare-aviftools.sh --verify` 核对捆绑工具与源码校验值。
+
 ## 验证与打包
 
 ```sh
@@ -185,6 +192,7 @@ go tool mygo vet
 bash scripts/prepare-pngtools.sh --verify
 bash scripts/prepare-webptools.sh --verify
 bash scripts/prepare-jpegtools.sh --verify
+bash scripts/prepare-aviftools.sh --verify
 go tool mygo build -skip-dmg -skip-notarize -sign -
 ```
 
@@ -199,7 +207,7 @@ MYGO_AUTOMATION=/tmp/z-pic-automation.sock ./build/z-pic-e2e
 
 测试持久化时可设置 `ZPIC_CONFIG_FILE=/absolute/path/to/test-settings.json`，将配置读写隔离到指定文件；退出并重启应用后核对方案列表、参数和当前选择。
 
-界面约定见 [DESIGN.md](DESIGN.md)，清理记录与防回归经验见 [LESSONS.md](LESSONS.md)。图片核心位于 `internal/compress`；`internal/heictools` 负责静态 HEIC / HEIF 容器检查，并在 macOS 调用系统 `sips` / ImageIO 解码为 PNG 像素源；原生工具执行、输出限制、超时与取消处理位于 `internal/jpegtools`、`internal/pngtools` 和 `internal/webptools`。JPEG 在已捆绑平台使用 MozJPEG（有损 `cjpeg` 渐进式 + Trellis 量化，无损 `jpegtran` 优化霍夫曼表与渐进扫描），其他平台回退至 Go 标准库 `image/jpeg`；PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
+界面约定见 [DESIGN.md](DESIGN.md)，清理记录与防回归经验见 [LESSONS.md](LESSONS.md)。图片核心位于 `internal/compress`；`internal/heictools` 负责静态 HEIC / HEIF 容器检查，并在 macOS 调用系统 `sips` / ImageIO 解码为 PNG 像素源；原生工具执行、输出限制、超时与取消处理位于 `internal/aviftools`、`internal/jpegtools`、`internal/pngtools` 和 `internal/webptools`。JPEG 在已捆绑平台使用 MozJPEG（有损 `cjpeg` 渐进式 + Trellis 量化，无损 `jpegtran` 优化霍夫曼表与渐进扫描），其他平台回退至 Go 标准库 `image/jpeg`；PNG 验证使用 Go 标准库，WebP 解码复用已有的 `golang.org/x/image/webp`，PNG/WebP 压缩使用捆绑工具；没有新增 Go 模块或版本。
 
 批处理调度与保存位于 `batch_runner.go`，图片工作内存预算位于 `image_budget.go`；JPEG/PNG/WebP 共用的原生工具缓存、完整性验证与原子释放逻辑位于 `internal/toolcache`。每次获取工具都重新核对 SHA-256 和完整权限位，拒绝 setuid/setgid/sticky 工具并重新释放；不能用 inode、大小和 mtime 代替内容验证；校验与执行之间仍有同一用户并发改写路径的剩余竞态。`internal/toolio` 提供共用的 32 KiB stderr 缓冲（超过上限继续排空）及按上限裁剪扩容容量的有界输出缓冲 `BoundedBuffer`。GitHub Actions 在 macOS ARM64 上执行竞态检测、Go 与 MyGo 静态检查、捆绑编码器验证和构建，并在 Linux / Windows 及多架构目标上验证跨平台编译与可运行测试；编码器的真实集成测试随 `go test -race ./...` 一起运行。
 

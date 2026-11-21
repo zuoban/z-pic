@@ -10,7 +10,7 @@ import (
 )
 
 // BytesWithPreview follows Bytes's contract and also returns decoded output
-// pixels for a changed result, reusing the PNG/WebP validation decode.
+// pixels for a changed result, reusing the decode performed during compression.
 // An unchanged result returns a nil preview so callers can reuse the source.
 func BytesWithPreview(ctx context.Context, data []byte, sourcePath string, options Options) (*Result, image.Image, error) {
 	absolutePath, err := validateRequest(ctx, sourcePath, options)

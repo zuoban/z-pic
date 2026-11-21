@@ -332,10 +332,7 @@ func (s *application) previewPanel(c *ui.Context) {
 								OnClick(s.chooseFolder)
 						})
 						ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
-							formats := "JPEG · PNG · WebP"
-							if compress.SupportsHEIC() {
-								formats = "JPEG · PNG · WebP · HEIC"
-							}
+							formats := strings.Join(supportedImageFormats(), " · ")
 							ui.Text(c, formats).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
 							ui.Text(c, "单张最大 64 MiB · 3200 万像素").FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c))
 						})

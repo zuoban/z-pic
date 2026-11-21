@@ -42,7 +42,7 @@ func (p MetadataPolicy) Validate() error {
 	}
 }
 
-// OutputFormat selects a JPEG, PNG, or WebP output container.
+// OutputFormat selects a JPEG, PNG, WebP, or AVIF output container.
 // The zero value keeps the input format, with HEIC exported as PNG in lossless
 // mode and JPEG otherwise.
 type OutputFormat string
@@ -52,11 +52,12 @@ const (
 	OutputFormatJPEG OutputFormat = "jpeg"
 	OutputFormatPNG  OutputFormat = "png"
 	OutputFormatWebP OutputFormat = "webp"
+	OutputFormatAVIF OutputFormat = "avif"
 )
 
 func (f OutputFormat) Validate() error {
 	switch f {
-	case OutputFormatKeep, OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP:
+	case OutputFormatKeep, OutputFormatJPEG, OutputFormatPNG, OutputFormatWebP, OutputFormatAVIF:
 		return nil
 	default:
 		return fmt.Errorf("不支持的输出格式：%q", string(f))
@@ -116,12 +117,12 @@ func resizeImage(ctx context.Context, img image.Image, maxDim int) (image.Image,
 	return dst, true, nil
 }
 
-func encodeResizedPNG(ctx context.Context, img image.Image, colorChunks [][]byte) ([]byte, error) {
+func encodeResizedPNG(ctx context.Context, img image.Image, chunks [][]byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	output := pngTransformOutput{ctx: ctx, limit: maxInputSize}
-	for _, chunk := range colorChunks {
+	for _, chunk := range chunks {
 		output.limit -= len(chunk)
 	}
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
@@ -131,7 +132,7 @@ func encodeResizedPNG(ctx context.Context, img image.Image, colorChunks [][]byte
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return injectPNGChunksAfterIHDR(output.buf.Bytes(), colorChunks), nil
+	return injectPNGChunksAfterIHDR(output.buf.Bytes(), chunks), nil
 }
 
 type pngTransformOutput struct {
@@ -300,28 +301,11 @@ func buildPNGICCPChunk(icc []byte, components int) []byte {
 }
 
 func extractWebPICCProfile(data []byte) []byte {
-	if len(data) < 20 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+	icc := webpChunkPayload(data, "ICCP")
+	if len(icc) == 0 || len(icc) > maxJPEGICCBytes {
 		return nil
 	}
-	for offset := 12; offset <= len(data)-8; {
-		kind := string(data[offset : offset+4])
-		length := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
-		if length < 0 || length > len(data)-offset-8 {
-			return nil
-		}
-		if kind == "ICCP" {
-			if length == 0 || length > maxJPEGICCBytes {
-				return nil
-			}
-			return bytes.Clone(data[offset+8 : offset+8+length])
-		}
-		padded := length + length%2
-		if padded > len(data)-offset-8 {
-			return nil
-		}
-		offset += 8 + padded
-	}
-	return nil
+	return bytes.Clone(icc)
 }
 
 // injectWebPICC adds or replaces an ICCP chunk in a static WebP container,

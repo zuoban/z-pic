@@ -30,6 +30,12 @@
       "role": "Editor"
     },
     {
+      "ext": ["avif"],
+      "name": "AVIF Image",
+      "mimeType": "image/avif",
+      "role": "Editor"
+    },
+    {
       "ext": ["heic", "heif"],
       "name": "HEIC Image",
       "mimeType": "image/heic",

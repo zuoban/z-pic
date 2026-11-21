@@ -1,0 +1,39 @@
+{
+  "version": "1.4.2",
+  "sources": {
+    "libavif": {
+      "version": "1.4.2",
+      "url": "https://github.com/AOMediaCodec/libavif/archive/refs/tags/v1.4.2.tar.gz",
+      "sha256": "2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d"
+    },
+    "libaom": {
+      "version": "3.14.1",
+      "url": "https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz",
+      "sha256": "44bf90dbd23e734d50e70a8c41c285193922938bd0d3bc2ee56764d181d55ef5"
+    },
+    "libpng": {
+      "version": "1.6.58",
+      "url": "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz",
+      "sha256": "a9d4df463d36a6e5f9c29bd6f4967312d17e996c1854f3511f833924eb1993cf"
+    },
+    "mozjpeg": {
+      "version": "4.1.5",
+      "url": "https://github.com/mozilla/mozjpeg/archive/refs/tags/v4.1.5.tar.gz",
+      "sha256": "9fcbb7171f6ac383f5b391175d6fb3acde5e64c4c4727274eade84ed0998fcc1"
+    }
+  },
+  "binaries": {
+    "avifenc": {
+      "sha256": "906bc9ccdcaaea1fe2811820a4f13320be3d0ba06289d94463b62546a72ec245",
+      "size": 5314256
+    },
+    "avifdec": {
+      "sha256": "58937faf931ea1ba037e3c10c6c41cb2889aeb0ce295b73acb423846180c843c",
+      "size": 2025744
+    }
+  },
+  "cflags": "-O2 -arch arm64 -mmacosx-version-min=11.0",
+  "ldflags": "-arch arm64 -mmacosx-version-min=11.0 -Wl,-dead_strip",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "sdk": "27.0"
+}

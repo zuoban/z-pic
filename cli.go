@@ -73,11 +73,10 @@ func runCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 }
 
+const cliOutputFormats = "keep|jpeg|png|webp|avif"
+
 func printRootCLIHelp(w io.Writer) {
-	formats := "JPEG / PNG / WebP"
-	if compress.SupportsHEIC() {
-		formats = "JPEG / PNG / WebP / HEIC"
-	}
+	formats := strings.Join(supportedImageFormats(), " / ")
 	fmt.Fprintf(w, `Z Pic %s — 本地静态图片压缩工具（%s）
 
 用法:
@@ -235,7 +234,7 @@ func cliMetadataName(policy compress.MetadataPolicy) string {
 
 func cliFormatName(format compress.OutputFormat) string {
 	switch format {
-	case compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP:
+	case compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP, compress.OutputFormatAVIF:
 		return string(format)
 	default:
 		return "keep"
@@ -319,10 +318,7 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 }
 
 func printCompressCLIHelp(w io.Writer) {
-	formats := "JPEG / PNG / WebP"
-	if compress.SupportsHEIC() {
-		formats = "JPEG / PNG / WebP / HEIC"
-	}
+	formats := strings.Join(supportedImageFormats(), " / ")
 	fmt.Fprintf(w, `用法: z-pic compress [选项] <图片或文件夹 ...>
 
 无界面批量压缩静态 %s 图片（默认递归扫描目录）。
@@ -331,9 +327,10 @@ func printCompressCLIHelp(w io.Writer) {
 选项:
   -p, --preset <name>      使用已保存预设作为基础参数
       --settings <path>    指定设置 JSON 文件路径
-  -q, --quality <1-100>    JPEG / WebP 质量并联动调整 PNG 量化参数
-      --lossless           无损模式（PNG 仅 Oxipng，WebP 无损，同格式 JPEG 无损优化；转换为 JPEG 仍有损）
-      --format <keep|jpeg|png|webp> 输出格式（jpeg 可用 jpg，keep 时 HEIC 转为 JPEG 或 PNG）
+  -q, --quality <1-100>    %s 质量并联动调整 PNG 量化参数
+      --lossless           无损模式（转为 JPEG 时使用有损编码）
+      --format <%s> 输出格式（jpeg 可用 jpg，keep 时 HEIC 转为 JPEG 或 PNG）
+                           AVIF 编解码仅在 Apple 芯片的 macOS 上可用
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --max-size <size>    尝试将每张图片压到目标体积以内，如 300KB 或 1MiB（0 表示关闭）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
@@ -346,7 +343,7 @@ func printCompressCLIHelp(w io.Writer) {
   -j, --jobs <N>           并发任务数（0 表示自动）
       --json               以 JSON 格式输出完整报告
       --quiet              静默模式（仅输出错误）
-`, formats, compress.MinResizeDimension, compress.MaxResizeDimension)
+`, formats, lossyQualityFormats(), cliOutputFormats, compress.MinResizeDimension, compress.MaxResizeDimension)
 }
 
 type cliFileReport struct {
@@ -410,8 +407,10 @@ func parseCLIOutputFormat(raw string) (compress.OutputFormat, error) {
 		return compress.OutputFormatPNG, nil
 	case "webp":
 		return compress.OutputFormatWebP, nil
+	case "avif":
+		return compress.OutputFormatAVIF, nil
 	default:
-		return "", fmt.Errorf("无效的输出格式 %q（支持 keep / jpeg / png / webp）", raw)
+		return "", fmt.Errorf("无效的输出格式 %q（支持 %s）", raw, cliOutputFormats)
 	}
 }
 
@@ -444,6 +443,8 @@ func expectedExtMatchesFormat(ext, format string) bool {
 		return ext == ".png"
 	case "webp":
 		return ext == ".webp"
+	case "avif":
+		return ext == ".avif"
 	default:
 		return false
 	}
@@ -478,7 +479,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	fs.IntVar(&quality, "quality", 80, "quality 1-100")
 	fs.IntVar(&quality, "q", 80, "quality 1-100")
 	fs.BoolVar(&lossless, "lossless", false, "lossless compression")
-	fs.StringVar(&formatFlag, "format", "", "output format: keep|jpeg|png|webp (jpg is an alias for jpeg)")
+	fs.StringVar(&formatFlag, "format", "", "output format: "+cliOutputFormats+" (jpg is an alias for jpeg)")
 	fs.IntVar(&maxDim, "max-dim", 0, "max long-edge dimension in pixels")
 	fs.StringVar(&maxSizeFlag, "max-size", "", "target output size")
 	fs.StringVar(&metadataFlag, "metadata", "", "metadata policy: keep-all|keep-icc|strip")
@@ -628,11 +629,7 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 1
 	}
 	if len(scan.items) == 0 {
-		if compress.SupportsHEIC() {
-			fmt.Fprintln(stderr, "未找到可处理的 JPEG、PNG、WebP 或 HEIC 图片。")
-		} else {
-			fmt.Fprintln(stderr, "未找到可处理的 JPEG、PNG 或 WebP 图片。")
-		}
+		fmt.Fprintln(stderr, noSupportedImagesMessage())
 		return 2
 	}
 
@@ -653,7 +650,8 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			info, statErr := os.Stat(outputPath)
 			isExistingDir := statErr == nil && info.IsDir()
 			singleInputIsFile := len(inputs) == 1 && len(scan.items) == 1 && scan.items[0].sourceDir == ""
-			if singleInputIsFile && !isExistingDir && isSupportedImageExt(outputPath) {
+			isImagePath := isSupportedImageExt(outputPath) || expectedExtMatchesFormat(filepath.Ext(outputPath), "avif")
+			if singleInputIsFile && !isExistingDir && isImagePath {
 				item := scan.items[0]
 				if !item.invalidInput {
 					effectiveFmt := compress.ResolveOutputFormat(item.effectiveSourceFormat(), opts.OutputFormat, opts.Lossless)
