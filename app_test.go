@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,12 +41,13 @@ func testSelectedApplication() *application {
 
 func TestEmptyViewCannotCompress(t *testing.T) {
 	s := newApplication()
-	if len(s.presets) != 1 || s.presets[0].name != "均衡" || s.quality != 80 || s.png != compress.DefaultPNGOptions() {
-		t.Fatalf("initialization must offer one balanced preset: %+v", s.presets)
+	wantDefaults := defaultPresets()
+	if !slices.Equal(s.presets, wantDefaults) || s.presets[0].name != "均衡" || s.quality != 80 || s.png != compress.DefaultPNGOptions() {
+		t.Fatalf("initialization must offer the built-in default presets starting with balanced: %+v", s.presets)
 	}
 	tt := ui.NewTester(s.view, 980, 720)
 	if _, ok := tt.AccessByRole(ui.RoleMenuButton, "选择预设"); ok || !tt.HasText("均衡") || tt.HasText("体积优先") || tt.HasText("画质优先") {
-		t.Fatal("the empty view must display the balanced preset without a picker")
+		t.Fatal("the empty view must display the balanced preset without a settings-only picker")
 	}
 	button, ok := tt.AccessByRole(ui.RoleButton, "开始压缩")
 	if !ok || !button.Disabled {
@@ -58,8 +60,13 @@ func TestEmptyViewCannotCompress(t *testing.T) {
 	if err := settings.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
-	if item, ok := settings.AccessByRole(ui.RoleMenuItemRadio, "均衡"); !ok || !item.Checked || settings.HasText("体积优先") || settings.HasText("画质优先") {
-		t.Fatal("the default popup must contain only the checked balanced preset")
+	if item, ok := settings.AccessByRole(ui.RoleMenuItemRadio, "均衡"); !ok || !item.Checked {
+		t.Fatal("the default popup must contain the checked balanced preset")
+	}
+	for _, wantName := range []string{"网页 WebP", "无损优化", "≤ 500 KiB"} {
+		if _, ok := settings.AccessByRole(ui.RoleMenuItemRadio, wantName); !ok {
+			t.Fatalf("the default popup must include built-in preset %q", wantName)
+		}
 	}
 }
 
@@ -1034,7 +1041,7 @@ func TestSettingsFitBothThemesAtMinimumSize(t *testing.T) {
 			}, 760, 560)
 			for _, label := range []string{"取消", "保存", "新增预设", "复制预设", "删除预设"} {
 				button, ok := tt.AccessByRole(ui.RoleButton, label)
-				if !ok || button.Disabled != (label == "删除预设") || button.Bounds.H < 28 || button.Offscreen ||
+				if !ok || button.Disabled || button.Bounds.H < 28 || button.Offscreen ||
 					button.Bounds.Y+button.Bounds.H > 560 || button.Bounds.X+button.Bounds.W > 760 {
 					t.Fatalf("%s must fit in the minimum window: %+v", label, button)
 				}

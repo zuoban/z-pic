@@ -64,7 +64,7 @@ func TestSettingsFilePathUsesOverrideOrUserDirectory(test *testing.T) {
 func TestLoadSettingsMissingFileReturnsIndependentDefaults(test *testing.T) {
 	path := filepath.Join(test.TempDir(), "missing", "settings.json")
 	presets, selected, err := loadSettings(path)
-	expected := []compressionPreset{{name: "均衡", quality: 80, png: compress.DefaultPNGOptions()}}
+	expected := defaultPresets()
 	if err != nil || selected != "均衡" || !reflect.DeepEqual(presets, expected) {
 		test.Fatalf("missing configuration must use defaults: presets=%+v selected=%q err=%v", presets, selected, err)
 	}

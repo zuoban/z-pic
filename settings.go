@@ -87,7 +87,46 @@ type settingsEditor struct {
 }
 
 func defaultPresets() []compressionPreset {
-	return slices.Clone(compressionPresets)
+	presets := make([]compressionPreset, 0, 5)
+	presets = append(presets,
+		compressionPreset{
+			name:    "均衡",
+			quality: 80,
+			png:     compress.DefaultPNGOptions(),
+		},
+		compressionPreset{
+			name:         "网页 WebP",
+			quality:      80,
+			png:          compress.DefaultPNGOptions(),
+			outputFormat: compress.OutputFormatWebP,
+			metadata:     compress.MetadataKeepICC,
+		},
+	)
+	if compress.SupportsAVIF() {
+		presets = append(presets, compressionPreset{
+			name:         "极致 AVIF",
+			quality:      imageQualityLevels[2].quality,
+			png:          imageQualityLevels[2].png,
+			outputFormat: compress.OutputFormatAVIF,
+			metadata:     compress.MetadataKeepICC,
+		})
+	}
+	presets = append(presets,
+		compressionPreset{
+			name:     "无损优化",
+			quality:  80,
+			png:      compress.DefaultPNGOptions(),
+			lossless: true,
+		},
+		compressionPreset{
+			name:            "≤ 500 KiB",
+			quality:         80,
+			png:             compress.DefaultPNGOptions(),
+			metadata:        compress.MetadataKeepICC,
+			targetSizeBytes: 500 << 10,
+		},
+	)
+	return presets
 }
 
 func (e *settingsEditor) selectedPreset() *compressionPreset {
@@ -259,13 +298,135 @@ func (s *application) selectSettingsPreset(index int) {
 	s.editor.message = ""
 }
 
+func (s *application) activeSavedPreset() (compressionPreset, bool) {
+	for _, preset := range s.presets {
+		if preset.name == s.scheme {
+			return preset, true
+		}
+	}
+	return compressionPreset{}, false
+}
+
+func (s *application) hasQuickOverrides() bool {
+	saved, ok := s.activeSavedPreset()
+	if !ok {
+		return false
+	}
+	return s.quality != saved.quality ||
+		s.png != saved.png ||
+		s.lossless != saved.lossless ||
+		s.metadata != saved.metadata ||
+		s.outputFormat != saved.outputFormat ||
+		s.maxDimension != saved.maxDimension ||
+		s.targetSizeBytes != saved.targetSizeBytes
+}
+
+func (s *application) applyQuickAdjustment(formatChanged bool) {
+	s.invalidateResult()
+	if formatChanged {
+		s.configureBatchPresetOutput()
+	}
+	if s.autoCompress && s.batch == nil && s.file != nil && !s.modalOpen() {
+		s.startCompression()
+	}
+}
+
+func (s *application) quickSetQualityLevel(level int) {
+	if s.modalOpen() || level < 0 || level >= len(imageQualityLevels) {
+		return
+	}
+	target := imageQualityLevels[level]
+	if !s.lossless && s.quality == target.quality && s.png == target.png {
+		return
+	}
+	wasLossless := s.lossless
+	s.lossless = false
+	s.quality, s.png = target.quality, target.png
+	s.applyQuickAdjustment(wasLossless)
+}
+
+func (s *application) quickSetLossless() {
+	if s.modalOpen() || s.lossless {
+		return
+	}
+	s.lossless = true
+	s.applyQuickAdjustment(true)
+}
+
+func (s *application) quickSetOutputFormat(format compress.OutputFormat) {
+	if s.modalOpen() || format.Validate() != nil || s.outputFormat == format {
+		return
+	}
+	if format == compress.OutputFormatAVIF && !compress.SupportsAVIF() {
+		return
+	}
+	s.outputFormat = format
+	s.applyQuickAdjustment(true)
+}
+
+func (s *application) quickSetMaxDimension(dim int) {
+	if s.modalOpen() || compress.ValidateMaxDimension(dim) != nil || s.maxDimension == dim {
+		return
+	}
+	s.maxDimension = dim
+	s.applyQuickAdjustment(false)
+}
+
+func (s *application) resetQuickOverrides() {
+	if s.modalOpen() || !s.hasQuickOverrides() {
+		return
+	}
+	paramsChanged := s.applyScheme(s.scheme)
+	if paramsChanged && s.autoCompress && s.batch == nil && s.file != nil && !s.modalOpen() {
+		s.startCompression()
+	}
+}
+
+func (s *application) openSaveQuickPreset() {
+	if s.busy || s.confirmOverwrite || s.confirmBatchOverwrite {
+		return
+	}
+	snapshot := s.activePresetSnapshot()
+	s.setSettingsOpen(true)
+	if s.editor == nil || s.editor.confirmDelete {
+		return
+	}
+	editor := s.editor
+	editor.section = settingsPresets
+	baseName := []rune(strings.TrimSpace(snapshot.name))
+	if len(baseName) == 0 {
+		baseName = []rune("自定义")
+	}
+	for number := 1; ; number++ {
+		suffix := " 微调"
+		if number > 1 {
+			suffix = fmt.Sprintf(" 微调 %d", number)
+		}
+		snapshot.name = string(baseName[:min(len(baseName), 40-len([]rune(suffix)))]) + suffix
+		if !slices.ContainsFunc(editor.presets, func(existing compressionPreset) bool {
+			return strings.TrimSpace(existing.name) == strings.TrimSpace(snapshot.name)
+		}) {
+			break
+		}
+	}
+	editor.presets = append(editor.presets, snapshot)
+	editor.targetSizeTexts = append(editor.targetSizeTexts, presetTargetSizeText(snapshot.targetSizeBytes))
+	editor.selected = len(editor.presets) - 1
+	editor.active = editor.selected
+	editor.message, editor.confirmDelete = "", false
+	editor.focusField, editor.selectName = "preset-name", true
+	if s.settingsWindow != nil {
+		s.settingsWindow.Invalidate()
+	}
+}
+
 func (s *application) setScheme(name string) {
 	if s.busy || s.settingsOpen {
 		return
 	}
 	for _, preset := range s.presets {
 		if preset.name == name {
-			if s.settingsFile != "" && s.settingsError == "" {
+			if name != s.scheme && s.settingsFile != "" && s.settingsError == "" {
 				if err := s.saveCurrentSettings(s.presets, name, s.batchOutputDir, s.effectiveThemeMode()); err != nil {
 					s.setMessage("保存预设选择失败："+err.Error(), true)
 					return
@@ -287,7 +448,7 @@ func (s *application) applyScheme(name string) bool {
 				s.lossless != preset.lossless || s.metadata != preset.metadata ||
 				s.outputFormat != preset.outputFormat || s.maxDimension != preset.maxDimension ||
 				s.targetSizeBytes != preset.targetSizeBytes
-			formatChanged := s.outputFormat != preset.outputFormat
+			formatChanged := s.outputFormat != preset.outputFormat || s.lossless != preset.lossless
 			s.scheme = name
 			s.quality, s.png = preset.quality, preset.png
 			s.lossless, s.metadata = preset.lossless, preset.metadata

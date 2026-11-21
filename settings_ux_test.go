@@ -68,7 +68,7 @@ func TestNewAndDuplicatePresetsImmediatelyAcceptReplacementNames(t *testing.T) {
 			if got := app.editor.selectedPreset().name; got != "活动图片" {
 				t.Fatalf("typing must replace the suggested name, got %q", got)
 			}
-			if app.editor.active != 0 || len(app.presets) != 1 {
+			if app.editor.active != 0 || len(app.presets) != len(defaultPresets()) {
 				t.Fatal("renaming a new draft must preserve the active and stored presets")
 			}
 		})

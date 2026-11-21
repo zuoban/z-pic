@@ -601,12 +601,92 @@ func (s *application) singleReplacesOriginal() bool {
 	return s.output.replacesFile(sourceFormat, targetFormat)
 }
 
+func quickDimensionLabel(maxDim int) string {
+	if maxDim <= 0 {
+		return "原尺寸"
+	}
+	return fmt.Sprintf("≤ %d", maxDim)
+}
+
+func sizeGrowthHint(sourceFormat, resultFormat string) string {
+	switch {
+	case resultFormat == "png" && sourceFormat != "" && sourceFormat != "png":
+		return "转为 PNG 易增大复杂图体积，可改用 WebP、JPEG 或保持原格式"
+	case resultFormat != "" && sourceFormat != "" && resultFormat != sourceFormat:
+		return "跨格式转换增大了体积，可尝试保持原格式或调低质量"
+	case compress.SupportsAVIF():
+		return "当前参数使体积增大，可尝试调低质量或换用 WebP / AVIF"
+	default:
+		return "当前参数使体积增大，可尝试调低质量或换用 WebP"
+	}
+}
+
+func batchGrowthHint(targetFormat compress.OutputFormat) string {
+	switch targetFormat {
+	case compress.OutputFormatPNG:
+		return "批量转为 PNG 易增大体积，可改用 WebP、JPEG 或保持原格式"
+	case compress.OutputFormatKeep:
+		return "本次批量输出总体积增大，可尝试调低质量或调整输出格式"
+	default:
+		return "跨格式转换使总体积增大，可尝试保持原格式或调低质量"
+	}
+}
+
+func quickPickerButton(
+	c *ui.Context,
+	key, label, display, tooltip string,
+	fontSize float32,
+	fontWeight int,
+	disabled, highlighted bool,
+	buildMenu func(*ui.Menu),
+) ui.Element {
+	t := c.Theme()
+	picker := ui.ButtonBase(c.Key(key))
+	border := controlBorder(c)
+	if highlighted && !disabled {
+		border = selectionBorder(c)
+	}
+	picker.PopoverMenuButton(buildMenu, ui.PopoverMenuButtonOptions{
+		At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
+		Panel: func(panel ui.Element) {
+			panel.MinWidth(max(148, picker.Bounds().W)).MaxWidth(280).
+				Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
+				NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
+		},
+	}).Label(label).Value(display).Tooltip(tooltip).
+		Height(28).Padding(0, 8).Gap(4).
+		AlignItems(ui.Center).Radius(innerRadius(c)).
+		Background(glassControlSurface(c)).Border(1, border).Disabled(disabled)
+	if !disabled {
+		if picker.Pressed() {
+			picker.Background(glassControlPressed(c))
+		} else if picker.Hovered() {
+			picker.Background(glassControlHover(c))
+		}
+	}
+	picker.Children(func() {
+		ui.Text(c, display).FontSize(fontSize).FontWeight(fontWeight).FontFeatures("tnum").
+			SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(0)
+		ui.Icon(c, settingsChevronIcon).Size(14, 14).Shrink(0).TextColor(t.TextMuted)
+	})
+	return picker
+}
+
 func (s *application) presetOverview(c *ui.Context) {
 	t := c.Theme()
 	active := s.activePresetSnapshot()
+	saved, hasSaved := s.activeSavedPreset()
+	overridden := s.hasQuickOverrides()
+	disabled := s.modalOpen()
 	ui.Column(c).Gap(8).Children(func() {
-		ui.Row(c).Height(32).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(32).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(16).FontWeight(600).Width(0).Grow(1).SingleLine()
+			if overridden {
+				ui.Text(c, "已微调").FontSize(12).FontWeight(500).TextColor(accentForeground(t)).
+					Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).
+					Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).
+					Tooltip("已临时调整本次压缩参数，不会修改预设本身")
+			}
 			if s.batch != nil && s.batch.previewOpen {
 				ui.Text(c, "单张预览").FontSize(12).FontWeight(500).TextColor(accentForeground(t)).
 					Padding(2, 8).Shrink(0).Radius(badgeRadius(20)).
@@ -615,53 +695,95 @@ func (s *application) presetOverview(c *ui.Context) {
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "当前预设").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
-			disabled := s.modalOpen()
-			picker := ui.ButtonBase(c.Key("quick-preset-picker"))
-			picker.PopoverMenuButton(func(menu *ui.Menu) {
-				menu.MaxWidth(280)
-				for _, option := range s.presets {
-					name := presetDisplayName(option)
-					if menu.Item(name).Radio(option.name == s.scheme).Tooltip(name).Disabled(disabled).Chosen() {
-						s.setScheme(option.name)
+			quickPickerButton(c, "quick-preset-picker", "快速切换预设", s.scheme, "快速切换预设："+s.scheme,
+				13, 500, disabled, false, func(menu *ui.Menu) {
+					menu.MaxWidth(280)
+					for _, option := range s.presets {
+						name := presetDisplayName(option)
+						if menu.Item(name).Radio(option.name == s.scheme).Tooltip(name).Disabled(disabled).Chosen() {
+							s.setScheme(option.name)
+						}
 					}
-				}
-			}, ui.PopoverMenuButtonOptions{
-				At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
-				Panel: func(panel ui.Element) {
-					panel.MinWidth(max(160, picker.Bounds().W)).MaxWidth(280).
-						Radius(12).Background(t.Surface).Border(1, glassBorder(c)).
-						NoShadow().Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.18))
-				},
-			}).Label("快速切换预设").Value(s.scheme).Tooltip("快速切换预设："+s.scheme).
-				Width(0).Grow(1).MinWidth(0).Height(28).Padding(0, 8).Gap(4).
-				AlignItems(ui.Center).Radius(innerRadius(c)).
-				Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
-			if !disabled {
-				if picker.Pressed() {
-					picker.Background(glassControlPressed(c))
-				} else if picker.Hovered() {
-					picker.Background(glassControlHover(c))
-				}
-			}
-			picker.Children(func() {
-				ui.Text(c, s.scheme).FontSize(13).FontWeight(500).SingleLine().TruncateMiddle().
-					Width(0).Grow(1).MinWidth(0)
-				ui.Icon(c, settingsChevronIcon).Size(14, 14).Shrink(0).TextColor(t.TextMuted)
-			})
+				}).Width(0).Grow(1).MinWidth(0)
 			quietButton(c, "manage-preset", "编辑", 28, disabled).
 				Label("管理预设").Tooltip("编辑当前预设的质量和保存方式").
 				OnClick(s.openPresetSettings)
 		})
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "图片质量").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
-			ui.Text(c, presetQualityLabel(active)).
-				FontSize(13).FontFeatures("tnum").Width(0).Grow(1).SingleLine()
+			level := qualityLevel(active)
+			exactLevel := !s.lossless && s.quality == imageQualityLevels[level].quality && s.png == imageQualityLevels[level].png
+			qualityTweaked := hasSaved && (s.quality != saved.quality || s.png != saved.png || s.lossless != saved.lossless)
+			display := presetQualityLabel(active)
+			quickPickerButton(c, "quick-quality-picker", "快速调整质量", display,
+				"临时调整本次图片质量，不修改预设", 12, 500, disabled, qualityTweaked, func(menu *ui.Menu) {
+					menu.MaxWidth(220)
+					for index, option := range imageQualityLevels {
+						itemLabel := fmt.Sprintf("%d · %s", index, option.label)
+						if menu.Item(itemLabel).Radio(exactLevel && index == level).Disabled(disabled).Chosen() {
+							s.quickSetQualityLevel(index)
+						}
+					}
+					menu.Separator()
+					if menu.Item("无损压缩").Radio(s.lossless).Disabled(disabled).Chosen() {
+						s.quickSetLossless()
+					}
+				}).Width(0).Grow(1).MinWidth(0)
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "格式尺寸").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
+			formatTweaked := hasSaved && s.outputFormat != saved.outputFormat
+			formats := []compress.OutputFormat{
+				compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
+			}
+			if compress.SupportsAVIF() || s.outputFormat == compress.OutputFormatAVIF {
+				formats = append(formats, compress.OutputFormatAVIF)
+			}
+			formatDisplay := presetOutputFormatLabel(s.outputFormat)
+			quickPickerButton(c, "quick-format-picker", "快速切换输出格式", formatDisplay,
+				"临时修改本次输出格式，不修改预设", 12, 500, disabled, formatTweaked, func(menu *ui.Menu) {
+					menu.MaxWidth(200)
+					for _, format := range formats {
+						if menu.Item(presetOutputFormatLabel(format)).Radio(s.outputFormat == format).Disabled(disabled).Chosen() {
+							s.quickSetOutputFormat(format)
+						}
+					}
+				}).Width(0).Grow(1).MinWidth(0)
+
+			dimTweaked := hasSaved && s.maxDimension != saved.maxDimension
+			dimDisplay := quickDimensionLabel(s.maxDimension)
+			quickPickerButton(c, "quick-dimension-picker", "快速切换尺寸缩放", dimDisplay,
+				"临时限制本次输出长边，不修改预设", 12, 500, disabled, dimTweaked, func(menu *ui.Menu) {
+					menu.MaxWidth(200)
+					for _, option := range resizeDimensionPresets {
+						itemLabel := option.label
+						if option.value > 0 {
+							itemLabel = fmt.Sprintf("长边 ≤ %dpx", option.value)
+						}
+						if menu.Item(itemLabel).Radio(s.maxDimension == option.value).Disabled(disabled).Chosen() {
+							s.quickSetMaxDimension(option.value)
+						}
+					}
+				}).Width(82).Shrink(0)
 		})
 		if summary := presetProcessingSummary(active); summary != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "处理选项").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
 				ui.Text(c, summary).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
 					Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(summary)
+			})
+		}
+		if overridden {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "临时生效，未改动预设").FontSize(12).TextColor(metadataColor(c)).
+					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().
+					Tooltip("已临时调整本次压缩参数，不会修改预设本身")
+				quietButton(c, "quick-reset-overrides", "重置", 26, disabled).
+					Label("恢复预设参数").Tooltip("放弃临时微调，恢复当前预设参数").
+					OnClick(s.resetQuickOverrides)
+				quietButton(c, "quick-save-preset", "存为预设", 26, disabled).
+					Label("将微调存为新预设").Tooltip("打开设置并将当前临时参数保存为新预设").
+					OnClick(s.openSaveQuickPreset)
 			})
 		}
 	})
@@ -724,7 +846,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 	t := c.Theme()
 	original, output := "—", "—"
 	label, color := "待压缩", t.TextMuted
-	note := ""
+	note, hint := "", ""
 	ratio := -1.0
 	if s.file != nil {
 		original = formatSize(s.file.size)
@@ -733,7 +855,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 		original = formatSize(s.result.OriginalSize)
 		output = formatSize(s.result.OutputSize)
 		if s.result.OriginalSize > 0 {
-			ratio = min(1, max(0, float64(s.result.OutputSize)/float64(s.result.OriginalSize)))
+			ratio = max(0, float64(s.result.OutputSize)/float64(s.result.OriginalSize))
 		}
 		switch {
 		case s.result.Unchanged:
@@ -742,8 +864,12 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 			note = "已保留原始数据"
 		case s.result.OutputSize > s.result.OriginalSize && s.result.OriginalSize > 0:
 			grew := float64(s.result.OutputSize-s.result.OriginalSize) / float64(s.result.OriginalSize) * 100
-			label, color = fmt.Sprintf("增大 %.1f%%", grew), t.TextMuted
-			ratio = 1
+			label, color = fmt.Sprintf("增大 %.1f%%", grew), t.Warning
+			sourceFormat := ""
+			if s.file != nil {
+				sourceFormat = s.file.format
+			}
+			hint = sizeGrowthHint(sourceFormat, s.result.Format)
 		case s.result.OriginalSize > 0:
 			saved := float64(s.result.OriginalSize-s.result.OutputSize) / float64(s.result.OriginalSize) * 100
 			label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
@@ -773,7 +899,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 			label, color = "压缩失败", t.Danger
 		}
 	}
-	summaryCardWithNote(c, title, label, color, "原始大小", original, "输出大小", output, note, ratio)
+	summaryCardWithHint(c, title, label, color, "原始大小", original, "输出大小", output, note, hint, ratio)
 }
 
 func (s *application) saveActionDescription() (string, string) {
@@ -828,6 +954,10 @@ func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firs
 }
 
 func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note string, ratio float64) {
+	summaryCardWithHint(c, title, status, statusColor, firstLabel, firstValue, secondLabel, secondValue, note, "", ratio)
+}
+
+func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note, hint string, ratio float64) {
 	t := c.Theme()
 	width, _ := c.Size()
 	compact := width >= 720 && width < 960
@@ -871,7 +1001,10 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 		})
 		if ratio >= 0 {
 			barColor := t.Success
-			if ratio >= 1 {
+			switch {
+			case ratio > 1:
+				barColor = t.Warning
+			case ratio >= 1:
 				barColor = t.TextMuted.Alpha(0.45)
 			}
 			ui.Box(c).FillWidth().Height(5).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
@@ -881,11 +1014,11 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
 				})
 		}
-		if statusColor == t.Success {
+		if statusColor == t.Success || statusColor == t.Warning {
 			ui.Row(c).Children(func() {
 				ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
 					TextColor(statusColor).Padding(2, 8).Radius(badgeRadius(20)).
-					Background(statusTintSurface(c, t.Success)).Border(1, statusTintBorder(c, t.Success)).
+					Background(statusTintSurface(c, statusColor)).Border(1, statusTintBorder(c, statusColor)).
 					MaxLines(2).Tooltip(status)
 			})
 		} else {
@@ -895,6 +1028,10 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 		if note != "" {
 			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
 				MaxLines(2).Tooltip(note)
+		}
+		if hint != "" {
+			ui.Text(c, hint).FontSize(12).TextColor(t.Warning).
+				MaxLines(2).Tooltip(hint)
 		}
 	})
 }

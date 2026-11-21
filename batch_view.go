@@ -378,7 +378,7 @@ func batchItemStatus(item batchItem, t *ui.Theme) (string, ui.Color) {
 		}
 		if item.outputSize > item.originalSize && item.originalSize > 0 {
 			grew := float64(item.outputSize-item.originalSize) / float64(item.originalSize) * 100
-			return fmt.Sprintf("+%0.1f%%", grew), t.TextMuted
+			return fmt.Sprintf("+%0.1f%%", grew), t.Warning
 		}
 		if item.originalSize <= 0 {
 			return "已完成", t.Success
@@ -792,6 +792,10 @@ func (s *application) batchResultSummary(c *ui.Context) {
 			saved := float64(doneOrig-outTotal) / float64(doneOrig) * 100
 			label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
 			ratio = min(1, max(0, float64(outTotal)/float64(doneOrig)))
+		} else if doneOrig > 0 && outTotal > doneOrig {
+			grew := float64(outTotal-doneOrig) / float64(doneOrig) * 100
+			label, color = fmt.Sprintf("增大 %.1f%%", grew), t.Warning
+			ratio = float64(outTotal) / float64(doneOrig)
 		} else {
 			label, color = "未减小（0.0%）", t.TextMuted
 			ratio = 1
@@ -810,11 +814,14 @@ func (s *application) batchResultSummary(c *ui.Context) {
 		}
 		color = t.Danger
 	}
-	var note string
+	var note, hint string
 	if !s.busy && done > 0 {
 		var parts []string
 		if doneOrig > outTotal {
 			parts = append(parts, "共节省 "+formatSize(doneOrig-outTotal))
+		} else if doneOrig > 0 && outTotal > doneOrig {
+			parts = append(parts, "共增大 "+formatSize(outTotal-doneOrig))
+			hint = batchGrowthHint(s.outputFormat)
 		}
 		if unchanged > 0 {
 			if s.batch.outputMode == batchOutputOverwrite {
@@ -828,7 +835,7 @@ func (s *application) batchResultSummary(c *ui.Context) {
 		}
 		note = strings.Join(parts, " · ")
 	}
-	summaryCardWithNote(c, "批量结果", label, color, firstLabel, original, secondLabel, output, note, ratio)
+	summaryCardWithHint(c, "批量结果", label, color, firstLabel, original, secondLabel, output, note, hint, ratio)
 }
 
 func (s *application) batchOverwriteConfirmation(c *ui.Context) {

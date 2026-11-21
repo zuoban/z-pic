@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 
@@ -119,7 +118,7 @@ type application struct {
 func newApplication() *application {
 	return &application{
 		quality: 80, scheme: "均衡", theme: themeSystem, png: compress.DefaultPNGOptions(),
-		presets:           slices.Clone(compressionPresets),
+		presets:           defaultPresets(),
 		comparison:        comparisonView{split: 50},
 		pendingBatchIndex: -1,
 		imageMemory:       newImageMemoryBudget(imageMemoryLimit),

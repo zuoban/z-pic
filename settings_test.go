@@ -265,13 +265,14 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	replaceTestPresetName(t, tester, "手机分享")
 	application.editQualityLevel(2)
 	options := compress.PNGOptions{MinQuality: 50, MaxQuality: 75, Colors: 192, Speed: 3}
-	if len(application.presets) != 1 {
+	initialCount := len(defaultPresets())
+	if len(application.presets) != initialCount {
 		t.Fatal("new drafts must not appear among active schemes before saving")
 	}
 	if err := tester.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
-	if application.settingsOpen || len(application.presets) != 2 {
+	if application.settingsOpen || len(application.presets) != initialCount+1 {
 		t.Fatal("saving must close settings and publish the maintained scheme list")
 	}
 	chooseTestPreset(t, application, "手机分享")
@@ -294,6 +295,10 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	tester = openTestSettings(t, restarted)
+	if err := tester.Click("编辑预设：发送图片"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Key(0, ui.KeyRight)
 	if err := tester.Click("编辑预设：临时方案"); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +313,7 @@ func TestPresetMaintenanceSurvivesApplicationRestart(t *testing.T) {
 	}
 	again := newApplication()
 	again.restoreSettings()
-	if again.scheme != "发送图片" || again.quality != 70 || again.png != options || len(again.presets) != 2 {
+	if again.scheme != "发送图片" || again.quality != 70 || again.png != options || len(again.presets) != initialCount+1 {
 		t.Fatal("renaming the active custom scheme and deleting another custom scheme must survive restart")
 	}
 	for _, preset := range again.presets {
@@ -489,18 +494,16 @@ func TestDeletingActivePresetSelectsValidFallback(t *testing.T) {
 
 func TestStartingPresetsCanBeDeletedUntilOneRemains(t *testing.T) {
 	application := newApplication()
-	if len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+	wantDefaults := defaultPresets()
+	if !reflect.DeepEqual(application.presets, wantDefaults) || application.presets[0].name != "均衡" ||
 		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
-		t.Fatalf("the initial preset must be balanced: %+v", application.presets)
+		t.Fatalf("the initial presets must start with balanced: %+v", application.presets)
 	}
 	tester := openTestSettings(t, application)
 	initialDelete, ok := tester.AccessByRole(ui.RoleButton, "删除预设")
-	if !ok || !initialDelete.Disabled {
-		t.Fatal("the single default preset must not be deletable")
+	if !ok || initialDelete.Disabled {
+		t.Fatal("starting presets must be deletable while multiple presets exist")
 	}
-	application.addPreset()
-	application.addPreset()
-	tester.Frame()
 	for len(application.editor.presets) > 1 {
 		button, ok := tester.AccessByRole(ui.RoleButton, "删除预设")
 		if !ok || button.Disabled {
@@ -592,7 +595,8 @@ func TestRestoreInvalidSettingsUsesDefaultsWithoutOverwritingFile(t *testing.T) 
 	application := newApplication()
 	application.restoreSettings()
 	if !application.failed || !strings.Contains(application.message, "读取压缩预设失败") ||
-		application.scheme != "均衡" || len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+		application.scheme != "均衡" || !reflect.DeepEqual(application.presets, defaultPresets()) ||
+		application.presets[0].name != "均衡" ||
 		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
 		t.Fatal("a corrupt startup configuration must use defaults and expose its error")
 	}
@@ -634,15 +638,16 @@ func TestFailedSelectionSavePreservesActiveSchemeAndResult(t *testing.T) {
 
 func TestNewPresetUsesBalancedDefaultsAndUniqueName(t *testing.T) {
 	application := newApplication()
-	if len(application.presets) != 1 || application.presets[0].name != "均衡" ||
+	initialCount := len(defaultPresets())
+	if len(application.presets) != initialCount || application.presets[0].name != "均衡" ||
 		application.presets[0].quality != 80 || application.presets[0].png != compress.DefaultPNGOptions() {
-		t.Fatalf("new presets must start from the single balanced default: %+v", application.presets)
+		t.Fatalf("new presets must start from the balanced default: %+v", application.presets)
 	}
 	openTestSettings(t, application)
 	active := application.editor.active
 	application.addPreset()
 	preset := *application.editor.selectedPreset()
-	if len(application.editor.presets) != 2 || len(application.presets) != 1 ||
+	if len(application.editor.presets) != initialCount+1 || len(application.presets) != initialCount ||
 		preset.name != "新预设" || preset.quality != 80 || preset.png != compress.DefaultPNGOptions() ||
 		preset.output != (presetSaveOptions{}) || application.editor.active != active {
 		t.Fatalf("new presets must use balanced parameters without replacing the active preset: %+v", preset)
@@ -845,7 +850,7 @@ func TestPresetSubfolderAvailableForOriginalAndFixed(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, _, err := loadSettings(application.settingsFile)
-	if err != nil || len(loaded) != 1 || loaded[0].output != application.output ||
+	if err != nil || len(loaded) != len(defaultPresets()) || loaded[0].output != application.output ||
 		application.output.Mode != presetSaveOriginal || !application.output.UseSubfolder || application.output.Subfolder != "分享" {
 		t.Fatalf("saving must preserve the original-folder subfolder preference: loaded=%+v output=%+v err=%v", loaded, application.output, err)
 	}
