@@ -24,9 +24,91 @@ type compressionPreset struct {
 	metadata                 compress.MetadataPolicy
 	outputFormat             compress.OutputFormat
 	maxDimension             int
+	maxWidth                 int
+	maxHeight                int
+	scalePercent             int
 	targetSizeBytes          int64
 	targetResizeMinDimension int
 	output                   presetSaveOptions
+}
+
+type resizeLimits struct {
+	maxDimension int
+	maxWidth     int
+	maxHeight    int
+	scalePercent int
+}
+
+const (
+	resizeNone = iota
+	resizeLongEdge
+	resizeWidth
+	resizeHeight
+	resizePercent
+
+	presetResizeModeField  = "preset-resize-mode"
+	presetResizeValueField = "preset-resize-value"
+)
+
+func (r resizeLimits) selection() (mode, value int) {
+	switch {
+	case r.maxDimension != 0:
+		return resizeLongEdge, r.maxDimension
+	case r.maxWidth != 0:
+		return resizeWidth, r.maxWidth
+	case r.maxHeight != 0:
+		return resizeHeight, r.maxHeight
+	case r.scalePercent != 0:
+		return resizePercent, r.scalePercent
+	default:
+		return resizeNone, 0
+	}
+}
+
+func (r resizeLimits) validate() error {
+	return compress.ValidateResizeOptions(r.maxDimension, r.maxWidth, r.maxHeight, r.scalePercent)
+}
+
+func (p compressionPreset) resizeLimits() resizeLimits {
+	return resizeLimits{p.maxDimension, p.maxWidth, p.maxHeight, p.scalePercent}
+}
+
+func (p *compressionPreset) setResizeLimits(limits resizeLimits) {
+	p.maxDimension, p.maxWidth, p.maxHeight, p.scalePercent = limits.maxDimension, limits.maxWidth, limits.maxHeight, limits.scalePercent
+}
+
+func resizeLimitsFor(mode, value int) resizeLimits {
+	switch mode {
+	case resizeLongEdge:
+		return resizeLimits{maxDimension: value}
+	case resizeWidth:
+		return resizeLimits{maxWidth: value}
+	case resizeHeight:
+		return resizeLimits{maxHeight: value}
+	case resizePercent:
+		return resizeLimits{scalePercent: value}
+	default:
+		return resizeLimits{}
+	}
+}
+
+func parseResizeValue(mode int, text string) (resizeLimits, error) {
+	value, err := strconv.Atoi(strings.TrimSpace(text))
+	limits := resizeLimitsFor(mode, value)
+	if err == nil && limits != (resizeLimits{}) && limits.validate() == nil {
+		return limits, nil
+	}
+	if mode == resizePercent {
+		return resizeLimits{}, errors.New("缩放比例须为 1–100 之间的整数")
+	}
+	return resizeLimits{}, fmt.Errorf("尺寸上限须为 %d–%d px 的整数", compress.MinResizeDimension, compress.MaxResizeDimension)
+}
+
+func (r resizeLimits) text() string {
+	if _, value := r.selection(); value != 0 {
+		return strconv.Itoa(value)
+	}
+	return ""
 }
 
 var compressionPresets = []compressionPreset{
@@ -78,7 +160,7 @@ type settingsEditor struct {
 	backupToTrash bool
 	downloadDir   string
 	presets       []compressionPreset
-	targets       []presetTargetDraft
+	targets       []*presetTargetDraft
 	selected      int
 	active        int
 	message       string
@@ -173,16 +255,18 @@ const (
 )
 
 type presetTargetDraft struct {
+	resizeText    string
 	sizeText      string
 	resizeMinText string
 }
 
-func newPresetTargetDraft(preset compressionPreset) presetTargetDraft {
+func newPresetTargetDraft(preset compressionPreset) *presetTargetDraft {
 	floor := preset.targetResizeMinDimension
 	if floor == 0 {
 		floor = defaultPresetTargetResizeMinDimension
 	}
-	return presetTargetDraft{
+	return &presetTargetDraft{
+		resizeText:    preset.resizeLimits().text(),
 		sizeText:      presetTargetSizeText(preset.targetSizeBytes),
 		resizeMinText: strconv.Itoa(floor),
 	}
@@ -217,7 +301,8 @@ func (s *application) settingsHaveChanges() bool {
 	}
 	for index, target := range e.targets {
 		preset := s.presets[index]
-		if target.sizeText != presetTargetSizeText(preset.targetSizeBytes) ||
+		if target.resizeText != preset.resizeLimits().text() ||
+			target.sizeText != presetTargetSizeText(preset.targetSizeBytes) ||
 			(preset.targetResizeMinDimension != 0 && target.resizeMinText != strconv.Itoa(preset.targetResizeMinDimension)) {
 			return true
 		}
@@ -271,7 +356,7 @@ func (s *application) setSettingsOpen(open bool) {
 	}
 	s.settingsOpen = true
 	active := 0
-	targets := make([]presetTargetDraft, len(s.presets))
+	targets := make([]*presetTargetDraft, len(s.presets))
 	for index, preset := range s.presets {
 		targets[index] = newPresetTargetDraft(preset)
 		if preset.name == s.scheme {
@@ -357,7 +442,7 @@ func (s *application) hasQuickOverrides() bool {
 		s.lossless != saved.lossless ||
 		s.metadata != saved.metadata ||
 		s.outputFormat != saved.outputFormat ||
-		s.maxDimension != saved.maxDimension ||
+		s.resizeLimits != saved.resizeLimits() ||
 		s.targetSizeBytes != saved.targetSizeBytes ||
 		s.targetResizeMinDimension != saved.targetResizeMinDimension
 }
@@ -406,10 +491,14 @@ func (s *application) quickSetOutputFormat(format compress.OutputFormat) {
 }
 
 func (s *application) quickSetMaxDimension(dim int) {
-	if s.modalOpen() || compress.ValidateMaxDimension(dim) != nil || s.maxDimension == dim {
+	s.quickSetResize(resizeLimits{maxDimension: dim})
+}
+
+func (s *application) quickSetResize(limits resizeLimits) {
+	if s.modalOpen() || limits.validate() != nil || s.resizeLimits == limits {
 		return
 	}
-	s.maxDimension = dim
+	s.resizeLimits = limits
 	s.applyQuickAdjustment(false)
 }
 
@@ -487,14 +576,15 @@ func (s *application) applyScheme(name string) bool {
 		if preset.name == name {
 			changed := s.quality != preset.quality || s.png != preset.png ||
 				s.lossless != preset.lossless || s.metadata != preset.metadata ||
-				s.outputFormat != preset.outputFormat || s.maxDimension != preset.maxDimension ||
+				s.outputFormat != preset.outputFormat || s.resizeLimits != preset.resizeLimits() ||
 				s.targetSizeBytes != preset.targetSizeBytes ||
 				s.activePresetSnapshot().effectiveTargetResizeMinDimension() != preset.effectiveTargetResizeMinDimension()
 			formatChanged := s.outputFormat != preset.outputFormat || s.lossless != preset.lossless
 			s.scheme = name
 			s.quality, s.png = preset.quality, preset.png
 			s.lossless, s.metadata = preset.lossless, preset.metadata
-			s.outputFormat, s.maxDimension = preset.outputFormat, preset.maxDimension
+			s.outputFormat = preset.outputFormat
+			s.resizeLimits = preset.resizeLimits()
 			s.targetSizeBytes = preset.targetSizeBytes
 			s.targetResizeMinDimension = preset.targetResizeMinDimension
 			if changed {
@@ -563,7 +653,8 @@ func (s *application) duplicatePreset() {
 		}
 	}
 	editor.presets = append(editor.presets, preset)
-	editor.targets = append(editor.targets, editor.targets[editor.selected])
+	draft := *editor.targets[editor.selected]
+	editor.targets = append(editor.targets, &draft)
 	editor.selected = len(editor.presets) - 1
 	editor.message, editor.confirmDelete = "", false
 	editor.focusField, editor.selectName = "preset-name", true
@@ -613,6 +704,16 @@ func (s *application) saveSettingsEdits() {
 	for index, target := range s.editor.targets {
 		preset := &presets[index]
 		preset.name = strings.TrimSpace(preset.name)
+		if mode, _ := preset.resizeLimits().selection(); mode != resizeNone {
+			limits, err := parseResizeValue(mode, target.resizeText)
+			if err != nil {
+				s.showPresetValidationError(&presetValidationError{index: index, field: presetResizeValueField, err: err})
+				return
+			}
+			if preset.resizeLimits().validate() == nil {
+				preset.setResizeLimits(limits)
+			}
+		}
 		size, err := compress.ParseTargetSize(target.sizeText)
 		if err != nil {
 			s.showPresetValidationError(&presetValidationError{index: index, field: "preset-target-size-input", err: err})
@@ -690,6 +791,9 @@ func (s *application) compressionOptions() compress.Options {
 		Metadata:                 s.metadata,
 		OutputFormat:             s.outputFormat,
 		MaxDimension:             s.maxDimension,
+		MaxWidth:                 s.maxWidth,
+		MaxHeight:                s.maxHeight,
+		ScalePercent:             s.scalePercent,
 		TargetSizeBytes:          s.targetSizeBytes,
 		TargetResizeMinDimension: s.activePresetSnapshot().effectiveTargetResizeMinDimension(),
 	}

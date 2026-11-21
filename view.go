@@ -605,6 +605,9 @@ func (s *application) activePresetSnapshot() compressionPreset {
 		metadata:                 s.metadata,
 		outputFormat:             s.outputFormat,
 		maxDimension:             s.maxDimension,
+		maxWidth:                 s.maxWidth,
+		maxHeight:                s.maxHeight,
+		scalePercent:             s.scalePercent,
 		targetSizeBytes:          s.targetSizeBytes,
 		targetResizeMinDimension: s.targetResizeMinDimension,
 		output:                   s.output,
@@ -623,11 +626,20 @@ func (s *application) singleReplacesOriginal() bool {
 	return s.output.replacesFile(sourceFormat, targetFormat)
 }
 
-func quickDimensionLabel(maxDim int) string {
-	if maxDim <= 0 {
+func quickDimensionLabel(limits resizeLimits) string {
+	mode, value := limits.selection()
+	switch mode {
+	case resizeLongEdge:
+		return fmt.Sprintf("≤ %d", value)
+	case resizeWidth:
+		return fmt.Sprintf("宽 ≤ %d", value)
+	case resizeHeight:
+		return fmt.Sprintf("高 ≤ %d", value)
+	case resizePercent:
+		return fmt.Sprintf("%d%%", value)
+	default:
 		return "原尺寸"
 	}
-	return fmt.Sprintf("≤ %d", maxDim)
 }
 
 func outputPreviewMetadata(result *compress.Result) string {
@@ -756,7 +768,7 @@ func (s *application) presetOverview(c *ui.Context) {
 					}
 				}).Width(0).Grow(1).MinWidth(0)
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "格式尺寸").FontSize(12).TextColor(metadataColor(c)).Width(56).Shrink(0)
 			formatTweaked := hasSaved && s.outputFormat != saved.outputFormat
 			formats := []compress.OutputFormat{
@@ -774,23 +786,34 @@ func (s *application) presetOverview(c *ui.Context) {
 							s.quickSetOutputFormat(format)
 						}
 					}
-				}).Width(0).Grow(1).MinWidth(0)
+				}).Width(0).Grow(1).MinWidth(0).PaddingX(4).Gap(3)
 
-			dimTweaked := hasSaved && s.maxDimension != saved.maxDimension
-			dimDisplay := quickDimensionLabel(s.maxDimension)
+			dimTweaked := hasSaved && s.resizeLimits != saved.resizeLimits()
+			dimDisplay := quickDimensionLabel(s.resizeLimits)
 			quickPickerButton(c, "quick-dimension-picker", "快速切换尺寸缩放", dimDisplay,
-				"临时限制本次输出长边，不修改预设", 12, 500, disabled, dimTweaked, func(menu *ui.Menu) {
+				"临时调整本次输出尺寸 · "+presetResizeLabel(s.resizeLimits), 12, 500, disabled, dimTweaked, func(menu *ui.Menu) {
 					menu.MaxWidth(200)
 					for _, option := range resizeDimensionPresets {
-						itemLabel := option.label
-						if option.value > 0 {
-							itemLabel = fmt.Sprintf("长边 ≤ %dpx", option.value)
-						}
-						if menu.Item(itemLabel).Radio(s.maxDimension == option.value).Disabled(disabled).Chosen() {
+						limits := resizeLimits{maxDimension: option.value}
+						if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
 							s.quickSetMaxDimension(option.value)
 						}
 					}
-				}).Width(82).Shrink(0)
+					menu.Separator()
+					for _, percent := range [...]int{75, 50, 25} {
+						limits := resizeLimits{scalePercent: percent}
+						if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
+							s.quickSetResize(limits)
+						}
+					}
+					menu.Separator()
+					if menu.Item("编辑预设缩放…").Disabled(disabled).Chosen() {
+						s.openPresetSettings()
+						if s.editor != nil {
+							s.editor.focusField = presetResizeModeField
+						}
+					}
+				}).Width(90).Shrink(0).PaddingX(4).Gap(3)
 		})
 		if summary := presetProcessingSummary(active); summary != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {

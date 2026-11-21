@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -488,5 +489,64 @@ func TestCLICompressPresetAndValidationErrors(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("missing file check sanity")
+	}
+}
+
+func TestCLIResizeModes(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "photo.jpg")
+	original := writeTestJPEG(t, source, 320, 240, 95)
+	settings := filepath.Join(dir, "settings.json")
+	preset := compressionPreset{name: "按高缩放", quality: 80, png: compress.DefaultPNGOptions(), maxHeight: 144}
+	if err := saveSettings(settings, []compressionPreset{preset}, preset.name); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name          string
+		flags         []string
+		width, height int
+	}{
+		{"inherit", nil, 192, 144},
+		{"width", []string{"--max-width", "160"}, 160, 120},
+		{"height", []string{"--max-height=96"}, 128, 96},
+		{"percentage", []string{"--scale-percent", "25"}, 80, 60},
+		{"full scale", []string{"--scale-percent", "100"}, 320, 240},
+		{"legacy override", []string{"--max-dim", "128"}, 128, 96},
+		{"disable inherited resize", []string{"--max-width", "0"}, 320, 240},
+		{"no upscale", []string{"--max-width", "640"}, 320, 240},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "result.jpg")
+			args := append([]string{source, "--settings", settings, "--preset", preset.name, "-o", output}, tc.flags...)
+			result := runFormatConvertCompress(t, 1, args...).Files[0]
+			data := readFormatConvertFile(t, output)
+			config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+			if err != nil || config.Width != tc.width || config.Height != tc.height ||
+				result.Width != tc.width || result.Height != tc.height || result.OutputBytes != int64(len(data)) {
+				t.Fatalf("expected %dx%d in saved output and report: config=%+v result=%+v err=%v", tc.width, tc.height, config, result, err)
+			}
+		})
+	}
+	if !bytes.Equal(readFormatConvertFile(t, source), original) {
+		t.Fatal("resizing a copy changed the source image")
+	}
+	for _, flags := range [][]string{
+		{"--max-width", "63"}, {"--max-height", "16385"}, {"--scale-percent=-1"}, {"--scale-percent", "101"},
+		{"--max-width", "0", "--max-height", "96"}, {"--max-dim", "128", "--scale-percent", "50"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := runCLIContext(t.Context(), append([]string{"compress", source}, flags...), &stdout, &stderr); code != 2 || stderr.Len() == 0 {
+			t.Errorf("invalid resize flags %q: exit=%d stderr=%q", flags, code, stderr.String())
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"presets", "--settings", settings, "--json"}
+	if code := runCLIContext(t.Context(), args, &stdout, &stderr); code != 0 {
+		t.Fatalf("presets JSON: exit=%d stderr=%q", code, stderr.String())
+	}
+	var report cliPresetsReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || len(report.Presets) != 1 || report.Presets[0].MaxHeight != 144 {
+		t.Fatalf("resize mode missing from presets JSON: %v\n%s", err, stdout.String())
 	}
 }

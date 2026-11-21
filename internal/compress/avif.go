@@ -69,7 +69,7 @@ func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize
 	if err != nil {
 		return nil, nil, err
 	}
-	resized, _, err := resizeImage(ctx, normalizeOrientation(decoded, source.orientation), options.MaxDimension)
+	resized, err := resizeImage(ctx, normalizeOrientation(decoded, source.orientation), options)
 	if err != nil {
 		return nil, nil, fmt.Errorf("缩放图片已取消：%w", err)
 	}

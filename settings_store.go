@@ -48,6 +48,9 @@ type storedPreset struct {
 	Metadata                 compress.MetadataPolicy `json:"metadata,omitempty"`
 	OutputFormat             compress.OutputFormat   `json:"output_format,omitempty"`
 	MaxDimension             int                     `json:"max_dimension,omitempty"`
+	MaxWidth                 int                     `json:"max_width,omitempty"`
+	MaxHeight                int                     `json:"max_height,omitempty"`
+	ScalePercent             int                     `json:"scale_percent,omitempty"`
 	TargetSizeBytes          int64                   `json:"target_size_bytes,omitempty"`
 	TargetResizeMinDimension int                     `json:"target_resize_min_dimension,omitempty"`
 	Output                   *presetSaveOptions      `json:"output,omitempty"`
@@ -119,8 +122,8 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		if err := preset.outputFormat.Validate(); err != nil {
 			return invalid("preset-output-format", fmt.Errorf("预设「%s」的输出格式无效：%w", preset.name, err))
 		}
-		if err := compress.ValidateMaxDimension(preset.maxDimension); err != nil {
-			return invalid("preset-max-dimension", fmt.Errorf("预设「%s」的缩放尺寸无效：%w", preset.name, err))
+		if err := preset.resizeLimits().validate(); err != nil {
+			return invalid(presetResizeModeField, fmt.Errorf("预设「%s」的缩放尺寸无效：%w", preset.name, err))
 		}
 		if err := compress.ValidateTargetSizeBytes(preset.targetSizeBytes); err != nil {
 			return invalid("preset-target-size", fmt.Errorf("预设「%s」的目标体积无效：%w", preset.name, err))
@@ -254,6 +257,9 @@ func loadFullSettings(path string) (appSettings, error) {
 			metadata:                 preset.Metadata,
 			outputFormat:             preset.OutputFormat,
 			maxDimension:             preset.MaxDimension,
+			maxWidth:                 preset.MaxWidth,
+			maxHeight:                preset.MaxHeight,
+			scalePercent:             preset.ScalePercent,
 			targetSizeBytes:          preset.TargetSizeBytes,
 			targetResizeMinDimension: preset.TargetResizeMinDimension,
 		}
@@ -421,6 +427,9 @@ func saveFullSettings(path string, cfg appSettings) error {
 			Metadata:                 preset.metadata,
 			OutputFormat:             preset.outputFormat,
 			MaxDimension:             preset.maxDimension,
+			MaxWidth:                 preset.maxWidth,
+			MaxHeight:                preset.maxHeight,
+			ScalePercent:             preset.scalePercent,
 			TargetSizeBytes:          preset.targetSizeBytes,
 			TargetResizeMinDimension: preset.targetResizeMinDimension,
 		}

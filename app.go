@@ -40,17 +40,17 @@ type selectedImage struct {
 // Application state is read and changed on MyGo's main thread. Background work
 // receives immutable values and delivers its result through Window.Update.
 type application struct {
-	window                   *mygo.Window
-	settingsWindow           *mygo.Window
-	file                     *selectedImage
-	quality                  float64
-	scheme                   string
-	theme                    themeMode
-	png                      compress.PNGOptions
-	lossless                 bool
-	metadata                 compress.MetadataPolicy
-	outputFormat             compress.OutputFormat
-	maxDimension             int
+	window         *mygo.Window
+	settingsWindow *mygo.Window
+	file           *selectedImage
+	quality        float64
+	scheme         string
+	theme          themeMode
+	png            compress.PNGOptions
+	lossless       bool
+	metadata       compress.MetadataPolicy
+	outputFormat   compress.OutputFormat
+	resizeLimits
 	targetSizeBytes          int64
 	targetResizeMinDimension int
 	autoCompress             bool

@@ -1,6 +1,6 @@
 // Package compress compresses static JPEG, PNG, WebP, and AVIF images and
 // accepts HEIC/HEIF input on macOS. Re-encoding can normalize orientation and
-// downscale to a configured long edge.
+// downscale to a configured long edge, width, height, or percentage.
 package compress
 
 import (
@@ -34,16 +34,23 @@ const (
 )
 
 type Options struct {
-	Quality                  int // JPEG, WebP, and AVIF quality in [1, 100].
-	PNG                      PNGOptions
-	Lossless                 bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
-	Metadata                 MetadataPolicy // "", "icc", or "strip".
-	OutputFormat             OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
-	MaxDimension             int            // 0 = original size; otherwise [64, 16384] max long edge (downscale only).
-	TargetSizeBytes          int64          // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
-	TargetResizeMinDimension int            // 0 = disabled; otherwise [64, 16384] minimum long edge for lossy target-size fallback.
-	Threads                  int            // Optional native encoder thread cap; <= 0 selects automatic default.
-	SkipOverwriteSnapshot    bool           // Skip SHA-256 overwrite snapshot when caller only writes copies.
+	Quality      int // JPEG, WebP, and AVIF quality in [1, 100].
+	PNG          PNGOptions
+	Lossless     bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
+	Metadata     MetadataPolicy // "", "icc", or "strip".
+	OutputFormat OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
+
+	// Set at most one resize field. Zero disables that mode. Pixel limits
+	// are in [64, 16384] and apply to the image's displayed orientation.
+	MaxDimension int // Maximum long edge.
+	MaxWidth     int // Maximum width.
+	MaxHeight    int // Maximum height.
+	ScalePercent int // [1, 100], where 100 keeps the original dimensions.
+
+	TargetSizeBytes          int64 // 0 = disabled; otherwise [MinTargetSizeBytes, MaxTargetSizeBytes].
+	TargetResizeMinDimension int   // 0 = disabled; otherwise [64, 16384] minimum long edge for lossy target-size fallback.
+	Threads                  int   // Optional native encoder thread cap; <= 0 selects automatic default.
+	SkipOverwriteSnapshot    bool  // Skip SHA-256 overwrite snapshot when caller only writes copies.
 }
 
 // PNGOptions controls lossy color quantization. The zero value uses the
@@ -176,7 +183,7 @@ func validateOptions(options Options) error {
 	if err := options.OutputFormat.Validate(); err != nil {
 		return err
 	}
-	if err := ValidateMaxDimension(options.MaxDimension); err != nil {
+	if err := ValidateResizeOptions(options.MaxDimension, options.MaxWidth, options.MaxHeight, options.ScalePercent); err != nil {
 		return err
 	}
 	if err := ValidateTargetSizeBytes(options.TargetSizeBytes); err != nil {
@@ -248,19 +255,20 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		return nil, fmt.Errorf("压缩已取消：%w", err)
 	}
 	targetFormat := ResolveOutputFormat(format, options.OutputFormat, options.Lossless)
-	if format == "png" && targetFormat != format {
+	// Same-format PNG keeps its legacy raster orientation for the default
+	// and long-edge modes. The newer modes use the displayed orientation.
+	usePNGOrientation := targetFormat != format || options.MaxWidth > 0 || options.MaxHeight > 0 || options.ScalePercent > 0
+	if format == "png" && usePNGOrientation {
 		sourceOrient = pngOrientation(data)
 	}
 	source := compressionSource{
 		data: data, pixelSource: pixelSource, config: config,
 		format: format, targetFormat: targetFormat, orientation: sourceOrient,
 	}
-	longEdge := max(config.Width, config.Height)
-	if options.MaxDimension > 0 {
-		longEdge = min(longEdge, options.MaxDimension)
-	}
+	width, height := source.displayDimensions()
+	baselineWidth, baselineHeight, _ := resizeDimensionsForOptions(width, height, options)
 	minDimension := options.TargetResizeMinDimension
-	canTargetResize := !options.Lossless && options.TargetSizeBytes > 0 && minDimension > 0 && longEdge > minDimension
+	canTargetResize := !options.Lossless && options.TargetSizeBytes > 0 && minDimension > 0 && max(baselineWidth, baselineHeight) > minDimension
 	baselinePreview := preview
 	if canTargetResize {
 		// The preview must come from the winning candidate.
@@ -272,12 +280,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	}
 	selected := baseline
 	if canTargetResize && int64(len(baseline.data)) > options.TargetSizeBytes {
-		if format == "png" && targetFormat == "png" {
+		if format == "png" && !usePNGOrientation {
 			source.orientation = pngOrientation(data)
 		}
 		selected, err = searchTargetResize(ctx, baseline, options.TargetSizeBytes, minDimension, func(longEdge int) (*encodedImage, error) {
+			// Each probe resamples the source directly at its own long-edge cap.
 			probe := options
 			probe.MaxDimension = longEdge
+			probe.MaxWidth, probe.MaxHeight, probe.ScalePercent = 0, 0, 0
 			return source.encodeAtDimension(ctx, probe, nil)
 		})
 		if err != nil {
@@ -364,15 +374,20 @@ type encodedImage struct {
 	unchanged      bool
 }
 
+func (source *compressionSource) displayDimensions() (int, int) {
+	width, height := source.config.Width, source.config.Height
+	if source.orientation >= 5 && source.orientation <= 8 {
+		return height, width
+	}
+	return width, height
+}
+
 func (source *compressionSource) encodeAtDimension(ctx context.Context, options Options, preview *image.Image) (*encodedImage, error) {
 	data, pixelSource, config := source.data, source.pixelSource, source.config
 	sourceFormat, targetFormat, sourceOrient := source.format, source.targetFormat, source.orientation
 	converting := targetFormat != sourceFormat
-	width, height := config.Width, config.Height
-	if sourceOrient >= 5 && sourceOrient <= 8 {
-		width, height = height, width
-	}
-	resizedWidth, resizedHeight, needsResize := resizedDimensions(width, height, options.MaxDimension)
+	width, height := source.displayDimensions()
+	resizedWidth, resizedHeight, needsResize := resizeDimensionsForOptions(width, height, options)
 	transforming := converting || needsResize
 	forcedOutput := false
 
@@ -420,10 +435,9 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				return nil, decodeErr
 			}
 			oriented := normalizeOrientation(decoded, sourceOrient)
-			var resized image.Image
-			resized, _, err = resizeImage(ctx, oriented, options.MaxDimension)
-			if err != nil {
-				return nil, fmt.Errorf("缩放图片已取消：%w", err)
+			resized, resizeErr := resizeImage(ctx, oriented, options)
+			if resizeErr != nil {
+				return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
 			}
 			outBounds := resized.Bounds()
 			width, height = outBounds.Dx(), outBounds.Dy()
@@ -566,7 +580,7 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				return nil, decodeErr
 			}
 			if needsResize {
-				img, _, err = resizeImage(ctx, img, options.MaxDimension)
+				img, err = resizeImage(ctx, img, options)
 				if err != nil {
 					return nil, fmt.Errorf("缩放图片已取消：%w", err)
 				}
@@ -601,18 +615,18 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 	default: // png
 		pngInput := pixelSource
 		pngConfig := config
-		needsPNGReencode := sourceFormat == "jpeg" || sourceFormat == "webp" ||
-			needsResize || (converting && sourceOrient > 1)
+		// Bake any selected EXIF orientation into the pixels before PNG
+		// optimization, which can remove the orientation tag.
+		needsPNGReencode := sourceFormat == "jpeg" || sourceFormat == "webp" || needsResize || sourceOrient > 1
 		if needsPNGReencode {
 			decoded, decodeErr := source.decodePixels(ctx)
 			if decodeErr != nil {
 				return nil, decodeErr
 			}
 			oriented := normalizeOrientation(decoded, sourceOrient)
-			var resized image.Image
-			resized, _, err = resizeImage(ctx, oriented, options.MaxDimension)
-			if err != nil {
-				return nil, fmt.Errorf("缩放图片已取消：%w", err)
+			resized, resizeErr := resizeImage(ctx, oriented, options)
+			if resizeErr != nil {
+				return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
 			}
 			var colorChunks [][]byte
 			if options.Metadata != MetadataStrip {
@@ -649,7 +663,7 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 			forcedOutput = true
 		}
 		var stripped bool
-		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, transforming)
+		encoded, stripped, err = compressPNG(ctx, pngInput, pngConfig, options, preview, transforming || needsPNGReencode)
 		if err == nil && len(encoded) > maxInputSize {
 			err = fmt.Errorf("输出超过 64 MiB 限制")
 		}

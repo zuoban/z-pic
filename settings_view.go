@@ -107,6 +107,11 @@ func (s *application) settingsNavigation(c *ui.Context) {
 
 // Categories and destinations share the same quiet, inset selection treatment.
 func settingsSegments(c *ui.Context, key, label string, selected *int, disabled bool, options ...string) ui.Element {
+	track, _ := settingsSegmentsWithSelection(c, key, label, selected, disabled, options...)
+	return track
+}
+
+func settingsSegmentsWithSelection(c *ui.Context, key, label string, selected *int, disabled bool, options ...string) (track, selection ui.Element) {
 	t := c.Theme()
 	parts := ui.SegmentedBase(c.Key(key), selected, len(options))
 	trackH := settingsControlHeight(c, 36)
@@ -122,6 +127,7 @@ func settingsSegments(c *ui.Context, key, label string, selected *int, disabled 
 				Border(1, ui.Transparent).TextColor(t.TextMuted)
 			weight := 400
 			if *selected == index {
+				selection = segment
 				segment.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c)).TextColor(t.Text)
 				settingsGlassControl(segment, c, 30, disabled, ui.Transparent)
 				weight = 500
@@ -135,7 +141,7 @@ func settingsSegments(c *ui.Context, key, label string, selected *int, disabled 
 			segment.Children(func() { ui.Text(c, option).FontSize(settingsFontSize(c, 13)).FontWeight(weight).SingleLine() })
 		}
 	})
-	return parts.Track.FillEqually()
+	return parts.Track.FillEqually(), selection
 }
 
 func (s *application) generalSettingsContent(c *ui.Context) {

@@ -63,13 +63,29 @@ func presetOutputFormatLabel(format compress.OutputFormat) string {
 	}
 }
 
+func presetResizeLabel(limits resizeLimits) string {
+	mode, value := limits.selection()
+	switch mode {
+	case resizeLongEdge:
+		return fmt.Sprintf("长边 ≤ %dpx", value)
+	case resizeWidth:
+		return fmt.Sprintf("宽度 ≤ %dpx", value)
+	case resizeHeight:
+		return fmt.Sprintf("高度 ≤ %dpx", value)
+	case resizePercent:
+		return fmt.Sprintf("缩至 %d%%", value)
+	default:
+		return "原尺寸"
+	}
+}
+
 func presetProcessingSummary(preset compressionPreset) string {
 	var parts []string
 	if preset.outputFormat != compress.OutputFormatKeep {
 		parts = append(parts, presetOutputFormatLabel(preset.outputFormat))
 	}
-	if preset.maxDimension > 0 {
-		parts = append(parts, fmt.Sprintf("长边 ≤ %dpx", preset.maxDimension))
+	if limits := preset.resizeLimits(); limits != (resizeLimits{}) {
+		parts = append(parts, presetResizeLabel(limits))
 	}
 	if preset.targetSizeBytes > 0 {
 		parts = append(parts, "体积 ≤ "+compress.FormatTargetSize(preset.targetSizeBytes))
@@ -421,33 +437,7 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			}
 			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
-		// Max dimension downscale
-		ui.Column(c).FillWidth().Gap(6).Children(func() {
-			dimLabel := "不限制"
-			if preset.maxDimension > 0 {
-				dimLabel = fmt.Sprintf("长边 ≤ %d px", preset.maxDimension)
-			}
-			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "尺寸缩放").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
-				ui.Text(c, dimLabel).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
-			})
-			dimIdx := -1
-			labels := make([]string, len(resizeDimensionPresets))
-			for i, opt := range resizeDimensionPresets {
-				labels[i] = opt.label
-				if preset.maxDimension == opt.value {
-					dimIdx = i
-				}
-			}
-			seg := settingsSegments(c, "preset-max-dimension", "尺寸缩放", &dimIdx, locked, labels...).FillWidth()
-			s.focusSettingsField(seg, "preset-max-dimension")
-			if seg.Changed() && dimIdx >= 0 && dimIdx < len(resizeDimensionPresets) {
-				preset.maxDimension = resizeDimensionPresets[dimIdx].value
-				s.editor.message = ""
-			}
-			ui.Text(c, "仅缩小超过上限的图片，保持原比例不放大。").
-				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
-		})
+		s.presetResizeSection(c, preset)
 		s.presetTargetSizeSection(c, preset)
 		// Metadata policy
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -487,9 +477,94 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 	})
 }
 
+func (s *application) presetResizeSection(c *ui.Context, preset *compressionPreset) {
+	editor := s.editor
+	locked := s.settingsDraftLocked()
+	target := editor.targets[editor.selected]
+	text := &target.resizeText
+	mode, _ := preset.resizeLimits().selection()
+	setLimits := func(limits resizeLimits) {
+		preset.setResizeLimits(limits)
+		*text = limits.text()
+		editor.message = ""
+	}
+	reveal := editor.focusField == presetResizeModeField && !locked
+	section := ui.Column(c).FillWidth().Gap(6)
+	section.Children(func() {
+		ui.Text(c, "尺寸缩放").FontSize(settingsFontSize(c, 13)).FontWeight(500)
+		modes, selected := settingsSegmentsWithSelection(c, presetResizeModeField, "尺寸缩放", &mode, locked,
+			"原尺寸", "按长边", "按宽度", "按高度", "按百分比")
+		if reveal {
+			selected.Focus(ui.FocusOptions{PreventScroll: true})
+			editor.focusField = ""
+		}
+		if modes.Changed() {
+			value := [...]int{0, 1920, 1920, 1080, 50}[mode]
+			setLimits(resizeLimitsFor(mode, value))
+			reveal = true
+		}
+		if mode == resizeNone || mode == resizeLongEdge {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "长边快捷值（px）").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
+				for _, choice := range resizeDimensionPresets[1:] {
+					button := settingsButton(c, "resize-quick-"+choice.label, choice.label, 30, locked).
+						Width(0).MinWidth(0).Grow(1).PaddingX(4)
+					if button.Clicked() {
+						mode = resizeLongEdge
+						setLimits(resizeLimits{maxDimension: choice.value})
+						reveal = true
+					}
+				}
+			})
+		}
+
+		note := fmt.Sprintf("超过上限时等比缩小。像素上限可设为 %d–%d px。", compress.MinResizeDimension, compress.MaxResizeDimension)
+		if mode == resizePercent {
+			note = "按原尺寸的百分比等比缩小。100% 保持原尺寸。"
+		}
+		var problem error
+		var input ui.Element
+		if mode != resizeNone {
+			caption := [...]string{"", "长边上限（px）", "宽度上限（px）", "高度上限（px）", "缩放比例（%）"}[mode]
+			_, problem = parseResizeValue(mode, *text)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				label := ui.Text(c, caption).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Grow(1)
+				// Undo history belongs to this draft and mode.
+				key := struct {
+					draft *presetTargetDraft
+					mode  int
+				}{target, mode}
+				input = ui.TextInput(c.Key(key), text).LabelledBy(label).Description(note).
+					Width(settingsFontSize(c, 112)).Height(settingsControlHeight(c, 32)).
+					FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+				styleGlassField(input, c, 32)
+				s.focusSettingsField(input, presetResizeValueField)
+				if input.Changed() {
+					var limits resizeLimits
+					limits, problem = parseResizeValue(mode, *text)
+					if problem == nil {
+						preset.setResizeLimits(limits)
+					}
+					editor.message = ""
+				}
+			})
+		}
+		if problem != nil {
+			danger := c.Theme().Danger
+			input.Invalid(true).Border(1, danger).ErrorMessage(ui.Text(c, problem.Error()).
+				FontSize(settingsFontSize(c, 12)).TextColor(danger).FillWidth().MaxLines(2))
+		} else {
+			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+		}
+	})
+	if reveal {
+		section.ScrollIntoView()
+	}
+}
+
 func (s *application) presetTargetSizeSection(c *ui.Context, preset *compressionPreset) {
 	editor := s.editor
-	target := &editor.targets[editor.selected]
+	target := editor.targets[editor.selected]
 	text := &target.sizeText
 	_, problem := compress.ParseTargetSize(*text)
 	locked := s.settingsDraftLocked()
@@ -588,14 +663,18 @@ func (s *application) presetTargetResizeFields(c *ui.Context, preset *compressio
 		input.Invalid(true).Border(1, danger).ErrorMessage(ui.Text(c, problem.Error()).
 			FontSize(settingsFontSize(c, 12)).TextColor(danger).FillWidth().MaxLines(2))
 	}
-	note := "体积仍超出目标时等比缩小，长边以设定值为下限。"
+	note := "手动缩放后，若体积仍超出目标且长边高于下限，会尝试继续等比缩小。"
 	switch {
 	case preset.lossless:
 		note = "无损模式下暂停自动缩小。"
 	case preset.targetSizeBytes == 0:
 		note = "设置目标体积后生效。"
-	case problem == nil && preset.maxDimension > 0 && preset.maxDimension <= floor:
-		note = "尺寸上限低于或等于长边下限时，以尺寸上限为准。"
+	case problem == nil && preset.maxDimension > 0:
+		editor := s.editor
+		limits, err := parseResizeValue(resizeLongEdge, editor.targets[editor.selected].resizeText)
+		if err == nil && limits.maxDimension <= floor {
+			note = "手动缩放后的长边已达到或低于下限，自动缩小将保留该尺寸。"
+		}
 	}
 	ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 }

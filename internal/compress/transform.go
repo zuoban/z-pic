@@ -76,6 +76,33 @@ func ValidateMaxDimension(maxDim int) error {
 	return nil
 }
 
+// ValidateResizeOptions accepts at most one nonzero setting. Pixel limits must
+// be within [MinResizeDimension, MaxResizeDimension], and percentages within [1, 100].
+func ValidateResizeOptions(maxDimension, maxWidth, maxHeight, scalePercent int) error {
+	if err := ValidateMaxDimension(maxDimension); err != nil {
+		return err
+	}
+	if maxWidth != 0 && (maxWidth < MinResizeDimension || maxWidth > MaxResizeDimension) {
+		return fmt.Errorf("最大宽度必须为 0（不缩放）或 %d 到 %d 之间", MinResizeDimension, MaxResizeDimension)
+	}
+	if maxHeight != 0 && (maxHeight < MinResizeDimension || maxHeight > MaxResizeDimension) {
+		return fmt.Errorf("最大高度必须为 0（不缩放）或 %d 到 %d 之间", MinResizeDimension, MaxResizeDimension)
+	}
+	if scalePercent < 0 || scalePercent > 100 {
+		return fmt.Errorf("缩放百分比必须为 0（不缩放）或 1 到 100 之间")
+	}
+	enabled := 0
+	for _, value := range [...]int{maxDimension, maxWidth, maxHeight, scalePercent} {
+		if value != 0 {
+			enabled++
+		}
+	}
+	if enabled > 1 {
+		return fmt.Errorf("最大边长、最大宽度、最大高度和缩放百分比只能设置一项")
+	}
+	return nil
+}
+
 func resizedDimensions(width, height, maxDim int) (int, int, bool) {
 	if maxDim <= 0 || width <= 0 || height <= 0 {
 		return width, height, false
@@ -91,14 +118,38 @@ func resizedDimensions(width, height, maxDim int) (int, int, bool) {
 	return max(1, int(math.Round(float64(width)*scale))), maxDim, true
 }
 
-func resizeImage(ctx context.Context, img image.Image, maxDim int) (image.Image, bool, error) {
+func resizeDimensionsForOptions(width, height int, options Options) (int, int, bool) {
+	if width <= 0 || height <= 0 {
+		return width, height, false
+	}
+	switch {
+	case options.MaxWidth > 0 && options.MaxWidth < width:
+		return options.MaxWidth, scaledDimension(height, options.MaxWidth, width), true
+	case options.MaxHeight > 0 && options.MaxHeight < height:
+		return scaledDimension(width, options.MaxHeight, height), options.MaxHeight, true
+	case options.ScalePercent > 0 && options.ScalePercent < 100:
+		w := scaledDimension(width, options.ScalePercent, 100)
+		h := scaledDimension(height, options.ScalePercent, 100)
+		return w, h, w != width || h != height
+	default:
+		return resizedDimensions(width, height, options.MaxDimension)
+	}
+}
+
+func scaledDimension(size, numerator, denominator int) int {
+	// Round to the nearest pixel with half-pixels rounded up. The product
+	// can exceed 32 bits even with a validated input and resize settings.
+	return max(1, int((int64(size)*int64(numerator)+int64(denominator)/2)/int64(denominator)))
+}
+
+func resizeImage(ctx context.Context, img image.Image, options Options) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	bounds := img.Bounds()
-	dstW, dstH, changed := resizedDimensions(bounds.Dx(), bounds.Dy(), maxDim)
+	dstW, dstH, changed := resizeDimensionsForOptions(bounds.Dx(), bounds.Dy(), options)
 	if !changed {
-		return img, false, nil
+		return img, nil
 	}
 	dstBounds := image.Rect(0, 0, dstW, dstH)
 	var dst xdraw.Image
@@ -112,9 +163,9 @@ func resizeImage(ctx context.Context, img image.Image, maxDim int) (image.Image,
 	}
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, xdraw.Src, nil)
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return dst, true, nil
+	return dst, nil
 }
 
 func encodeResizedPNG(ctx context.Context, img image.Image, chunks [][]byte) ([]byte, error) {
