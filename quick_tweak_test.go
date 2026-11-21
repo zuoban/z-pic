@@ -184,29 +184,36 @@ func TestQuickTweakAutoCompressAndSamePresetReset(t *testing.T) {
 	app.load(jpgPath)
 	(<-updates)() // load done -> starts auto-compress
 	(<-updates)() // initial compression done
-	if app.busy || app.result == nil {
-		t.Fatalf("initial auto-compress failed: busy=%v result=%v", app.busy, app.result)
+	assertJPEGResult := func(stage string, width, height int) {
+		t.Helper()
+		if app.busy || app.result == nil {
+			t.Fatalf("%s: expected completed compression, busy=%v message=%q", stage, app.busy, app.message)
+		}
+		result := app.result
+		if result.Format != "jpeg" || result.Width != width || result.Height != height {
+			t.Fatalf("%s: expected %d×%d JPEG, got %d×%d %s", stage, width, height, result.Width, result.Height, result.Format)
+		}
 	}
+	assertJPEGResult("initial auto-compression", 80, 60)
 
-	// Quick format tweak triggers auto-compress when autoCompress is enabled.
-	app.quickSetOutputFormat(compress.OutputFormatWebP)
+	// JPEG resizing exercises auto-compress on platforms without bundled encoders.
+	app.quickSetMaxDimension(64)
 	if !app.busy || app.phase != "正在压缩图片" {
 		t.Fatalf("quick tweak with autoCompress must trigger compression: busy=%v phase=%q", app.busy, app.phase)
 	}
 	(<-updates)()
-	if app.busy || app.result == nil || app.result.Format != "webp" {
-		t.Fatalf("quick tweaked compression must output webp: busy=%v result=%+v", app.busy, app.result)
-	}
+	assertJPEGResult("quick resize", 64, 48)
 
 	// Re-selecting the same preset resets the quick override cleanly.
 	app.setScheme("均衡")
-	if app.hasQuickOverrides() || app.outputFormat != compress.OutputFormatKeep {
-		t.Fatalf("re-selecting current preset must clear temporary override: fmt=%q", app.outputFormat)
+	if app.hasQuickOverrides() || app.maxDimension != 0 {
+		t.Fatalf("re-selecting current preset must clear temporary resize: max dimension=%d", app.maxDimension)
 	}
 	if !app.busy {
 		t.Fatal("resetting via setScheme with autoCompress must re-compress")
 	}
 	(<-updates)()
+	assertJPEGResult("reset to preset", 80, 60)
 }
 
 func TestSizeGrowthWarningAndHintsSingleAndBatch(t *testing.T) {
