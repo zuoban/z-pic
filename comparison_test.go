@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -564,5 +565,56 @@ func TestComparisonZeroWidthViewportStopsRequestingAnimationFrames(t *testing.T)
 	}
 	if tester.FramePending() {
 		t.Fatal("recovered preview must settle without pending animation frames")
+	}
+}
+
+func TestComparisonDoubleClickTogglesZoomAndPreservesSplit(t *testing.T) {
+	s := testLargeComparisonApplication()
+	tester := ui.NewTester(s.view, 960, 660)
+	canvas := comparisonCanvas(t, tester)
+	bounds := canvas.Bounds
+	clickX := bounds.X + bounds.W*0.25
+	clickY := bounds.Y + bounds.H*0.5
+
+	tester.ClickAt(clickX, clickY)
+	tester.ClickAt(clickX, clickY)
+	if s.comparison.scale != 1 {
+		t.Fatalf("double click in fit mode must zoom to 1:1, got %.2f", s.comparison.scale)
+	}
+	if math.Abs(s.comparison.split-50) > 0.5 {
+		t.Fatalf("double click off-divider must preserve split at 50, got %.2f", s.comparison.split)
+	}
+
+	tester.Advance(time.Second)
+	tester.ClickAt(clickX, clickY)
+	tester.ClickAt(clickX, clickY)
+	if s.comparison.scale != 0 {
+		t.Fatalf("double click while zoomed must return to fit mode, got %.2f", s.comparison.scale)
+	}
+	if math.Abs(s.comparison.split-50) > 0.5 {
+		t.Fatalf("double click reset must keep split at 50, got %.2f", s.comparison.split)
+	}
+
+	if err := tester.Click("原图"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Advance(time.Second)
+	tester.ClickAt(clickX, clickY)
+	tester.ClickAt(clickX, clickY)
+	if s.comparison.scale != 1 {
+		t.Fatalf("double click in single preview mode must zoom to 1:1, got %.2f", s.comparison.scale)
+	}
+}
+
+func TestSupportsAlphaFormat(t *testing.T) {
+	for _, format := range []string{"png", "webp", "avif", "heic"} {
+		if !supportsAlphaFormat(format) {
+			t.Fatalf("%s must enable alpha checkerboard", format)
+		}
+	}
+	for _, format := range []string{"jpeg", "jpg", ""} {
+		if supportsAlphaFormat(format) {
+			t.Fatalf("%q must not enable alpha checkerboard", format)
+		}
 	}
 }

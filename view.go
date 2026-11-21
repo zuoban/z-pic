@@ -521,26 +521,50 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 			return
 		}
 		summaryBody := func() {
-			if s.result != nil {
+			if s.file != nil {
 				s.imageResultSummary(c, "压缩结果")
 			}
 			s.singleOutputSummary(c)
 			if s.file != nil {
 				resolvedFmt := compress.ResolveOutputFormat(s.file.format, s.outputFormat, s.lossless)
+				formatTip := ""
 				switch {
 				case resolvedFmt == "png" && !s.lossless:
-					ui.Text(c, "PNG 有损压缩可能改变渐变与半透明边缘").
-						FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+					formatTip = "PNG 有损压缩可能改变渐变与半透明边缘"
 				case resolvedFmt == "jpeg" && s.file.format != "jpeg":
-					ui.Text(c, "转为 JPEG 时透明区域将自动填充白色背景").
-						FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+					formatTip = "转为 JPEG 时透明区域将自动填充白色背景"
 				}
+				if formatTip != "" {
+					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Start).Children(func() {
+						ui.Icon(c, presetInfoIcon).Size(14, 14).Padding(1, 0, 0, 0).
+							TextColor(metadataColor(c)).Shrink(0)
+						ui.Text(c, formatTip).FontSize(12).TextColor(t.TextMuted).
+							Width(0).Grow(1).MaxLines(2)
+					})
+				}
+			} else {
+				ui.Column(c).Padding(12).Gap(8).Radius(innerRadius(c)).
+					Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
+					ui.Text(c, "快捷入口").FontSize(12).FontWeight(500).TextColor(metadataColor(c))
+					for _, tip := range []struct{ title, detail string }{
+						{"拖入文件", "直接拖入单张、多张图片或文件夹"},
+						{"剪贴板", "按 " + shortcutLabel("V") + " 粘贴图片，或直接压缩剪贴板 PNG"},
+						{"悬浮窗", "置顶接收本地文件或浏览器网页图片"},
+					} {
+						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
+							ui.Text(c, tip.title).FontSize(12).FontWeight(500).TextColor(t.TextMuted).
+								Width(48).Shrink(0)
+							ui.Text(c, tip.detail).FontSize(12).TextColor(metadataColor(c)).
+								Width(0).Grow(1).MaxLines(2)
+						})
+					}
+				})
 			}
 		}
 		if mobile {
 			ui.Column(c).FillWidth().Gap(12).Children(summaryBody)
 		} else {
-			ui.Scroll(c.Key("single-compression-summary")).Grow(1).MinHeight(0).FillWidth().Gap(12).Children(summaryBody)
+			ui.Scroll(c.Key("single-compression-summary")).Grow(1).MinHeight(0).FillWidth().Gap(10).Children(summaryBody)
 		}
 		if s.busy {
 			s.workFeedback(c)
@@ -564,27 +588,30 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 			}
 		}
 		if s.result != nil {
-			label, hint := s.saveActionDescription()
-			replaces := s.singleReplacesOriginal()
-			disabled := s.modalOpen() || (replaces && !s.canOverwrite())
-			var save ui.Element
-			if replaces {
-				save = destructiveAction(c, "save", label, 36, disabled)
-			} else {
-				save = primaryAction(c, "save", label, disabled).Height(36)
-			}
-			save.FillWidth().KeyShortcuts(ui.Cmd, ui.KeyS).
-				Tooltip(hint + " · " + shortcutLabel("S")).OnClick(s.savePresetResult)
-			ui.Row(c).FillWidth().Gap(8).Children(func() {
-				quietButton(c, "save-copy", "另存副本", 32, s.modalOpen()).Width(0).Grow(1).
-					OnClick(s.saveCopy)
-				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
-					KeyShortcuts(ui.Cmd, ui.KeyC).
-					Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
+			ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				label, hint := s.saveActionDescription()
+				replaces := s.singleReplacesOriginal()
+				disabled := s.modalOpen() || (replaces && !s.canOverwrite())
+				var save ui.Element
+				if replaces {
+					save = destructiveAction(c, "save", label, 36, disabled)
+				} else {
+					save = primaryAction(c, "save", label, disabled).Height(36)
+				}
+				save.FillWidth().KeyShortcuts(ui.Cmd, ui.KeyS).
+					Tooltip(hint + " · " + shortcutLabel("S")).OnClick(s.savePresetResult)
+				ui.Row(c).FillWidth().Gap(8).Children(func() {
+					quietButton(c, "save-copy", "另存副本", 32, s.modalOpen()).Width(0).Grow(1).
+						OnClick(s.saveCopy)
+					quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
+						KeyShortcuts(ui.Cmd, ui.KeyC).
+						Tooltip("将压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
+				})
+				dragExportControl(c, "drag-out-single", "拖出压缩图", "拖出压缩图",
+					"按住拖动压缩后的图片到 Finder、聊天窗口或其他应用",
+					32, 12, 500, s.modalOpen(), s.singleDragExportData, s.dragExportOptions()).FillWidth()
 			})
-			dragExportControl(c, "drag-out-single", "拖出压缩图", "拖出压缩图",
-				"按住拖动压缩后的图片到 Finder、聊天窗口或其他应用",
-				32, 12, 500, s.modalOpen(), s.singleDragExportData, s.dragExportOptions()).FillWidth()
 		}
 	})
 }
@@ -923,10 +950,13 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 	t := c.Theme()
 	original, output := "—", "—"
 	label, color := "待压缩", t.TextMuted
-	note, hint := "", ""
+	statusDetail, note, hint := "", "", ""
 	ratio := -1.0
 	if s.file != nil {
 		original = formatSize(s.file.size)
+	}
+	if s.busy && s.result == nil {
+		label, color = "压缩中…", accentForeground(t)
 	}
 	if s.result != nil {
 		original = formatSize(s.result.OriginalSize)
@@ -942,6 +972,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 		case s.result.OutputSize > s.result.OriginalSize && s.result.OriginalSize > 0:
 			grew := float64(s.result.OutputSize-s.result.OriginalSize) / float64(s.result.OriginalSize) * 100
 			label, color = fmt.Sprintf("增大 %.1f%%", grew), t.Warning
+			statusDetail = "+" + formatSize(s.result.OutputSize-s.result.OriginalSize)
 			sourceFormat := ""
 			if s.file != nil {
 				sourceFormat = s.file.format
@@ -950,6 +981,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 		case s.result.OriginalSize > 0:
 			saved := float64(s.result.OriginalSize-s.result.OutputSize) / float64(s.result.OriginalSize) * 100
 			label, color = fmt.Sprintf("减少 %.1f%%", saved), t.Success
+			statusDetail = "节省 " + formatSize(s.result.OriginalSize-s.result.OutputSize)
 		}
 		var notes []string
 		if note != "" {
@@ -976,7 +1008,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 			label, color = "压缩失败", t.Danger
 		}
 	}
-	summaryCardWithHint(c, title, label, color, "原始大小", original, "输出大小", output, note, hint, ratio, nil)
+	summaryCardLayout(c, title, label, statusDetail, color, "原始大小", original, "输出大小", output, note, hint, ratio, nil)
 }
 
 func (s *application) saveActionDescription() (string, string) {
@@ -1035,6 +1067,10 @@ func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Col
 }
 
 func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note, hint string, ratio float64, footer func()) {
+	summaryCardLayout(c, title, status, "", statusColor, firstLabel, firstValue, secondLabel, secondValue, note, hint, ratio, footer)
+}
+
+func summaryCardLayout(c *ui.Context, title, status, statusDetail string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note, hint string, ratio float64, footer func()) {
 	t := c.Theme()
 	width, _ := c.Size()
 	compact := width >= 720 && width < 960
@@ -1084,17 +1120,22 @@ func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Col
 			case ratio >= 1:
 				barColor = t.TextMuted.Alpha(0.45)
 			}
-			ui.Box(c).FillWidth().Height(4).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
+			ui.Box(c).FillWidth().Height(6).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
 				Draw(func(p *ui.Painter, r ui.Rect) {
-					p.Fill(r, meterTrackColor(c), 2)
-					fillW := max(4, r.W*float32(min(1, ratio)))
-					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2)
+					p.Fill(r, meterTrackColor(c), 3)
+					fillW := max(6, r.W*float32(min(1, ratio)))
+					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 3)
 				})
 		}
 		if statusColor == t.Success || statusColor == t.Warning || statusColor == t.Danger {
-			ui.Row(c).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				statusCapsule(c, status, statusColor).Role(ui.RoleStatus).
 					MaxLines(2).Tooltip(status)
+				if statusDetail != "" {
+					ui.Text(c, statusDetail).FontSize(12).FontWeight(500).FontFeatures("tnum").
+						TextColor(metadataColor(c)).Width(0).Grow(1).TextAlign(ui.End).
+						SingleLine().TruncateMiddle().Tooltip(statusDetail)
+				}
 			})
 		} else {
 			ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).

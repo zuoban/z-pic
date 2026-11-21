@@ -16,16 +16,20 @@ const (
 const comparisonDividerHitHalfWidth = 20
 
 type comparisonView struct {
-	mode              int
-	split             float64
-	scale             float64
-	offset            ui.Point
-	viewport          ui.Rect
-	viewportProbed    bool
-	panning           bool
-	panSuppressSlider bool
-	panFrozenSplit    float64
-	panPointer        ui.Point
+	mode               int
+	split              float64
+	scale              float64
+	offset             ui.Point
+	viewport           ui.Rect
+	viewportProbed     bool
+	panning            bool
+	panSuppressSlider  bool
+	panFrozenSplit     float64
+	preClickSplit      float64
+	hasPreClickSplit   bool
+	pendingDoubleClick bool
+	doubleClickOrigin  ui.Point
+	panPointer         ui.Point
 }
 
 func (s *application) previewLocked() bool {
@@ -221,9 +225,40 @@ func (s *application) previewZoomToolbar(c *ui.Context) {
 			}
 			ui.Text(c, hint).FontSize(12).TextColor(metadataColor(c)).
 				Width(0).Grow(1).SingleLine().TextAlign(ui.End).
-				Tooltip("拖动分隔线对比；放大后拖动图片或双指滚动平移；滚轮或捏合缩放")
+				Tooltip("拖动分隔线对比；双击画布切换 1:1 / 适应；放大后拖动图片或双指滚动平移；滚轮或捏合缩放")
 		}
 	})
+}
+
+func supportsAlphaFormat(format string) bool {
+	switch format {
+	case "png", "webp", "avif", "heic":
+		return true
+	default:
+		return false
+	}
+}
+
+func drawAlphaCheckerboard(p *ui.Painter, bounds ui.Rect, dark bool) {
+	if bounds.W <= 0 || bounds.H <= 0 {
+		return
+	}
+	lightTile, darkTile := ui.Hex("#f6f7f9"), ui.Hex("#e7eaf0")
+	if dark {
+		lightTile, darkTile = ui.Hex("#161920"), ui.Hex("#202530")
+	}
+	const tile = float32(10)
+	p.Fill(bounds, lightTile, 0)
+	for row, y := 0, bounds.Y; y < bounds.Y+bounds.H; row, y = row+1, y+tile {
+		h := min(tile, bounds.Y+bounds.H-y)
+		for col, x := 0, bounds.X; x < bounds.X+bounds.W; col, x = col+1, x+tile {
+			if (row+col)%2 == 0 {
+				continue
+			}
+			w := min(tile, bounds.X+bounds.W-x)
+			p.Fill(ui.Rect{X: x, Y: y, W: w, H: h}, darkTile, 0)
+		}
+	}
 }
 
 func (s *application) previewCanvas(c *ui.Context) {
@@ -232,7 +267,11 @@ func (s *application) previewCanvas(c *ui.Context) {
 	if !comparing || s.previewLocked() {
 		s.comparison.panning, s.comparison.panSuppressSlider = false, false
 	}
+	if s.previewLocked() {
+		s.comparison.pendingDoubleClick = false
+	}
 	var canvas ui.Element
+	splitBeforeSlider := s.comparison.split
 	if comparing {
 		splitTarget := &s.comparison.split
 		suppressSlider := s.comparison.panning || s.comparison.panSuppressSlider
@@ -295,10 +334,21 @@ func (s *application) previewCanvas(c *ui.Context) {
 	canvas.HandleInput(func(event ui.InputEvent) bool {
 		if s.previewLocked() {
 			s.comparison.panning = false
+			s.comparison.pendingDoubleClick = false
 			return false
 		}
 		switch event.Kind {
 		case ui.InputPointerDown:
+			if event.Button == 0 && event.Clicks == 2 {
+				s.comparison.pendingDoubleClick = true
+				s.comparison.doubleClickOrigin = ui.Point{X: event.X, Y: event.Y}
+			} else {
+				s.comparison.pendingDoubleClick = false
+				if event.Button == 0 && event.Clicks == 1 && comparing {
+					s.comparison.preClickSplit = splitBeforeSlider
+					s.comparison.hasPreClickSplit = true
+				}
+			}
 			if !comparing || !s.previewCanPan(s.comparison.viewport) {
 				return false
 			}
@@ -314,6 +364,10 @@ func (s *application) previewCanvas(c *ui.Context) {
 			s.comparison.panPointer = ui.Point{X: event.X, Y: event.Y}
 			return true
 		case ui.InputPointerMove:
+			if s.comparison.pendingDoubleClick &&
+				math.Hypot(float64(event.X-s.comparison.doubleClickOrigin.X), float64(event.Y-s.comparison.doubleClickOrigin.Y)) > 4 {
+				s.comparison.pendingDoubleClick = false
+			}
 			if !s.comparison.panning {
 				return false
 			}
@@ -323,11 +377,31 @@ func (s *application) previewCanvas(c *ui.Context) {
 			s.clampPreviewOffset()
 			return true
 		case ui.InputPointerUp:
-			if !s.comparison.panning {
-				return false
-			}
+			wasPanning := s.comparison.panning
 			s.comparison.panning = false
-			return true
+			if s.comparison.pendingDoubleClick {
+				origin := s.comparison.doubleClickOrigin
+				s.comparison.pendingDoubleClick = false
+				if math.Hypot(float64(event.X-origin.X), float64(event.Y-origin.Y)) <= 4 {
+					frozen := splitBeforeSlider
+					if s.comparison.hasPreClickSplit {
+						frozen = s.comparison.preClickSplit
+					}
+					s.comparison.hasPreClickSplit = false
+					if s.comparison.scale == 0 {
+						s.zoomPreview(1, origin)
+					} else {
+						s.resetPreviewFit()
+					}
+					if comparing {
+						s.comparison.split = frozen
+						s.comparison.panSuppressSlider = true
+						s.comparison.panFrozenSplit = frozen
+					}
+					return true
+				}
+			}
+			return wasPanning
 		case ui.InputZoom:
 			s.zoomPreview(s.previewScale(s.comparison.viewport)*float64(event.Scale),
 				ui.Point{X: event.X, Y: event.Y})
@@ -347,21 +421,50 @@ func (s *application) previewCanvas(c *ui.Context) {
 	})
 	canvas.Draw(func(p *ui.Painter, bounds ui.Rect) {
 		imageBounds := s.previewImageRect(bounds)
+		sourceFormat := ""
+		if s.file != nil {
+			sourceFormat = s.file.format
+		}
+		resultFormat := sourceFormat
+		if s.result != nil && s.result.Format != "" {
+			resultFormat = s.result.Format
+		}
 		if !comparing {
 			bitmap := s.preview
+			displayFormat := resultFormat
+			if s.result == nil || s.overwritten || s.comparison.mode == previewOriginal {
+				displayFormat = sourceFormat
+			}
 			if s.result != nil && !s.overwritten && s.comparison.mode == previewOriginal {
 				bitmap = s.file.preview
 			}
+			if supportsAlphaFormat(displayFormat) {
+				p.Clip(imageBounds, 0, func() {
+					drawAlphaCheckerboard(p, imageBounds, t.Dark)
+				})
+			}
 			p.Image(bitmap, imageBounds, ui.FillBox)
+			p.Stroke(imageBounds, glassBorder(c), 0, 1)
 			return
 		}
 		divider := bounds.W * float32(s.comparison.split/100)
 		p.Clip(ui.Rect{X: bounds.X, Y: bounds.Y, W: divider, H: bounds.H}, 0, func() {
+			if supportsAlphaFormat(sourceFormat) {
+				p.Clip(imageBounds, 0, func() {
+					drawAlphaCheckerboard(p, imageBounds, t.Dark)
+				})
+			}
 			p.Image(s.file.preview, imageBounds, ui.FillBox)
 		})
 		p.Clip(ui.Rect{X: bounds.X + divider, Y: bounds.Y, W: bounds.W - divider, H: bounds.H}, 0, func() {
+			if supportsAlphaFormat(resultFormat) {
+				p.Clip(imageBounds, 0, func() {
+					drawAlphaCheckerboard(p, imageBounds, t.Dark)
+				})
+			}
 			p.Image(s.preview, imageBounds, ui.FillBox)
 		})
+		p.Stroke(imageBounds, glassBorder(c), 0, 1)
 	})
 	canvas.Children(func() {
 		if s.result == nil || s.overwritten {
@@ -382,26 +485,36 @@ func (s *application) previewCanvas(c *ui.Context) {
 		})
 	})
 	if comparing {
+		pointerX, _, pointerOver := canvas.PointerPosition()
+		dividerHovered := pointerOver && !s.comparison.panning && s.nearComparisonDivider(s.comparison.viewport.W, pointerX)
 		canvas.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			centerX := bounds.X + bounds.W*float32(s.comparison.split/100)
 			centerY := bounds.Y + bounds.H/2
 			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 3, ui.RGBA(0, 0, 0, 0.26))
-			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, ui.Hex("#ffffff"))
+			lineColor := ui.Hex("#ffffff")
+			if dividerHovered {
+				lineColor = accentForeground(t)
+			}
+			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, lineColor)
 			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
 			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
 			p.Shadow(handle, 16, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.22))
 			glass.Paint(p, handle, 16, glass.Glass{})
-			if c.Preferences().ReduceTransparency {
-				p.Stroke(handle, t.Text.Alpha(0.28), 16, 1)
-			} else {
-				p.Stroke(handle, ui.RGBA(255, 255, 255, 0.65), 16, 1)
+			handleBorder := ui.RGBA(255, 255, 255, 0.65)
+			chevronColor := t.Text
+			if dividerHovered {
+				handleBorder = accentForeground(t)
+				chevronColor = accentForeground(t)
+			} else if c.Preferences().ReduceTransparency {
+				handleBorder = t.Text.Alpha(0.28)
 			}
+			p.Stroke(handle, handleBorder, 16, 1.25)
 			p.StrokePolyline([][2]float32{
 				{handleX - 4, centerY - 4}, {handleX - 8, centerY}, {handleX - 4, centerY + 4},
-			}, 1.5, t.Text)
+			}, 1.5, chevronColor)
 			p.StrokePolyline([][2]float32{
 				{handleX + 4, centerY - 4}, {handleX + 8, centerY}, {handleX + 4, centerY + 4},
-			}, 1.5, t.Text)
+			}, 1.5, chevronColor)
 		})
 	}
 }

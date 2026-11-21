@@ -116,9 +116,12 @@ func (s *application) batchListPanel(c *ui.Context) {
 						quietButton(c, "batch-remove-failed", "移除失败项", 28, s.modalOpen()).
 							Tooltip("从队列移除全部失败的图片").
 							OnClick(s.removeFailedBatchItems)
-						quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
+						retryBtn := quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
 							Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
 							OnClick(s.retryFailedBatchItems)
+						if !s.modalOpen() {
+							retryBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
+						}
 					}
 				}
 				if compactQueue {
@@ -289,8 +292,17 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Th
 		} else if r.Hovered() {
 			background, border = glassControlHover(c), controlHoverBorder(c)
 		}
-		ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
-			Radius(innerRadius(c)).Background(background).Border(borderWidth, border).Children(func() {
+		rowCard := ui.Row(c).FillWidth().Padding(12).Gap(12).AlignItems(ui.Center).
+			Radius(innerRadius(c)).Background(background).Border(borderWidth, border)
+		if r.Selected() {
+			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
+				if bounds.H <= 20 {
+					return
+				}
+				p.Fill(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 10, W: 3, H: bounds.H - 20}, accentForeground(t), 1.5)
+			})
+		}
+		rowCard.Children(func() {
 			s.batchThumbnailView(c, item)
 			ui.Column(c).Width(0).Grow(1).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -350,8 +362,14 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 	if usesGlass(c) {
 		thumbRadius = 6
 	}
-	ui.Box(c).Size(64, 64).Shrink(0).Radius(thumbRadius).Background(panelStageBackground(c)).Border(1, glassBorder(c)).
-		Clip().Role(ui.RoleImage).Label(label).Children(func() {
+	box := ui.Box(c).Size(64, 64).Shrink(0).Radius(thumbRadius).Background(panelStageBackground(c)).Border(1, glassBorder(c)).
+		Clip().Role(ui.RoleImage).Label(label)
+	if entry != nil && entry.bitmap != nil && supportsAlphaFormat(item.format) {
+		box.Draw(func(p *ui.Painter, bounds ui.Rect) {
+			drawAlphaCheckerboard(p, bounds, t.Dark)
+		})
+	}
+	box.Children(func() {
 		if entry != nil && entry.bitmap != nil {
 			ui.Image(c, entry.bitmap).Fill().Fit(ui.Contain)
 			return
@@ -458,7 +476,8 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 	} else if item.status == batchFailed {
 		subTooltip = item.errMsg
 	}
-	bar := ui.Row(c).Gap(8).AlignItems(ui.Center)
+	bar := ui.Row(c).Padding(10, 12).Gap(8).Radius(innerRadius(c)).
+		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).AlignItems(ui.Center)
 	compact := width < 560 || width >= 720 && width < 1100
 	if compact {
 		bar.Column().AlignItems(ui.Stretch)
@@ -541,6 +560,7 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 		panel.FillWidth()
 	}
 	panel.Children(func() {
+		inlinePreviewMode := width >= 960 && s.result != nil && !s.overwritten
 		ui.Row(c).MinHeight(32).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			quietButton(c, "batch-back", "返回列表", 32, s.modalOpen()).
 				KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
@@ -552,6 +572,9 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 			}
 			ui.Textf(c, "%d / %d", posCurrent, posTotal).
 				FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Grow(1)
+			if inlinePreviewMode {
+				s.previewModeControl(c)
+			}
 			quietButton(c, "batch-prev", "上一张", 32, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).
 				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
 				Tooltip("上一张 · " + shortcutLabel("[")).
@@ -562,7 +585,11 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				OnClick(func() { s.stepBatchPreview(1) })
 		})
 		if s.preview != nil {
-			s.previewToolbar(c)
+			if inlinePreviewMode {
+				s.previewZoomToolbar(c)
+			} else {
+				s.previewToolbar(c)
+			}
 		}
 		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
 			Background(panelStageBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
@@ -665,22 +692,30 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 		ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
 			MaxLines(2).Tooltip(s.message)
 	}
-	if showOutput {
-		primaryAction(c, "batch-open-output", "打开输出文件夹", s.modalOpen()).Height(36).
-			OnClick(s.openOutputDir)
-	}
+	var donePaths []string
 	if !s.batch.previewOpen && !s.modalOpen() {
-		if donePaths := s.batchDoneOutputPaths(); len(donePaths) > 0 {
-			label := fmt.Sprintf("拖出已完成（%d 张）", len(donePaths))
-			dragExportControl(c, "drag-out-batch", label, label,
-				"按住将全部已完成的压缩文件直接拖到 Finder 或其他应用",
-				32, 12, 500, false, s.batchAllDoneDragExportData, s.dragExportOptions()).FillWidth()
-		}
+		donePaths = s.batchDoneOutputPaths()
 	}
-	if s.batch.previewOpen && s.result != nil {
-		quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
-			KeyShortcuts(ui.Cmd, ui.KeyC).
-			Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
+	hasCopyResult := s.batch.previewOpen && s.result != nil
+	if showOutput || len(donePaths) > 0 || hasCopyResult {
+		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			if showOutput {
+				primaryAction(c, "batch-open-output", "打开输出文件夹", s.modalOpen()).Height(36).
+					FillWidth().OnClick(s.openOutputDir)
+			}
+			if len(donePaths) > 0 {
+				label := fmt.Sprintf("拖出已完成（%d 张）", len(donePaths))
+				dragExportControl(c, "drag-out-batch", label, label,
+					"按住将全部已完成的压缩文件直接拖到 Finder 或其他应用",
+					32, 12, 500, false, s.batchAllDoneDragExportData, s.dragExportOptions()).FillWidth()
+			}
+			if hasCopyResult {
+				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
+					KeyShortcuts(ui.Cmd, ui.KeyC).
+					Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
+			}
+		})
 	}
 }
 
