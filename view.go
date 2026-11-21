@@ -309,43 +309,69 @@ func (s *application) previewPanel(c *ui.Context) {
 	}
 	panel.Children(func() {
 		if s.preview == nil {
-			ui.Column(c).Grow(1).FillWidth().MinHeight(240).Center().Padding(16).
-				Radius(panelRadius(c)).Background(emptyDropzoneSurface(c)).Border(1, glassBorder(c)).
-				Children(func() {
-					ui.Column(c).Center().Gap(18).Padding(24).Children(func() {
-						ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
-							bg := ui.Rect{X: bounds.X + 4, Y: bounds.Y + 4, W: 48, H: 48}
-							p.Fill(bg, statusTintSurface(c, t.Accent), 14)
-							p.Stroke(bg, statusTintBorder(c, accentForeground(t)), 14, 1)
-							frame := ui.Rect{X: bounds.X + 16, Y: bounds.Y + 18, W: 24, H: 20}
-							p.Stroke(frame, accentForeground(t), 4, 1.6)
-							p.Fill(ui.Rect{X: bounds.X + 21, Y: bounds.Y + 23, W: 3.5, H: 3.5}, accentForeground(t), 1.75)
-							p.StrokePolyline([][2]float32{
-								{bounds.X + 18, bounds.Y + 35},
-								{bounds.X + 25, bounds.Y + 28},
-								{bounds.X + 30, bounds.Y + 33},
-								{bounds.X + 34, bounds.Y + 29},
-								{bounds.X + 38, bounds.Y + 35},
-							}, 1.5, accentForeground(t))
-						})
-						ui.Column(c).Center().Gap(6).Children(func() {
-							ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(600)
-							formats := strings.Join(supportedImageFormats(), " · ")
-							ui.Text(c, formats+"  ·  最大 64 MiB").FontSize(12).FontFeatures("tnum").
-								TextColor(metadataColor(c)).SingleLine()
-						})
-						ui.Row(c).Gap(8).Children(func() {
-							primaryAction(c, "select", "选择图片", s.modalOpen()).Height(36).Padding(0, 18).
-								KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
-								OnClick(s.chooseFile)
-							quietButton(c, "select-folder", "选择文件夹", 36, s.modalOpen()).Padding(0, 16).
-								Tooltip("选择包含图片的文件夹").
-								OnClick(s.chooseFolder)
-						})
-						ui.Text(c, "本机处理不上传 · 支持 "+shortcutLabel("V")+" 粘贴或悬浮窗拖入网页图").
-							FontSize(12).TextColor(metadataColor(c)).SingleLine()
+			dropzone := ui.Column(c).Grow(1).FillWidth().MinHeight(240).Center().Padding(16).
+				Radius(panelRadius(c)).Background(emptyDropzoneSurface(c)).Border(1, glassBorder(c))
+			dropzone.Draw(func(p *ui.Painter, bounds ui.Rect) {
+				inset := float32(14)
+				if bounds.W <= inset*2+24 || bounds.H <= inset*2+24 {
+					return
+				}
+				dashColor := t.Text.Alpha(0.11)
+				if t.Dark {
+					dashColor = ui.RGBA(255, 255, 255, 0.12)
+				}
+				x1, y1 := bounds.X+inset, bounds.Y+inset
+				x2, y2 := bounds.X+bounds.W-inset, bounds.Y+bounds.H-inset
+				const seg, gap = float32(6), float32(6)
+				for x := x1 + 8; x < x2-8; x += seg + gap {
+					end := min(x+seg, x2-8)
+					p.Line(x, y1, end, y1, 1, dashColor)
+					p.Line(x, y2, end, y2, 1, dashColor)
+				}
+				for y := y1 + 8; y < y2-8; y += seg + gap {
+					end := min(y+seg, y2-8)
+					p.Line(x1, y, x1, end, 1, dashColor)
+					p.Line(x2, y, x2, end, 1, dashColor)
+				}
+			})
+			dropzone.Children(func() {
+				ui.Column(c).Center().Gap(18).Padding(24).Children(func() {
+					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
+						bg := ui.Rect{X: bounds.X + 4, Y: bounds.Y + 4, W: 48, H: 48}
+						p.Fill(bg, statusTintSurface(c, t.Accent), 14)
+						p.Stroke(bg, statusTintBorder(c, accentForeground(t)), 14, 1)
+						frame := ui.Rect{X: bounds.X + 16, Y: bounds.Y + 18, W: 24, H: 20}
+						p.Stroke(frame, accentForeground(t), 4, 1.6)
+						p.Fill(ui.Rect{X: bounds.X + 21, Y: bounds.Y + 23, W: 3.5, H: 3.5}, accentForeground(t), 1.75)
+						p.StrokePolyline([][2]float32{
+							{bounds.X + 18, bounds.Y + 35},
+							{bounds.X + 25, bounds.Y + 28},
+							{bounds.X + 30, bounds.Y + 33},
+							{bounds.X + 34, bounds.Y + 29},
+							{bounds.X + 38, bounds.Y + 35},
+						}, 1.5, accentForeground(t))
+					})
+					ui.Column(c).Center().Gap(6).Children(func() {
+						ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(600)
+						formats := strings.Join(supportedImageFormats(), " · ")
+						ui.Text(c, formats+"  ·  最大 64 MiB").FontSize(12).FontFeatures("tnum").
+							TextColor(metadataColor(c)).SingleLine()
+					})
+					ui.Row(c).Gap(8).Children(func() {
+						primaryAction(c, "select", "选择图片", s.modalOpen()).Height(36).Padding(0, 18).
+							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
+							OnClick(s.chooseFile)
+						quietButton(c, "select-folder", "选择文件夹", 36, s.modalOpen()).Padding(0, 16).
+							Tooltip("选择包含图片的文件夹").
+							OnClick(s.chooseFolder)
+					})
+					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "本机处理不上传 · 按").FontSize(12).TextColor(metadataColor(c)).SingleLine()
+						keyboardKeycap(c, "V")
+						ui.Text(c, "粘贴或拖入悬浮窗").FontSize(12).TextColor(metadataColor(c)).SingleLine()
 					})
 				})
+			})
 			return
 		}
 		s.previewUnifiedBar(c)
@@ -1069,16 +1095,22 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 		})
 		if ratio >= 0 {
 			barColor := t.Success
+			fillRatio := max(0, 1-ratio)
+			tooltip := fmt.Sprintf("已节省 %.1f%%（输出体积为原始体积的 %.1f%%）", fillRatio*100, ratio*100)
 			switch {
 			case ratio > 1:
 				barColor = t.Warning
+				fillRatio = 1
+				tooltip = fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)
 			case ratio >= 1:
 				barColor = t.TextMuted.Alpha(0.45)
+				fillRatio = 1
+				tooltip = "输出体积未减小（100.0%）"
 			}
-			ui.Box(c).FillWidth().Height(5).Tooltip(fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)).
+			ui.Box(c).FillWidth().Height(5).Tooltip(tooltip).
 				Draw(func(p *ui.Painter, r ui.Rect) {
 					p.Fill(r, meterTrackColor(c), 2.5)
-					fillW := max(5, r.W*float32(min(1, ratio)))
+					fillW := max(5, r.W*float32(min(1, fillRatio)))
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
 				})
 		}

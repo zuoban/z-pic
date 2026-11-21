@@ -505,8 +505,8 @@ func keycapSurface(c *ui.Context) ui.Color {
 }
 
 func keyboardKeycap(c *ui.Context, key string) ui.Element {
-	return ui.Text(c, shortcutLabel(key)).FontSize(12).FontFeatures("tnum").
-		TextColor(c.Theme().TextMuted).Padding(2, 8).Radius(4).
+	return ui.Text(c, shortcutLabel(key)).FontSize(11).FontWeight(500).FontFeatures("tnum").
+		TextColor(c.Theme().TextMuted).Padding(2, 7).Radius(5).
 		Background(keycapSurface(c)).Border(1, controlBorder(c)).SingleLine()
 }
 
@@ -704,9 +704,13 @@ func segmentedControl(c *ui.Context, key, label string, selected *int, height fl
 	if usesGlass(c) {
 		trackRadius, segRadius = height/2, max(6, height/2-2)
 	}
+	trackBg := tonalWellSurface(c)
+	if !usesGlass(c) && !t.Dark {
+		trackBg = ui.Hex("#e8ecf2")
+	}
 	parts.Track.Label(label).Height(height).Padding(2).Gap(2).
 		AlignItems(ui.Stretch).Radius(trackRadius).
-		Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).
+		Background(trackBg).Border(1, tonalWellBorder(c)).
 		Disabled(disabled).Children(func() {
 		for index, option := range options {
 			active := *selected == index

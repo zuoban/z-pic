@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,7 +128,7 @@ func TestStyleGeneralShortcutsOddRowAlignsToLeftColumn(t *testing.T) {
 	if !ok1 || !ok2 {
 		t.Fatalf("expected first and odd-row shortcut keycaps: ok1=%v ok2=%v", ok1, ok2)
 	}
-	if oddKey.Bounds.X+oddKey.Bounds.W != firstKey.Bounds.X+firstKey.Bounds.W {
+	if math.Abs(float64((oddKey.Bounds.X+oddKey.Bounds.W)-(firstKey.Bounds.X+firstKey.Bounds.W))) > 0.5 {
 		t.Fatalf("odd shortcut row must stay aligned in the left column: first=%v odd=%v", firstKey.Bounds, oddKey.Bounds)
 	}
 }

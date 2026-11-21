@@ -465,17 +465,17 @@ func (s *application) previewCanvas(c *ui.Context) {
 		if s.result == nil || s.overwritten {
 			return
 		}
-		ui.Row(c).Absolute().Top(12).Left(12).Right(12).Gap(8).Children(func() {
+		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
-				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(4, 12).Radius(badgeRadius(24)).Material(glass.Glass{}).
-					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
+				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(11).FontWeight(500).FontFeatures("tnum").
+					Padding(3, 10).Radius(badgeRadius(22)).Material(glass.Glass{}).
+					Border(1, hairlineDivider(c)).TextColor(t.Text).SingleLine()
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(12).FontWeight(500).FontFeatures("tnum").
-					Padding(4, 12).Radius(badgeRadius(24)).Material(glass.Glass{}).
-					Border(1, glassBorder(c)).TextColor(t.Text).SingleLine()
+				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).FontFeatures("tnum").
+					Padding(3, 10).Radius(badgeRadius(22)).Material(glass.Glass{}).
+					Border(1, hairlineDivider(c)).TextColor(t.Text).SingleLine()
 			}
 		})
 	})

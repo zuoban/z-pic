@@ -299,14 +299,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Th
 		}
 		rowCard := ui.Row(c).FillWidth().Padding(8, 10).Gap(10).AlignItems(ui.Center).
 			Radius(10).Background(background).Border(borderWidth, border)
-		if r.Selected() {
-			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
-				if bounds.H <= 20 {
-					return
-				}
-				p.Fill(ui.Rect{X: bounds.X + 2, Y: bounds.Y + 10, W: 3, H: bounds.H - 20}, accentForeground(t), 1.5)
-			})
-		} else {
+		if !r.Selected() {
 			divider := subtleRowDivider(c)
 			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 				p.Line(bounds.X+64, bounds.Y+bounds.H-0.5, bounds.X+bounds.W-10, bounds.Y+bounds.H-0.5, 1, divider)
@@ -536,7 +529,10 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			quietButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).Padding(0, 10).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
-			quietButton(c, "batch-remove", "移除", 30, s.modalOpen()).Padding(0, 10).
+			if !compact {
+				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+			}
+			destructiveAction(c, "batch-remove", "移除", 30, s.modalOpen()).Padding(0, 10).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}

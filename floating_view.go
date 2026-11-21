@@ -639,7 +639,7 @@ func (s *application) floatingGallery(c *ui.Context, indices []int) {
 		} else {
 			state := &s.floating.grid
 			state.Key, state.Label, state.Selected = key, label, &s.floating.cursor
-			gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 120,
+			gallery = ui.GridView(c.Key("floating-gallery-grid"), state, len(indices)+1, 136, 110,
 				func(position int) { s.floatingGalleryItem(c, indices, position, false, baseTheme) }).
 				Label("悬浮窗图片网格").Fill()
 		}
@@ -668,7 +668,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		if position == len(indices) {
 			_, selected := s.floatingSelectedImage()
 			foreground, iconColor := theme.TextMuted, theme.TextMuted
-			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(8).Radius(innerRadius(c)).
+			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(6).Radius(innerRadius(c)).
 				Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
 				Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 				Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
@@ -685,7 +685,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 				button.Height(52).Row().Gap(8)
 			}
 			button.Children(func() {
-				floatingIcon(c, "reveal", 16, iconColor)
+				floatingIcon(c, "reveal", 15, iconColor)
 				ui.Text(c, floatingRevealLabel()).FontSize(12).FontWeight(500).TextColor(foreground)
 			})
 			return
@@ -699,7 +699,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		if selected {
 			background, border, borderWidth = cardSelectionBackground(c), selectionBorder(c), 1.5
 		}
-		tile := ui.Column(c).Fill().Padding(8).Gap(5).Radius(innerRadius(c)).Background(background).
+		tile := ui.Column(c).Fill().Padding(6, 8).Gap(4).Radius(innerRadius(c)).Background(background).
 			Border(borderWidth, border).Tooltip(item.path)
 		if tile.Hovered() && !selected {
 			tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
@@ -712,11 +712,11 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 			if list {
 				image.Grow(0).Size(52, 38).Shrink(0)
 			} else {
-				image.Height(46).Grow(0).Shrink(0)
+				image.Height(42).Grow(0).Shrink(0)
 			}
 			image.Children(func() {
 				if bitmap != nil {
-					maxWidth, maxHeight := float32(96), float32(46)
+					maxWidth, maxHeight := float32(92), float32(42)
 					if list {
 						maxWidth, maxHeight = 52, 38
 					}

@@ -189,9 +189,10 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
 				downloadColor = t.TextMuted
 			}
-			ui.Row(c).FillWidth().Gap(8).Padding(6, 12).Radius(innerRadius(c)).
+			ui.Row(c).FillWidth().Gap(8).Padding(7, 12).Radius(innerRadius(c)).
 				Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
+				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
 				settingsButton(c, "settings-download-dir", "选择…", 28, locked).
@@ -225,17 +226,24 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			if twoColShortcuts {
 				ui.Column(c).FillWidth().Children(func() {
 					for row := 0; row < len(shortcuts); row += 2 {
-						if row > 0 {
-							ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
-						}
 						shortcutGap := float32(20)
 						if narrow {
 							shortcutGap = 12
 						}
 						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Center).Children(func() {
-							ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row].label, shortcuts[row].key) })
+							ui.Column(c).Width(0).Grow(1).Children(func() {
+								if row > 0 {
+									ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+								}
+								renderRow(shortcuts[row].label, shortcuts[row].key)
+							})
 							if row+1 < len(shortcuts) {
-								ui.Box(c).Width(0).Grow(1).Children(func() { renderRow(shortcuts[row+1].label, shortcuts[row+1].key) })
+								ui.Column(c).Width(0).Grow(1).Children(func() {
+									if row > 0 {
+										ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+									}
+									renderRow(shortcuts[row+1].label, shortcuts[row+1].key)
+								})
 							} else {
 								ui.Box(c).Width(0).Grow(1)
 							}
@@ -266,7 +274,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 	}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
 	locked := s.settingsDraftLocked()
-	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 66)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 68)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
@@ -277,7 +285,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
-					settingsGlassControl(segment, c, 66, locked, t.Accent.Alpha(0.14)).
+					settingsGlassControl(segment, c, 68, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
@@ -289,29 +297,37 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 				mode := option.mode
 				segment.Children(func() {
 					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
-						ui.Box(c).Size(46, 28).Draw(func(p *ui.Painter, r ui.Rect) {
-							lightWin, darkWin := ui.Hex("#f5f6f8"), ui.Hex("#151821")
-							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#202532")
-							lightBar, darkBar := ui.Hex("#e5e7eb"), ui.Hex("#2a3040")
+						ui.Box(c).Size(58, 34).Draw(func(p *ui.Painter, r ui.Rect) {
+							lightWin, darkWin := ui.Hex("#eef1f5"), ui.Hex("#141720")
+							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#202634")
+							lightCard, darkCard := ui.Hex("#dde2ec"), ui.Hex("#283042")
+							drawTrafficLights := func(x, y float32, dotColor ui.Color) {
+								for i := range 3 {
+									p.Fill(ui.Rect{X: x + float32(i)*4.5, Y: y, W: 2.5, H: 2.5}, dotColor, 1.25)
+								}
+							}
 							switch mode {
 							case themeLight:
 								p.Fill(r, lightWin, 5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.62, Y: r.Y, W: r.W * 0.38, H: r.H}, lightSide, 4)
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 5, W: 14, H: 3.5}, lightBar, 1.75)
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 19, H: 12}, ui.Hex("#dfe3ea"), 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.68, Y: r.Y + 18, W: r.W * 0.25, H: 4.5}, t.Accent, 2.25)
+								p.Fill(ui.Rect{X: r.X + r.W*0.60, Y: r.Y, W: r.W * 0.40, H: r.H}, lightSide, 4)
+								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#c4cad6"))
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 24, H: 17}, lightCard, 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 7, W: r.W * 0.27, H: 3.5}, lightCard, 1.75)
+								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 23, W: r.W * 0.27, H: 5}, t.Accent, 2.5)
 							case themeDark:
 								p.Fill(r, darkWin, 5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.62, Y: r.Y, W: r.W * 0.38, H: r.H}, darkSide, 4)
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 5, W: 14, H: 3.5}, darkBar, 1.75)
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 19, H: 12}, ui.Hex("#0b0d12"), 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.68, Y: r.Y + 18, W: r.W * 0.25, H: 4.5}, accentForeground(ui.DarkTheme()), 2.25)
+								p.Fill(ui.Rect{X: r.X + r.W*0.60, Y: r.Y, W: r.W * 0.40, H: r.H}, darkSide, 4)
+								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#475066"))
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 24, H: 17}, darkCard, 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 7, W: r.W * 0.27, H: 3.5}, ui.Hex("#364056"), 1.75)
+								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 23, W: r.W * 0.27, H: 5}, accentForeground(ui.DarkTheme()), 2.5)
 							default:
 								p.Fill(r, lightWin, 5)
 								p.Fill(ui.Rect{X: r.X + r.W/2, Y: r.Y, W: r.W / 2, H: r.H}, darkWin, 4)
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 7, W: 12, H: 14}, ui.Hex("#dfe3ea"), 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W/2 + 4, Y: r.Y + 7, W: 12, H: 14}, darkSide, 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W/2 + 6, Y: r.Y + 16, W: 9, H: 3.5}, accentForeground(ui.DarkTheme()), 1.75)
+								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#c4cad6"))
+								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 18, H: 17}, lightCard, 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W/2 + 5, Y: r.Y + 8, W: 18, H: 18}, darkSide, 2.5)
+								p.Fill(ui.Rect{X: r.X + r.W/2 + 8, Y: r.Y + 19, W: 12, H: 4}, accentForeground(ui.DarkTheme()), 2)
 							}
 							p.Stroke(r, controlBorder(c), 5, 1)
 						})
@@ -372,7 +388,13 @@ func (s *application) settingsFooter(c *ui.Context) {
 		width, _ := c.Size()
 		statusAbove := editor.message != "" || editor.notice != "" || presetChanged || (dirty && width < 560)
 		if statusAbove {
-			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).MaxLines(2).Tooltip(message)
+			statusText := ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).
+				FillWidth().Tooltip(message)
+			if editor.message != "" {
+				statusText.MaxLines(2)
+			} else {
+				statusText.SingleLine().TruncateMiddle()
+			}
 		}
 		ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			if editor.section == settingsPresets {
