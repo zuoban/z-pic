@@ -862,6 +862,117 @@ func TestBatchQueueFilterSearchAndRemoval(t *testing.T) {
 	}
 }
 
+func TestBatchTargetSizeMissedFilterAndSummaryShortcut(t *testing.T) {
+	app := newApplication()
+	app.batch = newBatchState([]batchItem{
+		{path: "/keep-z.jpg", absPath: "/keep-z.jpg", relPath: "keep-z.jpg", status: batchDone, targetSizeMissed: true},
+		{path: "/keep-a.jpg", absPath: "/keep-a.jpg", relPath: "keep-a.jpg", status: batchDone, targetSizeMissed: true},
+		{path: "/other.jpg", absPath: "/other.jpg", relPath: "other.jpg", status: batchDone, targetSizeMissed: true},
+		{path: "/keep-met.jpg", absPath: "/keep-met.jpg", relPath: "keep-met.jpg", status: batchDone},
+		{path: "/failed.jpg", absPath: "/failed.jpg", relPath: "failed.jpg", status: batchFailed, targetSizeMissed: true},
+		{path: "/pending.jpg", absPath: "/pending.jpg", relPath: "pending.jpg", status: batchPending},
+	})
+	app.batch.sort = batchSortName
+	app.floating.filter = batchFilterDone
+	tester := ui.NewTester(app.view, 760, 660)
+	const query = " KEEP "
+	tester.Key(ui.Cmd, ui.KeyF)
+	tester.Type(query)
+	if err := tester.Click("未达目标 3"); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.filteredBatchIndices(); !slices.Equal(got, []int{1, 0}) || app.batch.query != query ||
+		!tester.HasText("批量队列 · 2 / 6 张") {
+		t.Fatalf("the missed filter must preserve search and name sort: rows=%v query=%q", got, app.batch.query)
+	}
+	if err := tester.Click("已完成 4"); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.filteredBatchIndices(); !slices.Equal(got, []int{1, 3, 0}) {
+		t.Fatalf("completed results must include missed results, got %v", got)
+	}
+	const shortcut = "3 张未达目标体积"
+	button, ok := tester.AccessByRole(ui.RoleButton, shortcut)
+	if !ok || !slices.Contains(button.Controls, "批量图片列表") {
+		t.Fatalf("the shortcut must identify the queue list it controls: %+v", button)
+	}
+	if err := tester.Click("失败 1"); err != nil {
+		t.Fatal(err)
+	}
+	if !tester.HasText("没有找到匹配的图片") {
+		t.Fatal("expected the retained search to hide the failed item")
+	}
+
+	button, ok = tester.AccessByRole(ui.RoleButton, shortcut)
+	if !ok || !button.Focusable || button.Offscreen || button.Disabled ||
+		!strings.Contains(button.Description, "清除文件名搜索") {
+		t.Fatalf("the shortcut must remain actionable and describe the search reset: %+v", button)
+	}
+	for range len(tester.AccessAll()) {
+		if tester.Focused(shortcut) {
+			break
+		}
+		tester.Key(0, ui.KeyTab)
+	}
+	if !tester.Focused(shortcut) {
+		t.Fatal("Tab must reach the summary shortcut with an empty list")
+	}
+	tester.Key(0, ui.KeyEnter)
+	if got := app.filteredBatchIndices(); !slices.Equal(got, []int{1, 0, 2}) || app.batch.query != "" ||
+		app.batch.sort != batchSortName || app.batch.selected != 1 || !tester.Focused("批量图片列表") ||
+		!tester.HasText("批量队列 · 3 / 6 张") {
+		t.Fatalf("the shortcut must reveal and focus all sorted missed results: rows=%v query=%q selection=%d",
+			got, app.batch.query, app.batch.selected)
+	}
+	if field, ok := tester.AccessByRole(ui.RoleTextField, "筛选文件名"); !ok || field.Value != "" {
+		t.Fatalf("the visible search field must be cleared, got %q", field.Value)
+	}
+	tester.Key(0, ui.KeyDown)
+	if app.batch.selected != 0 {
+		t.Fatalf("down arrow must navigate the focused filtered list, got selection %d", app.batch.selected)
+	}
+	if got := app.floatingIndices(); !slices.Equal(got, []int{0, 1, 2, 3}) || app.floating.filter != batchFilterDone {
+		t.Fatalf("the floating gallery must retain its independent completed filter, got %v", got)
+	}
+}
+
+func TestBatchTargetSizeMissedFilterFitsQueueLimit(t *testing.T) {
+	app := newApplication()
+	items := make([]batchItem, maxBatchFiles)
+	for i := range items {
+		name := fmt.Sprintf("photo-%04d.jpg", i)
+		items[i] = batchItem{path: name, absPath: name, relPath: name, status: batchDone, targetSizeMissed: true}
+	}
+	app.batch = newBatchState(items)
+	tester := ui.NewTester(app.view, 760, 660)
+	label := fmt.Sprintf("未达目标 %d", maxBatchFiles)
+	measurement := ui.NewTester(func(c *ui.Context) {
+		app.applyTheme(c)
+		ui.Row(c).Children(func() {
+			ui.Text(c, label).FontSize(12).FontFeatures("tnum").SingleLine()
+		})
+	}, 300, 32)
+	text, measured := measurement.Find(label)
+	segment, ok := tester.AccessByRole(ui.RoleRadio, label)
+	if !measured || !ok || segment.Offscreen || segment.Bounds.W < text.W+12 {
+		t.Fatalf("the full missed count must fit the filter segment at minimum width: label=%+v segment=%+v", text, segment)
+	}
+	if err := tester.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	app.batch.list.ScrollToEnd()
+	tester.Frame()
+	if first, _ := app.batch.list.Visible(); first == 0 {
+		t.Fatal("expected the list to be scrolled away from the first item")
+	}
+	if err := tester.Click(fmt.Sprintf("%d 张未达目标体积", maxBatchFiles)); err != nil {
+		t.Fatal(err)
+	}
+	if first, _ := app.batch.list.Visible(); first != 0 || app.batch.selected != 0 {
+		t.Fatalf("the shortcut must scroll back to and select the first item: first=%d selected=%d", first, app.batch.selected)
+	}
+}
+
 func TestBatchFilteredPreviewNavigation(t *testing.T) {
 	s := newApplication()
 	s.batch = newBatchState([]batchItem{
@@ -2015,5 +2126,15 @@ func TestBatchDerivedCacheReuseAndInvalidation(test *testing.T) {
 	}
 	if !slices.Equal(first, []int{2, 1, 0}) {
 		test.Fatalf("recomputing visible items must not mutate previously returned slice: %v", first)
+	}
+
+	app.batch.filter = batchFilterTargetSizeMissed
+	if missed := app.filteredBatchIndices(); len(missed) != 0 {
+		test.Fatalf("expected no missed results in the cached view, got %v", missed)
+	}
+	app.batch.items[1].targetSizeMissed = true
+	if missed := app.filteredBatchIndices(); !slices.Equal(missed, []int{1}) || app.batch.cachedStats.targetSizeMissed != 1 {
+		test.Fatalf("updating only the missed flag must refresh the view and count: rows=%v count=%d",
+			missed, app.batch.cachedStats.targetSizeMissed)
 	}
 }

@@ -173,13 +173,29 @@ func TestTargetSizeBatchReportsRetainedFiles(t *testing.T) {
 		}
 	}
 	tester.Frame()
-	if app.batch.cachedStats.targetSizeMissed != 1 || !tester.HasText("未达目标") || !tester.HasText("跳过 2 张未减小 · 1 张未达目标体积") {
+	const shortcut = "1 张未达目标体积"
+	if app.batch.cachedStats.targetSizeMissed != 1 || !tester.HasText("未达目标 1") || !tester.HasText("跳过 2 张未减小") {
 		t.Fatalf("batch must count and mark the single unmet item: %+v", tester.Texts())
+	}
+	if err := tester.Click(shortcut); err != nil {
+		t.Fatal(err)
+	}
+	if app.batch.selected != 1 || !tester.HasText("批量队列 · 1 / 2 张") {
+		t.Fatal("the missed filter must include the retained file whose original size exceeded the target")
 	}
 	resetBatchItemState(&app.batch.items[1])
 	tester.Frame()
-	if app.batch.items[1].targetSizeBytes != 0 || app.batch.items[1].targetSizeMissed || app.batch.cachedStats.targetSizeMissed != 0 || tester.HasText("未达目标") {
-		t.Fatal("restarting an item must clear stale target results")
+	if _, ok := tester.AccessByRole(ui.RoleButton, shortcut); ok {
+		t.Fatal("restarting the last missed item must remove the summary shortcut")
+	}
+	if app.batch.items[1].targetSizeBytes != 0 || app.batch.items[1].targetSizeMissed || app.batch.cachedStats.targetSizeMissed != 0 ||
+		!tester.HasText("未达目标 0") || !tester.HasText("没有未达目标体积的图片") || !tester.HasText("显示全部") {
+		t.Fatal("restarting an item must clear stale target results and update the filtered empty state")
+	}
+	app.resetBatchRunState()
+	tester.Frame()
+	if app.batch.filter != batchFilterAll || !tester.HasText("批量队列 · 2 张") {
+		t.Fatal("resetting the batch results must return the queue to all items")
 	}
 }
 

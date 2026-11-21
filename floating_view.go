@@ -175,7 +175,7 @@ func (s *application) floatingIndices() []int {
 	}
 	indices := make([]int, 0, s.floatingImageCount())
 	for index := range s.floatingImageCount() {
-		if matchesBatchFilter(s.floatingImage(index), s.floating.filter, "") {
+		if matchesBatchStatus(s.floatingImage(index).status, s.floating.filter) {
 			indices = append(indices, index)
 		}
 	}

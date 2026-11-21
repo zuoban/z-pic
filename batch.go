@@ -24,6 +24,7 @@ const (
 	batchFilterPending
 	batchFilterDone
 	batchFilterFailed
+	batchFilterTargetSizeMissed // 主窗口专用，悬浮窗使用前四个状态筛选索引。
 )
 
 const (
@@ -409,8 +410,8 @@ func (s *application) resetBatchRunState() bool {
 		}
 	}
 	s.batch.done, s.batch.total, s.batch.currentName = 0, 0, ""
-	if hadProcessed && (s.batch.filter == batchFilterDone || s.batch.filter == batchFilterFailed) &&
-		len(s.filteredBatchIndices()) == 0 {
+	if hadProcessed && (s.batch.filter == batchFilterDone || s.batch.filter == batchFilterFailed ||
+		s.batch.filter == batchFilterTargetSizeMissed) && len(s.filteredBatchIndices()) == 0 {
 		s.batch.filter = batchFilterAll
 	}
 	return hadProcessed

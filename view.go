@@ -952,7 +952,7 @@ func (s *application) imageResultSummary(c *ui.Context, title string) {
 			label, color = "压缩失败", t.Danger
 		}
 	}
-	summaryCardWithHint(c, title, label, color, "原始大小", original, "输出大小", output, note, hint, ratio)
+	summaryCardWithHint(c, title, label, color, "原始大小", original, "输出大小", output, note, hint, ratio, nil)
 }
 
 func (s *application) saveActionDescription() (string, string) {
@@ -1007,10 +1007,10 @@ func summaryCard(c *ui.Context, title, status string, statusColor ui.Color, firs
 }
 
 func summaryCardWithNote(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note string, ratio float64) {
-	summaryCardWithHint(c, title, status, statusColor, firstLabel, firstValue, secondLabel, secondValue, note, "", ratio)
+	summaryCardWithHint(c, title, status, statusColor, firstLabel, firstValue, secondLabel, secondValue, note, "", ratio, nil)
 }
 
-func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note, hint string, ratio float64) {
+func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Color, firstLabel, firstValue, secondLabel, secondValue, note, hint string, ratio float64, footer func()) {
 	t := c.Theme()
 	width, _ := c.Size()
 	compact := width >= 720 && width < 960
@@ -1085,6 +1085,9 @@ func summaryCardWithHint(c *ui.Context, title, status string, statusColor ui.Col
 		if hint != "" {
 			ui.Text(c, hint).FontSize(12).TextColor(t.Warning).
 				MaxLines(2).Tooltip(hint)
+		}
+		if footer != nil {
+			footer()
 		}
 	})
 }

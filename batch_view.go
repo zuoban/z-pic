@@ -57,14 +57,15 @@ func (s *application) batchListPanel(c *ui.Context) {
 			filterRow.Wrap()
 		}
 		filterRow.Children(func() {
-			total, pending, done, failed, _, _, _ := s.batchStats()
+			stats := s.batch.cachedStats
 			labels := []string{
-				fmt.Sprintf("全部 %d", total), fmt.Sprintf("待处理 %d", pending),
-				fmt.Sprintf("已完成 %d", done), fmt.Sprintf("失败 %d", failed),
+				fmt.Sprintf("全部 %d", stats.total), fmt.Sprintf("待处理 %d", stats.pending),
+				fmt.Sprintf("已完成 %d", stats.done), fmt.Sprintf("失败 %d", stats.failed),
+				fmt.Sprintf("未达目标 %d", stats.targetSizeMissed),
 			}
 			seg := segmentedControl(c, "batch-filter", "队列筛选", &s.batch.filter, 32, false, labels...).
 				FillEqually().FillWidth().
-				Tooltip("筛选按整个队列计数；搜索在所选状态内查找")
+				Tooltip("按整个队列计数。未达目标的图片也计入已完成。搜索仅在当前筛选中查找。")
 			if seg.Changed() {
 				visible = s.filteredBatchIndices()
 			}
@@ -259,6 +260,8 @@ func (s *application) emptyBatchFilterMessage() string {
 			return "处理中，当前没有失败的图片"
 		}
 		return "没有失败的图片"
+	case batchFilterTargetSizeMissed:
+		return "没有未达目标体积的图片"
 	default:
 		return "没有符合条件的图片"
 	}
@@ -844,12 +847,26 @@ func (s *application) batchResultSummary(c *ui.Context) {
 		if resized := s.batch.cachedStats.targetResized; resized > 0 {
 			parts = append(parts, fmt.Sprintf("%d 张自动缩小", resized))
 		}
-		if missed := s.batch.cachedStats.targetSizeMissed; missed > 0 {
-			parts = append(parts, fmt.Sprintf("%d 张未达目标体积", missed))
-		}
 		note = strings.Join(parts, " · ")
 	}
-	summaryCardWithHint(c, "批量结果", label, color, firstLabel, original, secondLabel, output, note, hint, ratio)
+	summaryCardWithHint(c, "批量结果", label, color, firstLabel, original, secondLabel, output, note, hint, ratio, func() {
+		missed := s.batch.cachedStats.targetSizeMissed
+		if s.busy || missed == 0 {
+			return
+		}
+		quietButton(c, "batch-show-target-missed", fmt.Sprintf("%d 张未达目标体积", missed), 28, s.modalOpen()).
+			AlignSelf(ui.Start).FontSize(12).FontFeatures("tnum").
+			Controls(c.Resolve(s.batch.list.Handle)).
+			Tooltip("显示全部未达标图片并清除文件名搜索").OnClick(func() {
+			s.batch.filter, s.batch.query = batchFilterTargetSizeMissed, ""
+			if visible := s.filteredBatchIndices(); len(visible) > 0 {
+				s.batch.selected = visible[0]
+				s.batch.list.ScrollTo(0, ui.Start)
+				// Handle.Focus also works when the previous filter hid the list.
+				s.batch.list.Handle.Focus(c)
+			}
+		})
+	})
 }
 
 func (s *application) batchOverwriteConfirmation(c *ui.Context) {

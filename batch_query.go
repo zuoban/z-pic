@@ -28,15 +28,11 @@ func matchesBatchStatus(status batchStatus, filter int) bool {
 	}
 }
 
-func matchesBatchFilter(item batchItem, filter int, query string) bool {
-	if !matchesBatchStatus(item.status, filter) {
-		return false
+func matchesBatchFilter(item batchItem, filter int) bool {
+	if filter == batchFilterTargetSizeMissed {
+		return item.status == batchDone && item.targetSizeMissed
 	}
-	normalizedQuery := normalizeBatchQuery(query)
-	if normalizedQuery == "" {
-		return true
-	}
-	return strings.Contains(strings.ToLower(filepath.ToSlash(item.relPath)), normalizedQuery)
+	return matchesBatchStatus(item.status, filter)
 }
 
 func snapshotOfBatchItem(item batchItem) batchItemSnapshot {
@@ -159,7 +155,7 @@ func (state *batchState) filteredIndices(filter, sortMode int, query string) []i
 	normalizedQuery := normalizeBatchQuery(query)
 	visible := make([]int, 0, len(state.items))
 	for index, item := range state.items {
-		if !matchesBatchStatus(item.status, filter) {
+		if !matchesBatchFilter(item, filter) {
 			continue
 		}
 		if normalizedQuery != "" && !strings.Contains(state.cachedNameKeys[index].lower, normalizedQuery) {

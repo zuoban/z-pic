@@ -595,7 +595,7 @@ func segmentedControl(c *ui.Context, key, label string, selected *int, height fl
 				}
 			}
 			segment.Children(func() {
-				ui.Text(c, option).FontSize(12).FontWeight(weight).FontFeatures("tnum").TextColor(textColor).SingleLine()
+				ui.Text(c, option).FontSize(12).FontWeight(weight).FontFeatures("tnum").TextColor(textColor).SingleLine().NoWrap()
 			})
 		}
 	})

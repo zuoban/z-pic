@@ -89,7 +89,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 		if len(scan.items) > 0 {
 			if s.batch.filter != batchFilterAll &&
 				slices.ContainsFunc(scan.items, func(item batchItem) bool {
-					return !matchesBatchFilter(item, s.batch.filter, "")
+					return !matchesBatchFilter(item, s.batch.filter)
 				}) {
 				s.batch.filter = batchFilterAll
 			}
