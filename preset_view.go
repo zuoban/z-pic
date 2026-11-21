@@ -585,7 +585,8 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 		seg := settingsSegments(c, "preset-target-size", "目标体积", &choice, locked,
 			"不限", "200 KiB", "500 KiB", "1 MiB", "2 MiB").FillWidth()
 		s.focusSettingsField(seg, "preset-target-size")
-		if seg.Changed() && choice >= 0 && choice < len(sizes) {
+		pickedSize := seg.Changed() && choice >= 0 && choice < len(sizes)
+		if pickedSize {
 			preset.targetSizeBytes = sizes[choice]
 			*text = compress.FormatTargetSize(preset.targetSizeBytes)
 			problem = nil
@@ -599,6 +600,9 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 				FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
 			styleGlassField(input, c, 32)
 			s.focusSettingsField(input, "preset-target-size-input")
+			if pickedSize {
+				input.ScrollIntoView()
+			}
 			if input.Changed() {
 				var size int64
 				size, problem = compress.ParseTargetSize(*text)
