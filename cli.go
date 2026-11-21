@@ -30,7 +30,7 @@ func loadAppVersion() string {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(mygoConfigJSON, &config); err != nil || config.Version == "" {
-		return "0.1.0"
+		return "0.2.0"
 	}
 	return config.Version
 }

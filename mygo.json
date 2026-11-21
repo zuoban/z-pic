@@ -2,7 +2,7 @@
   "name": "Z Pic",
   "slug": "z-pic",
   "identifier": "app.zpic.desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "icon": "resources/icon.png",
   "main": ".",
   "out": "dist",

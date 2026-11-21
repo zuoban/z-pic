@@ -9,10 +9,10 @@ DMG 适用于搭载 Apple 芯片并运行 **macOS 13.0 或更新版本**的 Mac�
 - 正式版从 GitHub Releases 下载 `.dmg` 和同名的 `.dmg.sha256`，应用与镜像均使用 Developer ID 签名，镜像附带 Apple 公证票据。
 - 试装版在 GitHub 仓库的「Actions → macOS DMG」选择目标分支并点击「Run workflow」。构建完成后，从该次运行的「Artifacts」下载并解压 `z-pic-macos-arm64-preview-*`，取出其中的 DMG 和 SHA-256 文件。对应版本的编码器源码和构建说明在该次运行的提交中，分别位于 `scripts/sources/` 和 `scripts/`。
 
-将两个文件放在同一目录。以 `0.1.0` 为例，可在该目录运行以下命令校验镜像。
+将两个文件放在同一目录。以 `0.2.0` 为例，可在该目录运行以下命令校验镜像。
 
 ```sh
-shasum -a 256 -c z-pic-0.1.0-arm64.dmg.sha256
+shasum -a 256 -c z-pic-0.2.0-arm64.dmg.sha256
 ```
 
 看到 `OK` 后双击 DMG，将「Z Pic」拖到「应用程序」，再从「应用程序」打开。等待主窗口出现后，可以推出磁盘映像。试装版使用临时签名。若 macOS 拦截已确认来源的试装版，尝试打开后可在「系统设置 → 隐私与安全性」中对该应用选择「仍要打开」。
