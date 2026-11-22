@@ -199,46 +199,177 @@ func TestTargetResizeNativeAlpha(t *testing.T) {
 
 func TestSearchTargetResize(t *testing.T) {
 	baseline := &encodedImage{width: 512, height: 352, data: make([]byte, 220)}
-	for _, test := range []struct {
-		name      string
-		sizes     []int
-		wantEdges []int
-		wantWidth int
-	}{
-		{"first fit has largest dimensions", []int{180, 100}, []int{409, 327}, 327},
-		{"miss chooses fewest bytes", []int{180, 140, 160, 200}, []int{409, 327, 261, 64}, 327},
-		{"failed probe and ties preserve baseline", []int{0, 240, 220, 250}, []int{409, 327, 261, 64}, 512},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var edges []int
-			selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
-				size := test.sizes[len(edges)]
-				edges = append(edges, longEdge)
-				if size == 0 {
-					return nil, errors.New("failed encode")
-				}
-				return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
-			})
-			if err != nil || selected.width != test.wantWidth || !slices.Equal(edges, test.wantEdges) {
-				t.Fatalf("selected=%v, edges=%v, error=%v", selected, edges, err)
+
+	t.Run("binary search finds larger fit than fixed 4/5 steps", func(t *testing.T) {
+		// Fixed 4/5 steps from 512 probe 409 (miss) then 327 (fit).
+		// Binary search converges close to the true 400px threshold.
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			edges = append(edges, longEdge)
+			size := 150
+			if longEdge <= 400 {
+				size = 90
 			}
+			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
 		})
-	}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if selected.width <= 327 || selected.width > 400 {
+			t.Fatalf("expected binary search width in (327, 400], got %d (edges=%v)", selected.width, edges)
+		}
+		if len(edges) > maxTargetResizeAttempts {
+			t.Fatalf("exceeded attempt budget: %d > %d (edges=%v)", len(edges), maxTargetResizeAttempts, edges)
+		}
+		wantEdges := []int{287, 399, 455, 427, 413}
+		if !slices.Equal(edges, wantEdges) || selected.width != 399 {
+			t.Fatalf("selected=%d, edges=%v, want width=399 edges=%v", selected.width, edges, wantEdges)
+		}
+	})
+
+	t.Run("miss probes minDimension as final attempt on large range", func(t *testing.T) {
+		hugeBaseline := &encodedImage{width: 4096, height: 3072, data: make([]byte, 500)}
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), hugeBaseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			edges = append(edges, longEdge)
+			return &encodedImage{width: longEdge, data: make([]byte, 120+longEdge/10)}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(edges) != maxTargetResizeAttempts {
+			t.Fatalf("expected %d attempts, got %d (edges=%v)", maxTargetResizeAttempts, len(edges), edges)
+		}
+		if edges[len(edges)-1] != 64 {
+			t.Fatalf("final attempt must probe minDimension=64, got edges=%v", edges)
+		}
+		if selected.width != 64 {
+			t.Fatalf("expected smallest candidate at minDimension=64, got width=%d", selected.width)
+		}
+	})
+
+	t.Run("fit only at minDimension succeeds on final attempt", func(t *testing.T) {
+		hugeBaseline := &encodedImage{width: 4096, height: 3072, data: make([]byte, 500)}
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), hugeBaseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			edges = append(edges, longEdge)
+			size := 150
+			if longEdge == 64 {
+				size = 95
+			}
+			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if selected.width != 64 || len(selected.data) != 95 {
+			t.Fatalf("expected fit at minDimension=64 (95 bytes), got width=%d (%d bytes), edges=%v",
+				selected.width, len(selected.data), edges)
+		}
+	})
+
+	t.Run("miss chooses fewest bytes and ties keep larger dimension", func(t *testing.T) {
+		sizesByCall := []int{180, 140, 140, 160, 190, 140}
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			size := sizesByCall[len(edges)]
+			edges = append(edges, longEdge)
+			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		wantEdges := []int{287, 175, 119, 91, 77, 64}
+		if !slices.Equal(edges, wantEdges) {
+			t.Fatalf("edges=%v, want %v", edges, wantEdges)
+		}
+		// 175, 119, and 64 all tied at 140 bytes; larger dimension 175 must win.
+		if selected.width != 175 || len(selected.data) != 140 {
+			t.Fatalf("expected width=175 (140 bytes), got width=%d (%d bytes)", selected.width, len(selected.data))
+		}
+	})
+
+	t.Run("failed probes and ties preserve baseline", func(t *testing.T) {
+		sizesByCall := []int{0, 240, 220, 0, 250, 220}
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			size := sizesByCall[len(edges)]
+			edges = append(edges, longEdge)
+			if size == 0 {
+				return nil, errors.New("failed encode")
+			}
+			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if selected != baseline {
+			t.Fatalf("expected baseline to be preserved, got width=%d (%d bytes), edges=%v",
+				selected.width, len(selected.data), edges)
+		}
+	})
+
+	t.Run("failed upper probe narrows safely while keeping valid fit", func(t *testing.T) {
+		var edges []int
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			edges = append(edges, longEdge)
+			if longEdge == 399 {
+				return nil, errors.New("transient encoder failure")
+			}
+			if longEdge <= 360 {
+				return &encodedImage{width: longEdge, data: make([]byte, 90)}, nil
+			}
+			return &encodedImage{width: longEdge, data: make([]byte, 140)}, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if selected.width <= 287 || selected.width > 360 {
+			t.Fatalf("expected valid fit in (287, 360], got width=%d (edges=%v)", selected.width, edges)
+		}
+	})
 }
 
 func TestSearchTargetResizeCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	baseline := &encodedImage{width: 512, height: 352, data: make([]byte, 220)}
-	calls := 0
-	selected, err := searchTargetResize(ctx, baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
-		calls++
-		cancel()
-		return &encodedImage{width: longEdge, data: make([]byte, 99)}, nil
+
+	t.Run("canceled during probe", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		calls := 0
+		selected, err := searchTargetResize(ctx, baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			calls++
+			cancel()
+			return &encodedImage{width: longEdge, data: make([]byte, 99)}, nil
+		})
+		if selected != nil || !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("canceled search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
+		}
 	})
-	if selected != nil || !errors.Is(err, context.Canceled) || calls != 1 {
-		t.Fatalf("canceled search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
-	}
+
+	t.Run("pre-canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		calls := 0
+		selected, err := searchTargetResize(ctx, baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			calls++
+			return &encodedImage{width: longEdge, data: make([]byte, 99)}, nil
+		})
+		if selected != nil || !errors.Is(err, context.Canceled) || calls != 0 {
+			t.Fatalf("pre-canceled search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
+		}
+	})
+
+	t.Run("deadline exceeded from probe", func(t *testing.T) {
+		calls := 0
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
+			calls++
+			return nil, context.DeadlineExceeded
+		})
+		if selected != nil || !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
+			t.Fatalf("deadline-exceeded search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
+		}
+	})
 }
 
 func targetResizeJPEGFixture(t *testing.T) []byte {

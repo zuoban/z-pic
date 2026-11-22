@@ -50,11 +50,18 @@ type application struct {
 	lossless       bool
 	metadata       compress.MetadataPolicy
 	outputFormat   compress.OutputFormat
+	jpegBackground string
 	resizeLimits
 	targetSizeBytes          int64
 	targetResizeMinDimension int
 	autoCompress             bool
 	backupToTrash            bool
+	keepInMenuBar            bool
+	quitting                 bool
+	tray                     *appTray
+	onTrayRefresh            func()
+	cliInstallEnv            cliInstallEnv
+	sendNotification         func(title, body string)
 	output                   presetSaveOptions
 	settingsOpen             bool
 	settingsFile             string
@@ -155,6 +162,7 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 		if invalidateFloating {
 			s.invalidateFloatingWindow()
 		}
+		s.syncTrayMenuIfChanged()
 	}
 	if s.dispatchUpdate != nil {
 		s.dispatchUpdate(apply)

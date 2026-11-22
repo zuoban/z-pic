@@ -35,7 +35,20 @@ func main() {
 			app.dropFiles([]string{path})
 		})
 	})
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { app.closeFolderWatch() })
+	mygo.App.OnActivate(func(hasVisibleWindows bool) {
+		if app.window != nil && (!hasVisibleWindows || !app.window.IsVisible()) {
+			app.showMainWindow()
+			app.refreshTrayMenu()
+		}
+	})
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+		app.quitting = true
+	})
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		app.quitting = true
+		app.closeFolderWatch()
+		app.closeTray()
+	})
 	mygo.App.WhenReady(func() {
 		app.window = mygo.NewWindow(mygo.WindowOptions{
 			Title:           "Z Pic · 图片压缩",
@@ -51,6 +64,15 @@ func main() {
 			UseContentSize:  true,
 			Content:         ui.View(app.view),
 		})
+		app.window.OnClose(func(e *mygo.CloseEvent) {
+			if app.shouldHideMainWindowOnClose() {
+				e.PreventDefault()
+				app.window.Hide()
+				app.refreshTrayMenu()
+			}
+		})
+		app.window.OnShow(func() { app.refreshTrayMenu() })
+		app.window.OnHide(func() { app.refreshTrayMenu() })
 		app.window.OnClosed(func() {
 			app.closed = true
 			app.stopFolderWatch()
@@ -65,10 +87,13 @@ func main() {
 				app.dropTransport.CloseIdleConnections()
 			}
 			app.setFloatingOpen(false)
+			app.closeTray()
 		})
 		app.window.OnFileDrop(func(e *mygo.FileDropEvent) {
 			app.dropFiles(e.Paths)
 		})
+		app.setupTray()
+		app.startAutoFolderWatches()
 		startup := mergeStartupPaths(os.Args[1:], pendingOpenFiles)
 		pendingOpenFiles = nil
 		if len(startup) > 0 {
@@ -77,6 +102,7 @@ func main() {
 	})
 	err := mygo.App.Run()
 	app.closeFolderWatch()
+	app.closeTray()
 	app.saves.Wait()
 	app.cleanupDragStaging()
 	if err != nil {

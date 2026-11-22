@@ -34,11 +34,12 @@ const (
 )
 
 type Options struct {
-	Quality      int // JPEG, WebP, and AVIF quality in [1, 100].
-	PNG          PNGOptions
-	Lossless     bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
-	Metadata     MetadataPolicy // "", "icc", or "strip".
-	OutputFormat OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
+	Quality        int // JPEG, WebP, and AVIF quality in [1, 100].
+	PNG            PNGOptions
+	Lossless       bool           // PNG: Oxipng only. WebP and AVIF: lossless encoding. JPEG: lossless optimization for an unresized JPEG input when bundled.
+	Metadata       MetadataPolicy // "", "icc", or "strip".
+	OutputFormat   OutputFormat   // "" (keep), "jpeg", "png", "webp", or "avif".
+	JPEGBackground string         // "", "white", "black", or "#RRGGBB" background color for alpha flattening when encoding JPEG.
 
 	// Set at most one resize field. Zero disables that mode. Pixel limits
 	// are in [64, 16384] and apply to the image's displayed orientation.
@@ -183,6 +184,9 @@ func validateOptions(options Options) error {
 	if err := options.OutputFormat.Validate(); err != nil {
 		return err
 	}
+	if err := ValidateJPEGBackground(options.JPEGBackground); err != nil {
+		return err
+	}
 	if err := ValidateResizeOptions(options.MaxDimension, options.MaxWidth, options.MaxHeight, options.ScalePercent); err != nil {
 		return err
 	}
@@ -261,9 +265,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	if format == "png" && usePNGOrientation {
 		sourceOrient = pngOrientation(data)
 	}
+	jpegBackground, err := ParseJPEGBackground(options.JPEGBackground)
+	if err != nil {
+		return nil, err
+	}
 	source := compressionSource{
 		data: data, pixelSource: pixelSource, config: config,
 		format: format, targetFormat: targetFormat, orientation: sourceOrient,
+		jpegBackground: jpegBackground,
 	}
 	width, height := source.displayDimensions()
 	baselineWidth, baselineHeight, _ := resizeDimensionsForOptions(width, height, options)
@@ -335,6 +344,7 @@ type compressionSource struct {
 	config               image.Config
 	format, targetFormat string
 	orientation          int
+	jpegBackground       color.RGBA
 	pixels               image.Image
 }
 
@@ -357,7 +367,7 @@ func (source *compressionSource) decodePixels(ctx context.Context) (image.Image,
 			return nil, fmt.Errorf("调整图片方向已取消：%w", err)
 		}
 		if source.format != source.targetFormat {
-			img, err = flattenAlphaForJPEG(ctx, img)
+			img, err = flattenAlphaForJPEG(ctx, img, source.jpegBackground)
 			if err != nil {
 				return nil, fmt.Errorf("处理图片透明度已取消：%w", err)
 			}

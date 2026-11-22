@@ -87,6 +87,8 @@ func printRootCLIHelp(w io.Writer) {
   z-pic watch --output-dir <目录> [选项] <输入目录>
                                     持续压缩新到达的图片
   z-pic presets [选项]               列出已保存的压缩预设
+  z-pic presets export [选项] [名称…] 导出预设为 JSON 文件或标准输出
+  z-pic presets import [选项] <文件>  从 JSON 文件导入预设
   z-pic version [--json]             显示版本信息
   z-pic help [命令]                  显示帮助信息
 
@@ -163,13 +165,23 @@ func runCLIVersion(args []string, stdout, stderr io.Writer) int {
 }
 
 func printPresetsCLIHelp(w io.Writer) {
-	fmt.Fprintln(w, `用法: z-pic presets [选项]
+	fmt.Fprintln(w, `用法:
+  z-pic presets [选项]                                列出当前配置文件中的压缩预设
+  z-pic presets export [选项] [预设名称 ...]          导出预设为 JSON（默认输出到标准输出）
+  z-pic presets import [选项] <预设 JSON 文件>        从预设 JSON 或 settings.json 导入预设
 
-列出当前配置文件中的压缩预设（配置文件不存在时显示内置默认预设）。
-
-选项:
+通用选项:
   --settings <path>   指定设置 JSON 文件路径（默认使用应用设置目录）
-  --json              以 JSON 格式输出`)
+
+列表选项:
+  --json              以 JSON 格式输出
+
+导出选项:
+  -o, --output <path> 导出到指定 JSON 文件（不指定则输出到标准输出）
+
+导入选项:
+  --overwrite         导入同名预设时覆盖已有预设（默认自动重命名保留已有预设）
+  --json              以 JSON 格式输出导入摘要`)
 }
 
 type cliPNGOptions struct {
@@ -185,6 +197,7 @@ type cliPresetEntry struct {
 	Quality                  int           `json:"quality"`
 	Lossless                 bool          `json:"lossless"`
 	Format                   string        `json:"format"`
+	JPEGBackground           string        `json:"jpeg_background,omitempty"`
 	MaxDimension             int           `json:"max_dimension"`
 	MaxWidth                 int           `json:"max_width,omitempty"`
 	MaxHeight                int           `json:"max_height,omitempty"`
@@ -254,6 +267,14 @@ func cliFormatName(format compress.OutputFormat) string {
 }
 
 func runCLIPresets(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "export":
+			return runCLIPresetsExport(args[1:], stdout, stderr)
+		case "import":
+			return runCLIPresetsImport(args[1:], stdout, stderr)
+		}
+	}
 	fs := flag.NewFlagSet("presets", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	settingsPath := fs.String("settings", "", "settings file path")
@@ -287,6 +308,7 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 			Quality:                  int(preset.quality),
 			Lossless:                 preset.lossless,
 			Format:                   cliFormatName(preset.outputFormat),
+			JPEGBackground:           compress.NormalizeJPEGBackground(preset.jpegBackground),
 			MaxDimension:             preset.maxDimension,
 			MaxWidth:                 preset.maxWidth,
 			MaxHeight:                preset.maxHeight,
@@ -318,6 +340,9 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 		extras := []string{mode}
 		if entry.Format != "keep" {
 			extras = append(extras, presetOutputFormatLabel(compress.OutputFormat(entry.Format)))
+			if entry.Format == "jpeg" && entry.JPEGBackground != "" {
+				extras = append(extras, "底色 "+strings.ToUpper(entry.JPEGBackground))
+			}
 		}
 		switch {
 		case entry.MaxDimension > 0:
@@ -343,6 +368,124 @@ func runCLIPresets(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runCLIPresetsExport(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("presets export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	settingsPath := fs.String("settings", "", "settings file path")
+	var outputPath string
+	fs.StringVar(&outputPath, "output", "", "output file path")
+	fs.StringVar(&outputPath, "o", "", "output file path")
+	if _, err := parseCLIFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printPresetsCLIHelp(stdout)
+			return 0
+		}
+		fmt.Fprintf(stderr, "参数错误：%v\n", err)
+		return 2
+	}
+	cfg, _, err := loadCLISettings(*settingsPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "读取预设失败：%v\n", err)
+		return 1
+	}
+	selected := cfg.presets
+	if names := fs.Args(); len(names) > 0 {
+		byName := make(map[string]compressionPreset, len(cfg.presets))
+		for _, preset := range cfg.presets {
+			byName[preset.name] = preset
+		}
+		seen := make(map[string]bool, len(names))
+		selected = make([]compressionPreset, 0, len(names))
+		for _, name := range names {
+			preset, ok := byName[name]
+			if !ok {
+				fmt.Fprintf(stderr, "找不到预设 %q；运行 \"z-pic presets\" 查看可用预设。\n", name)
+				return 2
+			}
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			selected = append(selected, preset)
+		}
+	}
+	if outputPath == "" {
+		data, err := marshalPresetBundle(selected)
+		if err != nil {
+			fmt.Fprintf(stderr, "导出预设失败：%v\n", err)
+			return 1
+		}
+		if _, err := stdout.Write(data); err != nil {
+			fmt.Fprintf(stderr, "输出预设失败：%v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if err := writePresetBundleFile(outputPath, selected); err != nil {
+		fmt.Fprintf(stderr, "导出预设失败：%v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "已导出 %d 个预设到 %s\n", len(selected), outputPath)
+	return 0
+}
+
+type cliPresetImportReport struct {
+	SettingsPath string `json:"settings_path"`
+	Added        int    `json:"added"`
+	Updated      int    `json:"updated"`
+	Total        int    `json:"total"`
+}
+
+func runCLIPresetsImport(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("presets import", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	settingsPath := fs.String("settings", "", "settings file path")
+	overwrite := fs.Bool("overwrite", false, "overwrite existing presets with the same name")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	if _, err := parseCLIFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printPresetsCLIHelp(stdout)
+			return 0
+		}
+		fmt.Fprintf(stderr, "参数错误：%v\n", err)
+		return 2
+	}
+	if fs.NArg() != 1 || fs.Arg(0) == "" {
+		fmt.Fprintln(stderr, "请提供一个要导入的预设 JSON 文件路径。\n运行 \"z-pic help presets\" 查看用法。")
+		return 2
+	}
+	imported, err := readPresetBundleFile(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "读取预设文件失败：%v\n", err)
+		return 1
+	}
+	cfg, path, err := loadCLISettings(*settingsPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "读取现有设置失败：%v\n", err)
+		return 1
+	}
+	if path == "" {
+		fmt.Fprintln(stderr, "无法确定设置文件保存路径，请通过 --settings 指定。")
+		return 1
+	}
+	merged, added, updated, _ := mergeImportedPresets(cfg.presets, imported, *overwrite)
+	cfg.presets = merged
+	if err := saveFullSettings(path, cfg); err != nil {
+		fmt.Fprintf(stderr, "保存设置失败：%v\n", err)
+		return 1
+	}
+	if *jsonOut {
+		return writeCLIJSON(stdout, stderr, cliPresetImportReport{
+			SettingsPath: path,
+			Added:        added,
+			Updated:      updated,
+			Total:        len(merged),
+		})
+	}
+	fmt.Fprintf(stdout, "已导入预设（新增 %d，覆盖 %d，共 %d 个预设）→ %s\n", added, updated, len(merged), path)
+	return 0
+}
+
 func printCompressCLIHelp(w io.Writer) {
 	formats := strings.Join(supportedImageFormats(), " / ")
 	fmt.Fprintf(w, `用法: z-pic compress [选项] <图片或文件夹 ...>
@@ -357,6 +500,7 @@ func printCompressCLIHelp(w io.Writer) {
       --lossless           无损模式（转为 JPEG 时使用有损编码）
       --format <%s> 输出格式（jpeg 可用 jpg，keep 时 HEIC 转为 JPEG 或 PNG）
                            AVIF 编解码仅在 Apple 芯片的 macOS 上可用
+      --jpeg-bg <color>    透明图转为 JPEG 时的填充底色（white | black | #RRGGBB）
       --max-dim <px>       限制长边像素上限（0 表示原尺寸，范围 %d–%d）
       --max-width <px>     限制显示宽度，像素范围与 --max-dim 相同
       --max-height <px>    限制显示高度，像素范围与 --max-dim 相同
@@ -491,6 +635,7 @@ type cliCompressionFlags struct {
 	quality         int
 	lossless        bool
 	format          string
+	jpegBg          string
 	maxDim          int
 	maxWidth        int
 	maxHeight       int
@@ -508,6 +653,7 @@ func (f *cliCompressionFlags) bind(fs *flag.FlagSet) {
 	fs.IntVar(&f.quality, "q", 80, "quality 1-100")
 	fs.BoolVar(&f.lossless, "lossless", false, "lossless compression")
 	fs.StringVar(&f.format, "format", "", "output format: "+cliOutputFormats+" (jpg is an alias for jpeg)")
+	fs.StringVar(&f.jpegBg, "jpeg-bg", "", "background color for transparent images converted to JPEG: white|black|#RRGGBB")
 	fs.IntVar(&f.maxDim, "max-dim", 0, "max long-edge dimension in pixels")
 	fs.IntVar(&f.maxWidth, "max-width", 0, "max displayed width in pixels")
 	fs.IntVar(&f.maxHeight, "max-height", 0, "max displayed height in pixels")
@@ -560,6 +706,12 @@ func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) 
 			return opts, nil, fmt.Errorf("参数错误：%w", err)
 		}
 		opts.OutputFormat = parsed
+	}
+	if setFlags["jpeg-bg"] {
+		if err := compress.ValidateJPEGBackground(f.jpegBg); err != nil {
+			return opts, nil, fmt.Errorf("参数错误：--jpeg-bg：%w", err)
+		}
+		opts.JPEGBackground = compress.NormalizeJPEGBackground(f.jpegBg)
 	}
 	var resizeFlag string
 	for _, name := range [...]string{"max-dim", "max-width", "max-height", "scale-percent"} {

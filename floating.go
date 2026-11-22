@@ -26,6 +26,7 @@ const (
 
 func (s *application) setFloatingOpen(open bool) {
 	if !open {
+		changed := s.floatingOpen
 		s.floatingOpen = false
 		s.floating.expanded = false
 		s.floating.synced = false
@@ -33,17 +34,27 @@ func (s *application) setFloatingOpen(open bool) {
 		if window := s.floatingWindow; window != nil {
 			window.Close()
 		}
+		if changed {
+			s.refreshTrayMenu()
+		}
 		return
 	}
 	if s.closed {
 		return
 	}
+	changed := !s.floatingOpen
 	s.floatingOpen = true
 	if s.floatingWindow != nil {
 		s.floatingWindow.ShowInactive()
+		if changed {
+			s.refreshTrayMenu()
+		}
 		return
 	}
 	if s.window == nil {
+		if changed {
+			s.refreshTrayMenu()
+		}
 		return
 	}
 	area := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint()).WorkArea
@@ -62,6 +73,7 @@ func (s *application) setFloatingOpen(open bool) {
 		s.floating.expanded = false
 		s.floating.synced = false
 		s.thumbnails.floatingWanted = nil
+		s.refreshTrayMenu()
 		if !s.closed && s.window != nil {
 			s.window.Invalidate()
 		}
@@ -69,6 +81,9 @@ func (s *application) setFloatingOpen(open bool) {
 	s.floating.lastSynced = s.floatingSyncSnapshot()
 	s.floating.synced = true
 	s.floatingWindow.ShowInactive()
+	if changed {
+		s.refreshTrayMenu()
+	}
 }
 
 func (s *application) invalidateFloatingWindow() {
@@ -176,6 +191,7 @@ func (s *application) startNextDropImport() {
 	pasted := s.clipboardImporting
 	s.dropMessage, s.dropFailed = "", len(s.dropFailures) > 0
 	s.setMessage("", false)
+	s.syncTrayMenuIfChanged()
 	s.saves.Add(1)
 	go func() {
 		defer s.saves.Done()

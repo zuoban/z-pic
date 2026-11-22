@@ -180,17 +180,29 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 		workflowPanel.Children(func() {
 			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			locked := s.settingsDraftLocked()
+			checkRowH := float32(32)
+			checkPadV := float32(3)
+			if compactHeight {
+				checkRowH = 26
+				checkPadV = 1
+			}
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 36)).Padding(5, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, checkRowH)).Padding(checkPadV, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
 						FontSize(settingsFontSize(c, 13)).Disabled(locked).
 						Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 36)).Padding(5, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, checkRowH)).Padding(checkPadV, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Checkbox(c.Key("settings-backup-to-trash"), &s.editor.backupToTrash, "覆盖原图前移入废纸篓").
 						FontSize(settingsFontSize(c, 13)).Disabled(locked).
 						Tooltip("覆盖单图或批量原图前先将原文件移至系统废纸篓（回收站）")
+				})
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, checkRowH)).Padding(checkPadV, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Checkbox(c.Key("settings-keep-in-menubar"), &s.editor.keepInMenuBar, "关闭主窗口时最小化到菜单栏").
+						FontSize(settingsFontSize(c, 13)).Disabled(locked).
+						Tooltip("关闭主窗口后保持菜单栏常驻，后台文件夹监听将继续运行；可通过菜单栏或 Dock 重新打开窗口")
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				downloadPath := s.editor.downloadDir
@@ -289,6 +301,86 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				})
 			}
 		})
+		s.cliInstallSettingsPanel(c, compactHeight)
+	})
+}
+
+func (s *application) cliInstallSettingsPanel(c *ui.Context, compactHeight bool) {
+	t := c.Theme()
+	editor := s.editor
+	locked := s.settingsDraftLocked()
+	status := editor.cliStatus
+	panel := settingsPanel(c, "settings-cli-panel")
+	if compactHeight {
+		panel.Padding(12, 16).Gap(8)
+	}
+	panel.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "命令行工具").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
+			badgeText, badgeColor := "未安装", t.TextMuted
+			switch {
+			case !status.Supported:
+				badgeText = "不支持"
+			case status.State == cliInstalled:
+				badgeText, badgeColor = "已安装", t.Success
+			case status.State == cliNeedsUpdate:
+				badgeText, badgeColor = "需要更新", t.Warning
+			case status.State == cliConflict:
+				badgeText, badgeColor = "存在冲突", t.Danger
+			}
+			statusCapsule(c, badgeText, badgeColor).FontSize(settingsFontSize(c, 11))
+		})
+		detail := "在终端中直接使用 z-pic compress / watch / presets 批量处理图片"
+		detailColor := metadataColor(c)
+		switch status.State {
+		case cliInstalled:
+			detail = status.LinkPath
+			if !status.InPATH {
+				detail += "（未在 PATH 中）"
+			}
+			detailColor = t.TextMuted
+		case cliNeedsUpdate:
+			detail = fmt.Sprintf("%s 当前指向其他位置，点击更新为当前应用", status.LinkPath)
+		case cliConflict:
+			detail = fmt.Sprintf("%s 已被其他文件占用，未自动覆盖", status.LinkPath)
+			detailColor = t.Danger
+		}
+		if !status.Supported {
+			detail = "当前平台暂不支持一键安装命令行符号链接"
+		}
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, detail).FontSize(settingsFontSize(c, 12)).TextColor(detailColor).
+				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(detail)
+			if status.Supported {
+				switch status.State {
+				case cliInstalled:
+					settingsButton(c, "settings-cli-uninstall", "卸载", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("移除 z-pic 命令行符号链接").OnClick(s.runUninstallCLI)
+				case cliNeedsUpdate:
+					settingsButton(c, "settings-cli-update", "更新链接", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("更新命令行链接指向当前应用").OnClick(s.runInstallCLI)
+					settingsButton(c, "settings-cli-uninstall", "卸载", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).OnClick(s.runUninstallCLI)
+				case cliConflict:
+					settingsButton(c, "settings-cli-refresh", "重新检测", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("重新检测命令行工具安装状态").OnClick(s.refreshCLIInstallStatus)
+				default:
+					settingsButton(c, "settings-cli-install", "安装命令行工具", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 12).
+						Tooltip("在 PATH 目录创建 z-pic 符号链接").OnClick(s.runInstallCLI)
+				}
+			}
+		})
+		if editor.cliMessage != "" {
+			msgColor := t.Success
+			if editor.cliFailed {
+				msgColor = t.Danger
+			}
+			ui.Text(c, editor.cliMessage).FontSize(settingsFontSize(c, 12)).TextColor(msgColor).MaxLines(2)
+		}
 	})
 }
 

@@ -84,6 +84,11 @@ func presetProcessingSummary(preset compressionPreset) string {
 	var parts []string
 	if preset.outputFormat != compress.OutputFormatKeep {
 		parts = append(parts, presetOutputFormatLabel(preset.outputFormat))
+		if preset.outputFormat == compress.OutputFormatJPEG {
+			if bg := compress.NormalizeJPEGBackground(preset.jpegBackground); bg != "" {
+				parts = append(parts, "底色 "+strings.ToUpper(bg))
+			}
+		}
 	}
 	if limits := preset.resizeLimits(); limits != (resizeLimits{}) {
 		parts = append(parts, presetResizeLabel(limits))
@@ -282,6 +287,14 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 		}
 		settingsGlassControl(addBtn, c, 32, locked, ui.Transparent)
 		addBtn.Children(func() { ui.Icon(c, presetPlusIcon).Size(15, 15).TextColor(t.Text) })
+		settingsButton(c, "import-presets", "导入", 32, locked).
+			FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+			Label("导入预设").Tooltip("从 JSON 文件或 settings.json 导入压缩预设").
+			OnClick(s.importPresetsFromDialog)
+		settingsButton(c, "export-presets", "导出", 32, locked).
+			FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+			Label("导出预设").Tooltip("将当前所有压缩预设导出为 JSON 文件").
+			OnClick(s.exportPresetsToDialog)
 	})
 }
 
@@ -424,7 +437,13 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			var note string
 			switch preset.outputFormat {
 			case compress.OutputFormatJPEG:
-				note = "透明区域填充白色；转换为 JPEG 有损且保留原文件，同格式图片可覆盖。"
+				bgDisplay := "白色"
+				if normalized := compress.NormalizeJPEGBackground(preset.jpegBackground); normalized == "#000000" {
+					bgDisplay = "黑色"
+				} else if normalized != "" {
+					bgDisplay = strings.ToUpper(normalized)
+				}
+				note = fmt.Sprintf("透明区域填充%s；转换为 JPEG 有损且保留原文件，同格式图片可覆盖。", bgDisplay)
 			case compress.OutputFormatPNG:
 				note = "转换为 PNG 时保留原文件，同格式图片可覆盖。"
 			case compress.OutputFormatWebP:
@@ -445,6 +464,9 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 				}
 			}
 			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
+			if preset.outputFormat == compress.OutputFormatJPEG {
+				s.presetJPEGBackgroundSection(c, preset)
+			}
 		})
 		ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 		s.presetResizeSection(c, preset)
@@ -486,6 +508,73 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			}
 			ui.Text(c, metaNote).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
+	})
+}
+
+func (s *application) presetJPEGBackgroundSection(c *ui.Context, preset *compressionPreset) {
+	editor := s.editor
+	locked := s.settingsDraftLocked()
+	target := editor.targets[editor.selected]
+	text := &target.jpegBgText
+	rgba, problem := compress.ParseJPEGBackground(*text)
+
+	mode := 2
+	normalized := compress.NormalizeJPEGBackground(*text)
+	switch {
+	case problem == nil && normalized == "":
+		mode = 0
+	case problem == nil && normalized == "#000000":
+		mode = 1
+	}
+	ui.Column(c).FillWidth().Padding(4, 0, 0, 0).Gap(6).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "透明底色").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
+			seg := settingsSegments(c, "preset-jpeg-bg-mode", "透明底色", &mode, locked, "白色", "黑色", "自定义").
+				Width(settingsFontSize(c, 180))
+			if seg.Changed() {
+				switch mode {
+				case 0:
+					preset.jpegBackground = ""
+					*text = "#ffffff"
+				case 1:
+					preset.jpegBackground = "#000000"
+					*text = "#000000"
+				default:
+					if normalized == "" || normalized == "#000000" {
+						preset.jpegBackground = "#f5f5f5"
+						*text = "#f5f5f5"
+					}
+				}
+				rgba, problem = compress.ParseJPEGBackground(*text)
+				editor.message = ""
+			}
+			ui.Box(c).Grow(1).MinWidth(0)
+			swatchColor := ui.Hex("#ffffff")
+			if problem == nil {
+				swatchColor = ui.RGBA(rgba.R, rgba.G, rgba.B, 1)
+			}
+			ui.Box(c).Size(20, 20).Radius(5).Background(swatchColor).Border(1, controlBorder(c)).Shrink(0)
+			input := ui.TextInput(c.Key("preset-jpeg-bg"), text).Label("自定义底色（#RRGGBB）").
+				Placeholder("#FFFFFF").Width(settingsFontSize(c, 102)).Height(settingsControlHeight(c, 30)).
+				FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").Padding(0, 10).Disabled(locked)
+			styleGlassField(input, c, 30)
+			s.focusSettingsField(input, "preset-jpeg-bg")
+			if input.Changed() {
+				if _, err := compress.ParseJPEGBackground(*text); err == nil {
+					preset.jpegBackground = compress.NormalizeJPEGBackground(*text)
+					problem = nil
+				} else {
+					problem = err
+				}
+				editor.message = ""
+			}
+			if problem != nil {
+				input.Invalid(true).Border(1, c.Theme().Danger)
+			}
+		})
+		if problem != nil {
+			ui.Text(c, problem.Error()).FontSize(settingsFontSize(c, 12)).TextColor(c.Theme().Danger).MaxLines(2)
+		}
 	})
 }
 

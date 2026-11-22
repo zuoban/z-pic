@@ -198,7 +198,7 @@ func (s *application) view(c *ui.Context) {
 				s.controlsPanel(c, showBatchOutput)
 			})
 		}
-		if s.watch.session != nil || s.watch.last.Input != "" || s.watch.err != nil {
+		if s.anyFolderWatchRunning() || s.watch.last.Input != "" || s.watch.err != nil {
 			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 			ui.Box(c).FillWidth().Padding(8, toolbarPadding).Background(sidebarSurface(c)).Children(func() {
 				s.folderWatchStatusBar(c)
@@ -212,6 +212,7 @@ func (s *application) view(c *ui.Context) {
 	}
 	s.startNextDropImport()
 	s.syncFloatingWindowIfChanged()
+	s.syncTrayMenuIfChanged()
 }
 
 func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobile bool, pending, done int, canRun bool) {
@@ -691,6 +692,7 @@ func (s *application) activePresetSnapshot() compressionPreset {
 		lossless:                 s.lossless,
 		metadata:                 s.metadata,
 		outputFormat:             s.outputFormat,
+		jpegBackground:           s.jpegBackground,
 		maxDimension:             s.maxDimension,
 		maxWidth:                 s.maxWidth,
 		maxHeight:                s.maxHeight,

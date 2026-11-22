@@ -56,7 +56,7 @@ func TestFlattenAlphaForJPEG(t *testing.T) {
 	src.SetNRGBA(0, 0, color.NRGBA{R: 0, G: 0, B: 0, A: 0})        // fully transparent -> white
 	src.SetNRGBA(1, 0, color.NRGBA{R: 200, G: 100, B: 50, A: 255}) // opaque -> unchanged
 
-	flat, err := flattenAlphaForJPEG(context.Background(), src)
+	flat, err := flattenAlphaForJPEG(context.Background(), src, defaultJPEGBackground)
 	if err != nil {
 		t.Fatalf("flattenAlphaForJPEG failed: %v", err)
 	}

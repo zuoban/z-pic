@@ -27,8 +27,10 @@ type storedSettings struct {
 	Theme          string              `json:"theme,omitempty"`
 	AutoCompress   bool                `json:"auto_compress,omitempty"`
 	BackupToTrash  bool                `json:"backup_to_trash,omitempty"`
+	KeepInMenuBar  bool                `json:"keep_in_menu_bar,omitempty"`
 	DownloadDir    string              `json:"download_dir,omitempty"`
 	Watch          folderWatchSettings `json:"watch,omitzero"`
+	WatchRules     []folderWatchRule   `json:"watch_rules,omitempty"`
 }
 
 type appSettings struct {
@@ -38,8 +40,10 @@ type appSettings struct {
 	theme          themeMode
 	autoCompress   bool
 	backupToTrash  bool
+	keepInMenuBar  bool
 	downloadDir    string
 	watch          folderWatchSettings
+	watchRules     []folderWatchRule
 }
 
 type storedPreset struct {
@@ -49,6 +53,7 @@ type storedPreset struct {
 	Lossless                 bool                    `json:"lossless,omitempty"`
 	Metadata                 compress.MetadataPolicy `json:"metadata,omitempty"`
 	OutputFormat             compress.OutputFormat   `json:"output_format,omitempty"`
+	JPEGBackground           string                  `json:"jpeg_background,omitempty"`
 	MaxDimension             int                     `json:"max_dimension,omitempty"`
 	MaxWidth                 int                     `json:"max_width,omitempty"`
 	MaxHeight                int                     `json:"max_height,omitempty"`
@@ -123,6 +128,9 @@ func validatePresets(presets []compressionPreset, selected string) error {
 		}
 		if err := preset.outputFormat.Validate(); err != nil {
 			return invalid("preset-output-format", fmt.Errorf("预设「%s」的输出格式无效：%w", preset.name, err))
+		}
+		if err := compress.ValidateJPEGBackground(preset.jpegBackground); err != nil {
+			return invalid("preset-jpeg-bg", fmt.Errorf("预设「%s」的透明底色无效：%w", preset.name, err))
 		}
 		if err := preset.resizeLimits().validate(); err != nil {
 			return invalid(presetResizeModeField, fmt.Errorf("预设「%s」的缩放尺寸无效：%w", preset.name, err))
@@ -258,6 +266,7 @@ func loadFullSettings(path string) (appSettings, error) {
 			lossless:                 preset.Lossless,
 			metadata:                 preset.Metadata,
 			outputFormat:             preset.OutputFormat,
+			jpegBackground:           preset.JPEGBackground,
 			maxDimension:             preset.MaxDimension,
 			maxWidth:                 preset.MaxWidth,
 			maxHeight:                preset.MaxHeight,
@@ -272,6 +281,9 @@ func loadFullSettings(path string) (appSettings, error) {
 	if err := validatePresets(presets, stored.Selected); err != nil {
 		return appSettings{}, fmt.Errorf("设置文件内容无效：%w", err)
 	}
+	for index := range presets {
+		presets[index].jpegBackground = compress.NormalizeJPEGBackground(presets[index].jpegBackground)
+	}
 	return appSettings{
 		presets:        presets,
 		selected:       stored.Selected,
@@ -279,8 +291,10 @@ func loadFullSettings(path string) (appSettings, error) {
 		theme:          mode.normalized(),
 		autoCompress:   stored.AutoCompress,
 		backupToTrash:  stored.BackupToTrash,
+		keepInMenuBar:  stored.KeepInMenuBar,
 		downloadDir:    normalizeDownloadDir(stored.DownloadDir),
 		watch:          stored.Watch,
+		watchRules:     stored.WatchRules,
 	}, nil
 }
 
@@ -419,8 +433,10 @@ func saveFullSettings(path string, cfg appSettings) error {
 		Theme:          cfg.theme.storedValue(),
 		AutoCompress:   cfg.autoCompress,
 		BackupToTrash:  cfg.backupToTrash,
+		KeepInMenuBar:  cfg.keepInMenuBar,
 		DownloadDir:    normalizeDownloadDir(cfg.downloadDir),
 		Watch:          cfg.watch,
+		WatchRules:     cfg.watchRules,
 	}
 	for index, preset := range cfg.presets {
 		stored.Presets[index] = storedPreset{
@@ -430,6 +446,7 @@ func saveFullSettings(path string, cfg appSettings) error {
 			Lossless:                 preset.lossless,
 			Metadata:                 preset.metadata,
 			OutputFormat:             preset.outputFormat,
+			JPEGBackground:           compress.NormalizeJPEGBackground(preset.jpegBackground),
 			MaxDimension:             preset.maxDimension,
 			MaxWidth:                 preset.maxWidth,
 			MaxHeight:                preset.maxHeight,

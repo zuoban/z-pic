@@ -311,3 +311,103 @@ func TestSettingsGlassTextContrast(t *testing.T) {
 		}
 	}
 }
+
+func TestExportPresetsValidatesTargetDrafts(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(app *application)
+		wantField string
+	}{
+		{
+			name: "invalid resizeText",
+			setup: func(app *application) {
+				app.editor.presets[0].maxDimension = 1920
+				app.editor.targets[0].resizeText = "0"
+			},
+			wantField: presetResizeValueField,
+		},
+		{
+			name: "invalid sizeText",
+			setup: func(app *application) {
+				app.editor.targets[0].sizeText = "not-a-size"
+			},
+			wantField: "preset-target-size-input",
+		},
+		{
+			name: "invalid resizeMinText",
+			setup: func(app *application) {
+				app.editor.presets[0].targetResizeMinDimension = 640
+				app.editor.targets[0].resizeMinText = "abc"
+			},
+			wantField: presetTargetResizeMinField,
+		},
+		{
+			name: "invalid jpegBgText",
+			setup: func(app *application) {
+				app.editor.presets[0].outputFormat = compress.OutputFormatJPEG
+				app.editor.targets[0].jpegBgText = "invalid-hex"
+			},
+			wantField: "preset-jpeg-bg",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testSelectedApplication()
+			app.setSettingsOpen(true)
+			app.editor.section = settingsGeneral
+			app.editor.notice = "旧提示"
+			tc.setup(app)
+
+			app.exportPresetsToDialog()
+			if app.busy {
+				t.Fatal("exportPresetsToDialog must not launch save dialog when draft validation fails")
+			}
+			if app.editor.section != settingsPresets {
+				t.Fatalf("expected section switched to settingsPresets, got %v", app.editor.section)
+			}
+			if app.editor.focusField != tc.wantField {
+				t.Fatalf("focusField = %q, want %q", app.editor.focusField, tc.wantField)
+			}
+			if !strings.HasPrefix(app.editor.message, "无法导出预设：") {
+				t.Fatalf("message = %q, want prefix 无法导出预设：", app.editor.message)
+			}
+			if app.editor.notice != "" {
+				t.Fatalf("expected notice cleared on validation failure, got %q", app.editor.notice)
+			}
+
+			// Verify saveSettingsEdits uses its own save-specific error prefix.
+			app.saveSettingsEdits()
+			if !strings.HasPrefix(app.editor.message, "无法保存设置：") {
+				t.Fatalf("save message = %q, want prefix 无法保存设置：", app.editor.message)
+			}
+		})
+	}
+
+	t.Run("valid target drafts are parsed into validated presets", func(t *testing.T) {
+		app := testSelectedApplication()
+		app.setSettingsOpen(true)
+		idx := app.editor.active
+		app.editor.presets[idx].name = "  自定义导出  "
+		app.editor.presets[idx].maxDimension = 1920
+		app.editor.presets[idx].targetResizeMinDimension = 640
+		app.editor.presets[idx].outputFormat = compress.OutputFormatJPEG
+		app.editor.targets[idx].resizeText = "1600"
+		app.editor.targets[idx].sizeText = "250 KB"
+		app.editor.targets[idx].resizeMinText = "720"
+		app.editor.targets[idx].jpegBgText = "#123456"
+
+		presets, selected, err := app.editor.validatedPresets()
+		if err != nil {
+			t.Fatalf("validatedPresets failed: %v", err)
+		}
+		if selected != "自定义导出" {
+			t.Fatalf("selected = %q, want 自定义导出", selected)
+		}
+		got := presets[idx]
+		if got.name != "自定义导出" || got.maxDimension != 1600 || got.targetSizeBytes != 250_000 ||
+			got.targetResizeMinDimension != 720 || got.jpegBackground != "#123456" {
+			t.Fatalf("parsed preset mismatch: %+v", got)
+		}
+	})
+}

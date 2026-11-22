@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -20,25 +21,47 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 	ui.Scroll(c.Key("folder-watch-settings")).FillWidth().Grow(1).MinHeight(0).
 		Padding(12, settingsPagePadding(c)).Gap(12).Children(func() {
 		settingsPanel(c, "folder-watch-panel").Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, folderWatchIcon).Size(15, 15).TextColor(metadataColor(c))
-				ui.Text(c, "文件夹监听").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+				ui.Text(c, "文件夹监听").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
+				settingsButton(c, "add-watch-rule", "添加规则", 28, s.settingsDraftLocked()).
+					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+					Tooltip("添加另一组输入/输出目录与预设的监听规则").
+					OnClick(func() {
+						if s.settingsDraftLocked() || s.editor != editor {
+							return
+						}
+						editor.watchRules = append(editor.watchRules, folderWatchRule{Preset: s.scheme})
+						editor.watchMessage = ""
+					})
 			})
-			ui.Text(c, "仅处理监听开始后加入输入目录顶层的图片，请在输入目录之外选择输出位置").
+			ui.Text(c, "自动压缩监听开始后新写入输入目录的图片，请在输入目录之外选择输出位置").
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
 				s.folderWatchDirectoryField(c, "watch-input-dir", "输入目录", editor.watch.InputDir, locked, func() {
-					s.chooseFolderWatchDirectory(false)
+					s.chooseFolderWatchDirectoryForRule(0, false)
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				s.folderWatchDirectoryField(c, "watch-output-dir", "输出目录", editor.watch.OutputDir, locked, func() {
-					s.chooseFolderWatchDirectory(true)
+					s.chooseFolderWatchDirectoryForRule(0, true)
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 46)).Padding(8, 0, 2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).Shrink(0)
 					ui.Box(c).Width(0).Grow(1).MinWidth(0)
-					s.folderWatchPresetPicker(c, locked)
+					s.folderWatchRulePresetPicker(c, "watch-preset", &editor.watch.Preset, locked)
+				})
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 36)).Padding(6, 0).Gap(16).AlignItems(ui.Center).Children(func() {
+					ui.Checkbox(c.Key("watch-recursive"), &editor.watch.Recursive, "包含子目录").
+						FontSize(settingsFontSize(c, 13)).Disabled(locked).
+						Tooltip("递归监听子目录，并在输出目录中保留对应的子目录结构")
+					ui.Checkbox(c.Key("watch-autostart"), &editor.watch.AutoStart, "启动时自动监听").
+						FontSize(settingsFontSize(c, 13)).Disabled(s.settingsDraftLocked()).
+						Tooltip("下次启动 Z Pic 时自动恢复此规则的监听")
+					ui.Checkbox(c.Key("watch-notify"), &editor.watch.Notify, "完成后系统通知").
+						FontSize(settingsFontSize(c, 13)).Disabled(s.settingsDraftLocked()).
+						Tooltip("监听图片压缩完成或失败时发送桌面通知")
 				})
 			})
 			if _, ok := s.folderWatchPreset(editor.watch.Preset); !ok && s.watch.session == nil {
@@ -85,6 +108,9 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				})
 			}
 		})
+		for extraIdx := range editor.watchRules {
+			s.extraFolderWatchRulePanel(c, extraIdx)
+		}
 		settingsPanel(c, "folder-watch-rules-panel").Padding(12, 16).Gap(8).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, presetInfoIcon).Size(14, 14).TextColor(metadataColor(c)).Shrink(0)
@@ -94,9 +120,9 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				title string
 				body  string
 			}{
-				{"触发范围", "仅处理监听启动后新写入输入目录顶层的图片，不改动已有历史文件"},
+				{"触发范围", "仅处理监听启动后新写入的图片，不改动已有历史文件；勾选「包含子目录」可递归监听并保留目录结构"},
+				{"多规则与后台", "支持同时监听多个目录，搭配「通用 → 最小化到菜单栏」与「启动时自动监听」可在后台持续运行"},
 				{"支持格式", strings.Join(supportedImageFormats(), " / ") + "，按所选预设输出副本且保留原图"},
-				{"状态控制", "运行期间可在主窗口底部状态栏查看最近处理结果或随时停止监听"},
 			}
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
 				for index, rule := range rules {
@@ -105,13 +131,107 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 					}
 					ui.Row(c).FillWidth().Padding(6, 0).Gap(12).AlignItems(ui.Start).Children(func() {
 						ui.Text(c, rule.title).FontSize(settingsFontSize(c, 12)).FontWeight(500).
-							TextColor(metadataColor(c)).Width(settingsFontSize(c, 60)).Shrink(0).SingleLine()
+							TextColor(metadataColor(c)).Width(settingsFontSize(c, 72)).Shrink(0).SingleLine()
 						ui.Text(c, rule.body).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).
 							Width(0).Grow(1).MinWidth(0).MaxLines(2)
 					})
 				}
 			})
 		})
+	})
+}
+
+func (s *application) extraFolderWatchRulePanel(c *ui.Context, extraIdx int) {
+	editor := s.editor
+	t := c.Theme()
+	ruleIndex := extraIdx + 1
+	rule := &editor.watchRules[extraIdx]
+	session := s.watchSessionForRule(ruleIndex)
+	ruleLocked := s.settingsDraftLocked() || session != nil
+	prefix := fmt.Sprintf("watch-rule-%d", ruleIndex)
+
+	settingsPanel(c, prefix+"-panel").Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Textf(c, "监听规则 %d", ruleIndex+1).FontSize(settingsFontSize(c, 14)).FontWeight(600).Grow(1)
+			if session != nil {
+				status := "正在启动"
+				color := t.TextMuted
+				if session.stopping {
+					status = "正在停止"
+				} else if session.ready {
+					status, color = "正在监听", t.Success
+				}
+				statusCapsule(c, status, color).FontSize(settingsFontSize(c, 11))
+			}
+			deleteDisabled := ruleLocked || s.hasActiveWatchSessionFrom(ruleIndex)
+			deleteBtn := ghostDestructiveButton(c, prefix+"-remove", "删除", 26, deleteDisabled).
+				FontSize(settingsFontSize(c, 12)).Padding(0, 8).Shrink(0)
+			if !ruleLocked && deleteDisabled {
+				deleteBtn.Tooltip("请先停止后续规则的监听后再删除")
+			}
+			deleteBtn.OnClick(func() {
+				if s.settingsDraftLocked() || s.editor != editor || s.hasActiveWatchSessionFrom(ruleIndex) {
+					return
+				}
+				if extraIdx < len(editor.watchRules) {
+					editor.watchRules = slices.Delete(editor.watchRules, extraIdx, extraIdx+1)
+				}
+			})
+		})
+		ui.Column(c).FillWidth().Gap(0).Children(func() {
+			s.folderWatchDirectoryField(c, prefix+"-input", "输入目录", rule.InputDir, ruleLocked, func() {
+				s.chooseFolderWatchDirectoryForRule(ruleIndex, false)
+			})
+			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+			s.folderWatchDirectoryField(c, prefix+"-output", "输出目录", rule.OutputDir, ruleLocked, func() {
+				s.chooseFolderWatchDirectoryForRule(ruleIndex, true)
+			})
+			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+			ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 42)).Padding(6, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).Shrink(0)
+				ui.Box(c).Width(0).Grow(1).MinWidth(0)
+				s.folderWatchRulePresetPicker(c, prefix+"-preset", &rule.Preset, ruleLocked)
+			})
+			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+			ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 34)).Padding(6, 0, 2, 0).Gap(16).AlignItems(ui.Center).Children(func() {
+				ui.Checkbox(c.Key(prefix+"-recursive"), &rule.Recursive, "包含子目录").
+					FontSize(settingsFontSize(c, 13)).Disabled(ruleLocked)
+				ui.Checkbox(c.Key(prefix+"-autostart"), &rule.AutoStart, "启动时自动监听").
+					FontSize(settingsFontSize(c, 13)).Disabled(s.settingsDraftLocked())
+				ui.Box(c).Width(0).Grow(1).MinWidth(0)
+				if session != nil {
+					label := "停止"
+					if session.stopping {
+						label = "停止中…"
+					}
+					ghostDestructiveButton(c, prefix+"-stop", label, 28, session.stopping).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).OnClick(func() {
+						s.stopWatchRule(ruleIndex)
+					})
+				} else {
+					_, validPreset := s.folderWatchPreset(rule.Preset)
+					disabled := ruleLocked || rule.InputDir == "" || rule.OutputDir == "" || !validPreset
+					settingsButton(c, prefix+"-start", "开始监听", 28, disabled).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 12).OnClick(func() {
+						if s.settingsDraftLocked() || s.editor != editor {
+							return
+						}
+						if err := s.startWatchRuleWithNotify(ruleIndex, *rule, editor.watch.Notify, true); err != nil {
+							editor.watchMessage = err.Error()
+							return
+						}
+						if sess := s.watchSessionForRule(ruleIndex); sess != nil {
+							*rule = sess.rule
+						}
+						editor.watchMessage = ""
+					})
+				}
+			})
+		})
+		if _, ok := s.folderWatchPreset(rule.Preset); !ok && session == nil {
+			ui.Text(c, "所选监听预设已不可用，请重新选择").Role(ui.RoleAlert).
+				FontSize(settingsFontSize(c, 12)).TextColor(t.Danger)
+		}
 	})
 }
 
@@ -139,20 +259,20 @@ func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir s
 	})
 }
 
-func (s *application) folderWatchPresetPicker(c *ui.Context, disabled bool) {
+func (s *application) folderWatchRulePresetPicker(c *ui.Context, key string, target *string, disabled bool) {
 	editor := s.editor
-	selected := editor.watch.Preset
+	selected := *target
 	if selected == "" {
 		selected = s.scheme
 	}
 	t := c.Theme()
-	picker := ui.ButtonBase(c.Key("watch-preset"))
+	picker := ui.ButtonBase(c.Key(key))
 	picker.PopoverMenuButton(func(menu *ui.Menu) {
 		menu.MaxWidth(360)
 		for _, preset := range s.presets {
 			name := preset.name
 			if menu.Item(name).Radio(name == selected).Tooltip(name).Disabled(disabled).Chosen() {
-				editor.watch.Preset = name
+				*target = name
 				editor.watchMessage = ""
 			}
 		}
@@ -182,15 +302,32 @@ func (s *application) folderWatchPresetPicker(c *ui.Context, disabled bool) {
 }
 
 func (s *application) chooseFolderWatchDirectory(output bool) {
-	if s.settingsDraftLocked() || s.watch.session != nil {
+	s.chooseFolderWatchDirectoryForRule(0, output)
+}
+
+func (s *application) chooseFolderWatchDirectoryForRule(ruleIndex int, output bool) {
+	if s.settingsDraftLocked() || s.watchSessionForRule(ruleIndex) != nil {
 		return
 	}
 	editor, parent := s.editor, s.settingsWindow
-	title, dir := "选择输入目录", &editor.watch.InputDir
+	title := "选择输入目录"
 	if output {
-		title, dir = "选择输出目录", &editor.watch.OutputDir
+		title = "选择输出目录"
 	}
-	defaultPath := *dir
+	var defaultPath string
+	if ruleIndex == 0 {
+		if output {
+			defaultPath = editor.watch.OutputDir
+		} else {
+			defaultPath = editor.watch.InputDir
+		}
+	} else if idx := ruleIndex - 1; idx >= 0 && idx < len(editor.watchRules) {
+		if output {
+			defaultPath = editor.watchRules[idx].OutputDir
+		} else {
+			defaultPath = editor.watchRules[idx].InputDir
+		}
+	}
 	s.busy = true
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -205,7 +342,20 @@ func (s *application) chooseFolderWatchDirectory(output bool) {
 			if err != nil {
 				editor.watchMessage = title + "失败：" + err.Error()
 			} else if len(paths) > 0 {
-				*dir, editor.watchMessage = paths[0], ""
+				if ruleIndex == 0 {
+					if output {
+						editor.watch.OutputDir = paths[0]
+					} else {
+						editor.watch.InputDir = paths[0]
+					}
+				} else if idx := ruleIndex - 1; idx >= 0 && idx < len(editor.watchRules) {
+					if output {
+						editor.watchRules[idx].OutputDir = paths[0]
+					} else {
+						editor.watchRules[idx].InputDir = paths[0]
+					}
+				}
+				editor.watchMessage = ""
 			}
 			if s.settingsWindow != nil {
 				s.settingsWindow.Invalidate()
@@ -220,7 +370,8 @@ func (s *application) folderWatchStatusBar(c *ui.Context) {
 
 func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool) {
 	watch := &s.watch
-	if watch.session == nil && watch.last.Input == "" && watch.err == nil {
+	sessions := s.activeFolderWatchSessions()
+	if len(sessions) == 0 && watch.last.Input == "" && watch.err == nil {
 		return
 	}
 	t := c.Theme()
@@ -229,13 +380,25 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 		fontSize = settingsFontSize(c, 12)
 	}
 	status, color := "监听已停止", t.TextMuted
-	session := watch.session
-	if session != nil {
+	allStopping := len(sessions) > 0
+	anyReady := false
+	for _, sess := range sessions {
+		if !sess.stopping {
+			allStopping = false
+		}
+		if sess.ready {
+			anyReady = true
+		}
+	}
+	if len(sessions) > 0 {
 		switch {
-		case session.stopping:
+		case allStopping:
 			status = "正在停止监听"
-		case session.ready:
+		case anyReady:
 			status, color = "正在监听", t.Success
+			if len(sessions) > 1 {
+				status = fmt.Sprintf("正在监听 (%d)", len(sessions))
+			}
 		default:
 			status = "正在启动监听"
 		}
@@ -243,7 +406,7 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 	surface, border := tonalWellSurface(c), tonalWellBorder(c)
 	if watch.err != nil {
 		surface, border = statusTintSurface(c, t.Danger), statusTintBorder(c, t.Danger)
-	} else if session != nil && session.ready {
+	} else if anyReady {
 		surface, border = statusTintSurface(c, t.Success), statusTintBorder(c, t.Success)
 	}
 	ui.Row(c.Key("folder-watch-status")).FillWidth().Gap(8).AlignItems(ui.Center).
@@ -258,17 +421,22 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 			}
 			if watch.last.Input != "" {
 				folderWatchOutcomeLine(c, watch.last, fontSize)
-			} else if session != nil && watch.err == nil {
-				ui.Text(c, session.settings.Preset).FontSize(fontSize).TextColor(t.TextMuted).SingleLine().TruncateMiddle().
-					Tooltip(session.settings.InputDir + " → " + session.settings.OutputDir)
+			} else if len(sessions) > 0 && watch.err == nil {
+				first := sessions[0]
+				summary := first.rule.Preset
+				if len(sessions) > 1 {
+					summary = fmt.Sprintf("%s 等 %d 条规则", first.rule.Preset, len(sessions))
+				}
+				ui.Text(c, summary).FontSize(fontSize).TextColor(t.TextMuted).SingleLine().TruncateMiddle().
+					Tooltip(first.rule.InputDir + " → " + first.rule.OutputDir)
 			}
 		})
-		if session != nil {
+		if len(sessions) > 0 {
 			label := "停止监听"
-			if session.stopping {
+			if allStopping {
 				label = "正在停止…"
 			}
-			ghostDestructiveButton(c, "stop-folder-watch", label, 28, session.stopping).
+			ghostDestructiveButton(c, "stop-folder-watch", label, 28, allStopping).
 				FontSize(fontSize).FontWeight(500).Padding(0, 10).Shrink(0).OnClick(s.stopFolderWatch)
 		}
 	})

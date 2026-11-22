@@ -23,6 +23,7 @@ type compressionPreset struct {
 	lossless                 bool
 	metadata                 compress.MetadataPolicy
 	outputFormat             compress.OutputFormat
+	jpegBackground           string
 	maxDimension             int
 	maxWidth                 int
 	maxHeight                int
@@ -39,6 +40,7 @@ func (p compressionPreset) compressionOptions() compress.Options {
 		Lossless:                 p.lossless,
 		Metadata:                 p.metadata,
 		OutputFormat:             p.outputFormat,
+		JPEGBackground:           p.jpegBackground,
 		MaxDimension:             p.maxDimension,
 		MaxWidth:                 p.maxWidth,
 		MaxHeight:                p.maxHeight,
@@ -175,9 +177,14 @@ type settingsEditor struct {
 	theme         themeMode
 	autoCompress  bool
 	backupToTrash bool
+	keepInMenuBar bool
 	downloadDir   string
 	watch         folderWatchSettings
+	watchRules    []folderWatchRule
 	watchMessage  string
+	cliStatus     cliInstallStatus
+	cliMessage    string
+	cliFailed     bool
 	presets       []compressionPreset
 	targets       []*presetTargetDraft
 	selected      int
@@ -277,6 +284,7 @@ type presetTargetDraft struct {
 	resizeText    string
 	sizeText      string
 	resizeMinText string
+	jpegBgText    string
 }
 
 func newPresetTargetDraft(preset compressionPreset) *presetTargetDraft {
@@ -284,10 +292,15 @@ func newPresetTargetDraft(preset compressionPreset) *presetTargetDraft {
 	if floor == 0 {
 		floor = defaultPresetTargetResizeMinDimension
 	}
+	jpegBg := compress.NormalizeJPEGBackground(preset.jpegBackground)
+	if jpegBg == "" {
+		jpegBg = "#ffffff"
+	}
 	return &presetTargetDraft{
 		resizeText:    preset.resizeLimits().text(),
 		sizeText:      presetTargetSizeText(preset.targetSizeBytes),
 		resizeMinText: strconv.Itoa(floor),
+		jpegBgText:    jpegBg,
 	}
 }
 
@@ -314,15 +327,23 @@ func (s *application) settingsHaveChanges() bool {
 	if e.theme.normalized() != s.effectiveThemeMode() ||
 		e.autoCompress != s.autoCompress ||
 		e.backupToTrash != s.backupToTrash ||
-		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) || e.watch != s.watch.settings ||
+		e.keepInMenuBar != s.keepInMenuBar ||
+		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) ||
+		e.watch != s.watch.settings ||
+		!slices.Equal(e.watchRules, s.watch.extraRules) ||
 		!slices.Equal(e.presets, s.presets) || e.presets[e.active].name != s.scheme {
 		return true
 	}
 	for index, target := range e.targets {
 		preset := s.presets[index]
+		expectedBg := compress.NormalizeJPEGBackground(preset.jpegBackground)
+		if expectedBg == "" {
+			expectedBg = "#ffffff"
+		}
 		if target.resizeText != preset.resizeLimits().text() ||
 			target.sizeText != presetTargetSizeText(preset.targetSizeBytes) ||
-			(preset.targetResizeMinDimension != 0 && target.resizeMinText != strconv.Itoa(preset.targetResizeMinDimension)) {
+			(preset.targetResizeMinDimension != 0 && target.resizeMinText != strconv.Itoa(preset.targetResizeMinDimension)) ||
+			(preset.outputFormat == compress.OutputFormatJPEG && strings.ToLower(strings.TrimSpace(target.jpegBgText)) != expectedBg) {
 			return true
 		}
 	}
@@ -349,8 +370,10 @@ func (s *application) restoreSettings() {
 	s.batchOutputDir = usableBatchOutputDir(cfg.batchOutputDir)
 	s.autoCompress = cfg.autoCompress
 	s.backupToTrash = cfg.backupToTrash
+	s.keepInMenuBar = cfg.keepInMenuBar
 	s.downloadDir = normalizeDownloadDir(cfg.downloadDir)
 	s.watch.settings = cfg.watch
+	s.watch.extraRules = slices.Clone(cfg.watchRules)
 	s.syncTheme(cfg.theme)
 	s.applyScheme(cfg.selected)
 }
@@ -387,12 +410,21 @@ func (s *application) setSettingsOpen(open bool) {
 	if session := s.watch.session; session != nil {
 		watch = session.settings
 	}
+	watchRules := slices.Clone(s.watch.extraRules)
+	for i := range watchRules {
+		if session := s.watchSessionForRule(i + 1); session != nil {
+			watchRules[i] = session.rule
+		}
+	}
 	s.editor = &settingsEditor{
 		theme:         s.effectiveThemeMode(),
 		autoCompress:  s.autoCompress,
 		backupToTrash: s.backupToTrash,
+		keepInMenuBar: s.keepInMenuBar,
 		downloadDir:   s.downloadDir,
 		watch:         watch,
+		watchRules:    watchRules,
+		cliStatus:     inspectCLIInstall(s.effectiveCLIInstallEnv()),
 		presets:       slices.Clone(s.presets),
 		targets:       targets,
 		selected:      active,
@@ -467,6 +499,7 @@ func (s *application) hasQuickOverrides() bool {
 		s.lossless != saved.lossless ||
 		s.metadata != saved.metadata ||
 		s.outputFormat != saved.outputFormat ||
+		s.jpegBackground != saved.jpegBackground ||
 		s.resizeLimits != saved.resizeLimits() ||
 		s.targetSizeBytes != saved.targetSizeBytes ||
 		s.targetResizeMinDimension != saved.targetResizeMinDimension
@@ -601,7 +634,9 @@ func (s *application) applyScheme(name string) bool {
 		if preset.name == name {
 			changed := s.quality != preset.quality || s.png != preset.png ||
 				s.lossless != preset.lossless || s.metadata != preset.metadata ||
-				s.outputFormat != preset.outputFormat || s.resizeLimits != preset.resizeLimits() ||
+				s.outputFormat != preset.outputFormat ||
+				s.jpegBackground != preset.jpegBackground ||
+				s.resizeLimits != preset.resizeLimits() ||
 				s.targetSizeBytes != preset.targetSizeBytes ||
 				s.activePresetSnapshot().effectiveTargetResizeMinDimension() != preset.effectiveTargetResizeMinDimension()
 			formatChanged := s.outputFormat != preset.outputFormat || s.lossless != preset.lossless
@@ -609,6 +644,7 @@ func (s *application) applyScheme(name string) bool {
 			s.quality, s.png = preset.quality, preset.png
 			s.lossless, s.metadata = preset.lossless, preset.metadata
 			s.outputFormat = preset.outputFormat
+			s.jpegBackground = preset.jpegBackground
 			s.resizeLimits = preset.resizeLimits()
 			s.targetSizeBytes = preset.targetSizeBytes
 			s.targetResizeMinDimension = preset.targetResizeMinDimension
@@ -711,29 +747,31 @@ func (s *application) deletePreset() {
 	editor.focusField = "preset-name"
 }
 
-func (s *application) showPresetValidationError(err error) {
+func (s *application) showPresetValidationError(prefix string, err error) {
 	s.editor.section = settingsPresets
 	var invalid *presetValidationError
 	if errors.As(err, &invalid) {
 		s.editor.selected = invalid.index
 		s.editor.focusField, s.editor.selectName = invalid.field, false
 	}
-	s.editor.message = "无法保存设置：" + err.Error()
+	s.editor.message = prefix + err.Error()
+	s.editor.notice = ""
 }
 
-func (s *application) saveSettingsEdits() {
-	if s.busy || s.editor == nil || s.editor.confirmDelete {
-		return
-	}
-	presets := slices.Clone(s.editor.presets)
-	for index, target := range s.editor.targets {
+func (e *settingsEditor) validatedPresets() ([]compressionPreset, string, error) {
+	presets := slices.Clone(e.presets)
+	for index := range presets {
 		preset := &presets[index]
 		preset.name = strings.TrimSpace(preset.name)
+		if index >= len(e.targets) || e.targets[index] == nil {
+			preset.jpegBackground = compress.NormalizeJPEGBackground(preset.jpegBackground)
+			continue
+		}
+		target := e.targets[index]
 		if mode, _ := preset.resizeLimits().selection(); mode != resizeNone {
 			limits, err := parseResizeValue(mode, target.resizeText)
 			if err != nil {
-				s.showPresetValidationError(&presetValidationError{index: index, field: presetResizeValueField, err: err})
-				return
+				return nil, "", &presetValidationError{index: index, field: presetResizeValueField, err: err}
 			}
 			if preset.resizeLimits().validate() == nil {
 				preset.setResizeLimits(limits)
@@ -741,22 +779,46 @@ func (s *application) saveSettingsEdits() {
 		}
 		size, err := compress.ParseTargetSize(target.sizeText)
 		if err != nil {
-			s.showPresetValidationError(&presetValidationError{index: index, field: "preset-target-size-input", err: err})
-			return
+			return nil, "", &presetValidationError{index: index, field: "preset-target-size-input", err: err}
 		}
 		preset.targetSizeBytes = size
 		if preset.targetResizeMinDimension != 0 {
 			floor, err := parseTargetResizeMinDimension(target.resizeMinText)
 			if err != nil {
-				s.showPresetValidationError(&presetValidationError{index: index, field: presetTargetResizeMinField, err: err})
-				return
+				return nil, "", &presetValidationError{index: index, field: presetTargetResizeMinField, err: err}
 			}
 			preset.targetResizeMinDimension = floor
 		}
+		if preset.outputFormat == compress.OutputFormatJPEG {
+			if err := compress.ValidateJPEGBackground(target.jpegBgText); err != nil {
+				return nil, "", &presetValidationError{index: index, field: "preset-jpeg-bg", err: err}
+			}
+			preset.jpegBackground = compress.NormalizeJPEGBackground(target.jpegBgText)
+		} else {
+			preset.jpegBackground = compress.NormalizeJPEGBackground(preset.jpegBackground)
+		}
 	}
-	selected := presets[s.editor.active].name
+	if len(presets) == 0 {
+		return nil, "", errors.New("至少需要保留一个压缩预设")
+	}
+	selectedIdx := e.active
+	if selectedIdx < 0 || selectedIdx >= len(presets) {
+		selectedIdx = 0
+	}
+	selected := presets[selectedIdx].name
 	if err := validatePresets(presets, selected); err != nil {
-		s.showPresetValidationError(err)
+		return nil, "", err
+	}
+	return presets, selected, nil
+}
+
+func (s *application) saveSettingsEdits() {
+	if s.busy || s.editor == nil || s.editor.confirmDelete {
+		return
+	}
+	presets, selected, err := s.editor.validatedPresets()
+	if err != nil {
+		s.showPresetValidationError("无法保存设置：", err)
 		return
 	}
 	downloadDir := normalizeDownloadDir(s.editor.downloadDir)
@@ -778,29 +840,42 @@ func (s *application) saveSettingsEdits() {
 	if watch.Preset == "" && (watch.InputDir != "" || watch.OutputDir != "") {
 		watch.Preset = s.scheme
 	}
-	if err := s.saveSettingsSnapshot(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, downloadDir, watch); err != nil {
+	watchRules := slices.Clone(s.editor.watchRules)
+	for i := range watchRules {
+		if watchRules[i].Preset == "" && (watchRules[i].InputDir != "" || watchRules[i].OutputDir != "") {
+			watchRules[i].Preset = s.scheme
+		}
+	}
+	if err := s.saveSettingsSnapshotFull(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, s.editor.keepInMenuBar, downloadDir, watch, watchRules); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
 		return
 	}
 	s.presets = presets
 	s.autoCompress = s.editor.autoCompress
 	s.backupToTrash = s.editor.backupToTrash
+	s.keepInMenuBar = s.editor.keepInMenuBar
 	s.downloadDir = downloadDir
 	s.watch.settings = watch
+	s.watch.extraRules = watchRules
 	if s.settingsError != "" {
 		s.setMessage("设置已保存。", false)
 	}
 	s.settingsError = ""
 	s.applyScheme(selected)
 	s.syncTheme(s.editor.theme)
+	s.refreshTrayMenu()
 	s.setSettingsOpen(false)
 }
 
 func (s *application) saveCurrentSettings(presets []compressionPreset, selected, batchOutputDir string, theme themeMode) error {
-	return s.saveSettingsSnapshot(presets, selected, batchOutputDir, theme, s.autoCompress, s.backupToTrash, s.downloadDir, s.watch.settings)
+	return s.saveSettingsSnapshotFull(presets, selected, batchOutputDir, theme, s.autoCompress, s.backupToTrash, s.keepInMenuBar, s.downloadDir, s.watch.settings, s.watch.extraRules)
 }
 
 func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress, backupToTrash bool, downloadDir string, watch folderWatchSettings) error {
+	return s.saveSettingsSnapshotFull(presets, selected, batchOutputDir, theme, autoCompress, backupToTrash, s.keepInMenuBar, downloadDir, watch, s.watch.extraRules)
+}
+
+func (s *application) saveSettingsSnapshotFull(presets []compressionPreset, selected, batchOutputDir string, theme themeMode, autoCompress, backupToTrash, keepInMenuBar bool, downloadDir string, watch folderWatchSettings, watchRules []folderWatchRule) error {
 	return saveFullSettings(s.settingsFile, appSettings{
 		presets:        presets,
 		selected:       selected,
@@ -808,9 +883,168 @@ func (s *application) saveSettingsSnapshot(presets []compressionPreset, selected
 		theme:          theme,
 		autoCompress:   autoCompress,
 		backupToTrash:  backupToTrash,
+		keepInMenuBar:  keepInMenuBar,
 		downloadDir:    normalizeDownloadDir(downloadDir),
 		watch:          watch,
+		watchRules:     watchRules,
 	})
+}
+
+func (s *application) effectiveCLIInstallEnv() cliInstallEnv {
+	env := s.cliInstallEnv
+	if env.executable == nil && env.candidateDirs == nil && env.pathEnv == nil && env.commandName == "" && env.goos == "" {
+		return defaultCLIInstallEnv()
+	}
+	return env
+}
+
+func (s *application) runInstallCLI() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor := s.editor
+	status, err := installCLI(s.effectiveCLIInstallEnv())
+	editor.cliStatus = status
+	if err != nil {
+		editor.cliMessage = err.Error()
+		editor.cliFailed = true
+		return
+	}
+	editor.cliFailed = false
+	if status.InPATH {
+		editor.cliMessage = "已安装命令行工具：" + status.LinkPath
+	} else {
+		editor.cliMessage = fmt.Sprintf("已创建链接 %s（请将 %s 加入 PATH）", status.LinkPath, filepath.Dir(status.LinkPath))
+	}
+}
+
+func (s *application) refreshCLIInstallStatus() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor := s.editor
+	editor.cliStatus = inspectCLIInstall(s.effectiveCLIInstallEnv())
+	editor.cliMessage = ""
+	editor.cliFailed = false
+}
+
+func (s *application) runUninstallCLI() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor := s.editor
+	env := s.effectiveCLIInstallEnv()
+	if err := uninstallCLI(env); err != nil {
+		editor.cliMessage = err.Error()
+		editor.cliFailed = true
+		editor.cliStatus = inspectCLIInstall(env)
+		return
+	}
+	editor.cliStatus = inspectCLIInstall(env)
+	editor.cliMessage = "已卸载命令行工具链接"
+	editor.cliFailed = false
+}
+
+func (s *application) exportPresetsToDialog() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor, parent := s.editor, s.settingsWindow
+	presets, _, err := editor.validatedPresets()
+	if err != nil {
+		s.showPresetValidationError("无法导出预设：", err)
+		return
+	}
+	s.busy = true
+	go func() {
+		dest, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+			Parent:            parent,
+			Title:             "导出预设",
+			ButtonLabel:       "导出",
+			DefaultPath:       "z-pic-presets.json",
+			CreateDirectories: true,
+			Filters:           []mygo.FileFilter{{Name: "JSON 预设文件", Extensions: []string{"json"}}},
+		})
+		var writeErr error
+		if err == nil && dest != "" {
+			writeErr = writePresetBundleFile(dest, presets)
+		}
+		s.updateWithInvalidate(false, func() {
+			s.busy = false
+			if s.editor != editor {
+				return
+			}
+			switch {
+			case err != nil:
+				editor.message = "导出预设失败：" + err.Error()
+				editor.notice = ""
+			case writeErr != nil:
+				editor.message = "导出预设失败：" + writeErr.Error()
+				editor.notice = ""
+			case dest != "":
+				editor.message = ""
+				editor.notice = fmt.Sprintf("已导出 %d 个预设到 %s", len(presets), filepath.Base(dest))
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *application) importPresetsFromDialog() {
+	if s.settingsDraftLocked() {
+		return
+	}
+	editor, parent := s.editor, s.settingsWindow
+	s.busy = true
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:      parent,
+			Title:       "导入预设",
+			ButtonLabel: "导入",
+			Filters:     []mygo.FileFilter{{Name: "JSON 预设文件", Extensions: []string{"json"}}},
+		})
+		var imported []compressionPreset
+		var readErr error
+		if err == nil && len(paths) > 0 {
+			imported, readErr = readPresetBundleFile(paths[0])
+		}
+		s.updateWithInvalidate(false, func() {
+			s.busy = false
+			if s.editor != editor {
+				return
+			}
+			switch {
+			case err != nil:
+				editor.message = "导入预设失败：" + err.Error()
+				editor.notice = ""
+			case readErr != nil:
+				editor.message = "导入预设失败：" + readErr.Error()
+				editor.notice = ""
+			case len(imported) > 0:
+				merged, added, _, firstIdx := mergeImportedPresets(editor.presets, imported, false)
+				editor.presets = merged
+				targets := make([]*presetTargetDraft, len(merged))
+				for i, preset := range merged {
+					if i < len(editor.targets) {
+						targets[i] = editor.targets[i]
+					} else {
+						targets[i] = newPresetTargetDraft(preset)
+					}
+				}
+				editor.targets = targets
+				if firstIdx >= 0 && firstIdx < len(merged) {
+					editor.selected = firstIdx
+				}
+				editor.message = ""
+				editor.notice = fmt.Sprintf("已导入 %d 个预设（点击保存后生效）", added)
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
 }
 
 // Capture all settings on the UI thread before launching compression.

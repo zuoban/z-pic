@@ -150,22 +150,38 @@ func searchTargetSize[T any](ctx context.Context, initial T, initialRank int, ta
 	return smallest, smallestRank, nil
 }
 
-const maxTargetResizeAttempts = 4
+const maxTargetResizeAttempts = 6
 
 func searchTargetResize(ctx context.Context, baseline *encodedImage, target int64, minDimension int, encode func(int) (*encodedImage, error)) (*encodedImage, error) {
 	smallest := baseline
-	longEdge := max(baseline.width, baseline.height)
-	for attempt := 1; attempt <= maxTargetResizeAttempts && longEdge > minDimension; attempt++ {
+	baselineLongEdge := max(baseline.width, baseline.height)
+	smallestEdge := baselineLongEdge
+	low, high := minDimension, baselineLongEdge-1
+	if low > high {
+		return smallest, nil
+	}
+
+	stopSpan := max(16, baselineLongEdge/64)
+	var bestFit *encodedImage
+	bestFitEdge := 0
+	probedMin := false
+
+	for attempt := 1; attempt <= maxTargetResizeAttempts && low <= high; attempt++ {
+		if bestFit != nil && high-low < stopSpan {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		// Probe in descending order, with a final attempt at the minimum.
-		if attempt < maxTargetResizeAttempts {
-			longEdge = max(minDimension, longEdge*4/5)
-		} else {
-			longEdge = minDimension
+		mid := low + (high-low)/2
+		if attempt == maxTargetResizeAttempts && bestFit == nil && !probedMin {
+			mid = minDimension
 		}
-		candidate, err := encode(longEdge)
+		if mid == minDimension {
+			probedMin = true
+		}
+
+		candidate, err := encode(mid)
 		if cancelErr := ctx.Err(); cancelErr != nil {
 			return nil, cancelErr
 		}
@@ -174,14 +190,25 @@ func searchTargetResize(ctx context.Context, baseline *encodedImage, target int6
 		}
 		if err != nil {
 			// A failed optional probe cannot supersede the valid baseline.
+			high = mid - 1
 			continue
 		}
-		if int64(len(candidate.data)) <= target {
-			return candidate, nil
-		}
-		if len(candidate.data) < len(smallest.data) {
+		if len(candidate.data) < len(smallest.data) || (len(candidate.data) == len(smallest.data) && mid > smallestEdge) {
 			smallest = candidate
+			smallestEdge = mid
 		}
+		if int64(len(candidate.data)) <= target {
+			if bestFit == nil || mid > bestFitEdge {
+				bestFit = candidate
+				bestFitEdge = mid
+			}
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if bestFit != nil {
+		return bestFit, nil
 	}
 	return smallest, nil
 }

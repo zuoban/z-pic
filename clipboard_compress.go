@@ -43,6 +43,7 @@ func (s *application) compressClipboardPNG() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩剪贴板图片", cancel
 	s.setMessage("", false)
+	s.syncTrayMenuIfChanged()
 	go func() {
 		result, err := s.encodeClipboardPNG(ctx, data, options)
 		s.update(func() {
