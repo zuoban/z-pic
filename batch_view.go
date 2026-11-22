@@ -394,7 +394,13 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 	entry := s.batchThumbnail(item)
 	label := item.relPath + " 缩略图"
 	unavailable := item.invalidInput || entry == nil || entry.failed
-	box := ui.Box(c).Size(60, 60).Shrink(0).Radius(8).Background(canvasWellBackground(c)).Border(1, glassBorder(c)).
+	failedPlaceholder := (entry == nil || entry.bitmap == nil) && (item.status == batchFailed || item.invalidInput)
+	bg, border := canvasWellBackground(c), glassBorder(c)
+	if failedPlaceholder {
+		bg = statusTintSurface(c, t.Danger)
+		border = statusTintBorder(c, t.Danger)
+	}
+	box := ui.Box(c).Size(60, 60).Shrink(0).Radius(8).Background(bg).Border(1, border).
 		Clip().Role(ui.RoleImage).Label(label)
 	if entry != nil && entry.bitmap != nil && supportsAlphaFormat(item.format) {
 		box.Draw(func(p *ui.Painter, bounds ui.Rect) {
@@ -414,8 +420,10 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 			ui.Box(c).Size(18, 18).Draw(func(p *ui.Painter, bounds ui.Rect) {
 				frame := ui.Rect{X: bounds.X + 1, Y: bounds.Y + 2, W: 16, H: 14}
 				stroke := metadataColor(c)
-				if unavailable {
-					stroke = t.TextMuted.Alpha(0.55)
+				if failedPlaceholder {
+					stroke = t.Danger.Alpha(0.78)
+				} else if unavailable {
+					stroke = t.TextMuted.Alpha(0.68)
 				}
 				p.Stroke(frame, stroke, 2.5, 1.4)
 				p.StrokePolyline([][2]float32{
@@ -424,6 +432,9 @@ func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {
 					{bounds.X + 11, bounds.Y + 11.5},
 					{bounds.X + 14.5, bounds.Y + 9.5},
 				}, 1.4, stroke)
+				if failedPlaceholder {
+					p.Line(bounds.X+3, bounds.Y+15, bounds.X+15, bounds.Y+3, 1.4, stroke)
+				}
 			})
 		})
 	})
@@ -564,12 +575,16 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					30, 12, 500, s.modalOpen(),
 					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
-			quietButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).
-				FontWeight(500).Padding(0, 10).
+			ghostButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).
+				FontSize(12).FontWeight(500).Padding(0, 9).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
-			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-			ghostDestructiveButton(c, "batch-remove", "移除", 30, s.modalOpen()).Padding(0, 10).
+			if compact {
+				ui.Box(c).Grow(1).MinWidth(4)
+			} else {
+				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+			}
+			ghostDestructiveButton(c, "batch-remove", "移除", 30, s.modalOpen()).FontSize(12).Padding(0, 9).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}
@@ -777,6 +792,10 @@ func (s *application) batchOutputCard(c *ui.Context) {
 	isOverwrite := s.batch.outputMode != batchOutputFolder && !(s.batch.previewOpen && s.batch.previewIndex >= 0 && s.batch.previewIndex < len(s.batch.items) && batchItemOutputPath(s.batch.items[s.batch.previewIndex]) != "")
 	wellBg := tonalWellSurface(c)
 	wellBorder := tonalWellBorder(c)
+	if isOverwrite {
+		wellBg = statusTintSurface(c, t.Danger)
+		wellBorder = statusTintBorder(c, t.Danger)
+	}
 	ui.Column(c).Padding(10, 12).Gap(4).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
 		if s.batch.previewOpen && s.batch.previewIndex >= 0 && s.batch.previewIndex < len(s.batch.items) {
 			item := s.batch.items[s.batch.previewIndex]

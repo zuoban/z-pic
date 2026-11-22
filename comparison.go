@@ -485,15 +485,21 @@ func (s *application) previewCanvas(c *ui.Context) {
 			return
 		}
 		reduceGlass := c.Preferences().ReduceTransparency || c.Preferences().HighContrast
-		badgeBg := ui.RGBA(255, 255, 255, 0.86)
+		badgeBg := ui.RGBA(255, 255, 255, 0.90)
+		badgeBorder := ui.RGBA(17, 20, 26, 0.14)
+		badgeShadow := ui.RGBA(0, 0, 0, 0.08)
 		if t.Dark {
-			badgeBg = ui.RGBA(20, 24, 32, 0.84)
+			badgeBg = ui.RGBA(20, 24, 32, 0.86)
+			badgeBorder = ui.RGBA(255, 255, 255, 0.16)
+			badgeShadow = ui.RGBA(0, 0, 0, 0.28)
 		}
 		if reduceGlass {
 			badgeBg = panelSurface(c)
+			badgeBorder = controlBorder(c)
 		}
 		styleBadge := func(el ui.Element) ui.Element {
-			el.Padding(4, 10).Radius(badgeRadius(22)).Background(badgeBg).Border(1, controlBorder(c))
+			el.Padding(4, 10).Radius(badgeRadius(22)).Background(badgeBg).Border(1, badgeBorder).
+				Shadow(0, 1, 4, 0, badgeShadow)
 			if !reduceGlass {
 				el.Material(glass.Glass{})
 			}

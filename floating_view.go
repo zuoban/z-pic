@@ -580,6 +580,7 @@ func (s *application) floatingHeader(c *ui.Context) {
 				At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
 				Panel: func(panel ui.Element) { stylePopoverPanel(panel, c) },
 			})
+		ui.Box(c).Size(1, 16).Background(hairlineDivider(c))
 		trackBg := tonalWellSurface(c)
 		if !usesGlass(c) && !c.Theme().Dark {
 			trackBg = ui.Hex("#e8ecf2")
@@ -676,21 +677,37 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		if position == len(indices) {
 			_, selected := s.floatingSelectedImage()
 			foreground, iconColor := metadataColor(c), metadataColor(c)
-			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(6).Radius(innerRadius(c)).
-				Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
+			radius := innerRadius(c)
+			highContrast := c.Preferences().HighContrast
+			selectedReveal := s.floating.cursor == position
+			solidBorder := ui.Transparent
+			if highContrast {
+				solidBorder = controlBorder(c)
+			}
+			dashColor := controlBorder(c)
+			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(6).Radius(radius).
+				Background(ui.Transparent).Border(1, solidBorder).
 				Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 				Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 				OnClick(s.revealFloatingSelection)
 			if button.Hovered() && selected && !s.modalOpen() {
 				foreground, iconColor = theme.Text, theme.Text
-				button.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+				dashColor = controlHoverBorder(c)
+				button.Background(glassControlHover(c))
+				if highContrast {
+					button.Border(1, controlHoverBorder(c))
+				}
 			}
-			if s.floating.cursor == position {
+			if selectedReveal {
 				foreground, iconColor = theme.Text, theme.Text
 				button.Background(cardSelectionBackground(c)).Border(1.5, selectionBorder(c))
+			} else if !highContrast {
+				button.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
+					drawDashedOutline(p, bounds, radius, dashColor)
+				})
 			}
 			if list {
-				button.Height(44).Row().Gap(6)
+				button.Height(40).Row().Gap(6)
 			}
 			button.Children(func() {
 				floatingIcon(c, "reveal", 14, iconColor)
@@ -761,40 +778,47 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 						detail = "失败 · " + detail
 					}
 					secondary = theme.Danger
-				} else if !list && item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
-					saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
-					detail = fmt.Sprintf("%s (-%.0f%%)", formatSize(item.outputSize), saved)
-					secondary = theme.Success
 				}
 				detailTooltip := detail
 				if item.errMsg != "" {
 					detailTooltip += "\n" + item.errMsg
 				}
-				displayDetail := detail
-				if !list {
-					// Keep each measured size and its unit together in narrow cells.
-					displayDetail = formatSize(item.originalSize)
-					if item.status == batchDone && item.outputSize > 0 {
-						if !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
-							saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
-							displayDetail = fmt.Sprintf("%s\n-%.0f%%", formatSize(item.outputSize), saved)
-						} else {
-							displayDetail += "\n→ " + formatSize(item.outputSize)
-						}
-					} else if item.width > 0 && item.height > 0 {
-						displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
-					}
-					if item.status == batchFailed {
-						displayDetail = "失败 · " + displayDetail
-					}
-				}
-				metadata := ui.Text(c, displayDetail).FontSize(11).FontFeatures("tnum").TextColor(secondary).
-					FillWidth().Tooltip(detailTooltip)
 				if list {
-					metadata.SingleLine().TruncateMiddle()
+					ui.Text(c, detail).FontSize(11).FontFeatures("tnum").TextColor(secondary).
+						FillWidth().SingleLine().TruncateMiddle().Tooltip(detailTooltip)
 				} else {
 					filename.TextAlign(ui.Center)
-					metadata.MaxLines(2).TextAlign(ui.Center)
+					gridBadgeText := ""
+					var gridBadgeColor ui.Color
+					switch {
+					case item.status == batchFailed:
+						gridBadgeText, gridBadgeColor = "失败", theme.Danger
+					case item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0:
+						saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
+						gridBadgeText, gridBadgeColor = fmt.Sprintf("-%.0f%%", saved), theme.Success
+					case item.status == batchDone && !item.unchanged && item.outputSize > item.originalSize && item.originalSize > 0:
+						grew := float64(item.outputSize-item.originalSize) / float64(item.originalSize) * 100
+						gridBadgeText, gridBadgeColor = fmt.Sprintf("+%.0f%%", grew), theme.Warning
+					}
+					if gridBadgeText != "" {
+						sizeText := formatSize(item.originalSize)
+						if item.status == batchDone && item.outputSize > 0 {
+							sizeText = formatSize(item.outputSize)
+						}
+						ui.Row(c).FillWidth().Center().Gap(4).Tooltip(detailTooltip).Children(func() {
+							ui.Text(c, sizeText).FontSize(11).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
+							statusCapsule(c, gridBadgeText, gridBadgeColor).FontSize(10).Padding(1, 5).SingleLine()
+						})
+					} else {
+						displayDetail := formatSize(item.originalSize)
+						if item.status == batchDone && item.outputSize > 0 {
+							displayDetail += "\n→ " + formatSize(item.outputSize)
+						} else if item.width > 0 && item.height > 0 {
+							displayDetail += fmt.Sprintf("\n%d×%d", item.width, item.height)
+						}
+						ui.Text(c, displayDetail).FontSize(11).FontFeatures("tnum").TextColor(metadataColor(c)).
+							FillWidth().MaxLines(2).TextAlign(ui.Center).Tooltip(detailTooltip)
+					}
 				}
 			})
 			if list {

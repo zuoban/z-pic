@@ -229,9 +229,9 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			if twoColShortcuts {
 				ui.Column(c).FillWidth().Children(func() {
 					for row := 0; row < len(shortcuts); row += 2 {
-						shortcutGap := float32(20)
+						shortcutGap := float32(28)
 						if narrow {
-							shortcutGap = 12
+							shortcutGap = 14
 						}
 						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Center).Children(func() {
 							ui.Column(c).Width(0).Grow(1).Children(func() {
@@ -277,18 +277,18 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 	}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
 	locked := s.settingsDraftLocked()
-	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 64)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 74)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
-					Radius(innerRadius(c)).Padding(5, 10).
+					Center().Radius(innerRadius(c)).Padding(8, 10).
 					Background(tonalWellSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
-					settingsGlassControl(segment, c, 64, locked, t.Accent.Alpha(0.14)).
+					settingsGlassControl(segment, c, 74, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
@@ -299,7 +299,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 				}
 				mode := option.mode
 				segment.Children(func() {
-					ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Box(c).Size(58, 34).Draw(func(p *ui.Painter, r ui.Rect) {
 							lightWin, darkWin := ui.Hex("#eef1f5"), ui.Hex("#141720")
 							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#202634")

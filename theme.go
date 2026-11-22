@@ -835,3 +835,32 @@ func quietToolbarButton(c *ui.Context, key, label string, disabled bool) ui.Elem
 	}
 	return btn
 }
+
+// drawDashedOutline paints a subtle dashed rounded border for drag handles and
+// passive drop/reveal slots so they read distinctly from clickable buttons.
+func drawDashedOutline(p *ui.Painter, bounds ui.Rect, radius float32, stroke ui.Color) {
+	if bounds.W <= 6 || bounds.H <= 6 {
+		return
+	}
+	x1, y1 := bounds.X+0.5, bounds.Y+0.5
+	x2, y2 := bounds.X+bounds.W-0.5, bounds.Y+bounds.H-0.5
+	r := min(radius, min((x2-x1)/2, (y2-y1)/2))
+	const seg, gap = float32(4), float32(4)
+	for x := x1 + r; x < x2-r; x += seg + gap {
+		end := min(x+seg, x2-r)
+		p.Line(x, y1, end, y1, 1, stroke)
+		p.Line(x, y2, end, y2, 1, stroke)
+	}
+	for y := y1 + r; y < y2-r; y += seg + gap {
+		end := min(y+seg, y2-r)
+		p.Line(x1, y, x1, end, 1, stroke)
+		p.Line(x2, y, x2, end, 1, stroke)
+	}
+	if r >= 2 {
+		c := r * 0.55
+		p.StrokePolyline([][2]float32{{x1, y1 + r}, {x1 + r - c, y1 + r - c}, {x1 + r, y1}}, 1, stroke)
+		p.StrokePolyline([][2]float32{{x2 - r, y1}, {x2 - r + c, y1 + r - c}, {x2, y1 + r}}, 1, stroke)
+		p.StrokePolyline([][2]float32{{x1, y2 - r}, {x1 + r - c, y2 - r + c}, {x1 + r, y2}}, 1, stroke)
+		p.StrokePolyline([][2]float32{{x2 - r, y2}, {x2 - r + c, y2 - r + c}, {x2, y2 - r}}, 1, stroke)
+	}
+}

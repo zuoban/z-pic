@@ -46,20 +46,40 @@ func dragExportControl(
 	if height <= 28 {
 		padX, gap = 8, 4
 	}
+	radius := pillRadius(height, c)
+	highContrast := c.Preferences().HighContrast
+	solidBorder := ui.Transparent
+	if highContrast {
+		solidBorder = controlBorder(c)
+	}
+	dashColor := controlBorder(c)
 	chip := ui.Row(c.Key(key)).Height(height).Padding(0, padX).Gap(gap).
-		Center().Shrink(0).Radius(pillRadius(height, c)).
-		Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
+		Center().Shrink(0).Radius(radius).
+		Background(tonalWellSurface(c)).Border(1, solidBorder).
 		Label(label).Tooltip(tooltip).Disabled(disabled)
 	textColor := t.TextMuted
 	if !disabled {
-		chip.DragDataFrom(data, opts)
+		chip.DragDataFrom(data, opts).Cursor(ui.CursorGrab)
 		if chip.Pressed() {
 			textColor = t.Text
-			chip.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
+			dashColor = controlHoverBorder(c)
+			chip.Cursor(ui.CursorGrabbing).Background(glassControlPressed(c))
+			if highContrast {
+				chip.Border(1, controlHoverBorder(c))
+			}
 		} else if chip.Hovered() {
 			textColor = t.Text
-			chip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			dashColor = controlHoverBorder(c)
+			chip.Background(glassControlHover(c))
+			if highContrast {
+				chip.Border(1, controlHoverBorder(c))
+			}
 		}
+	}
+	if !highContrast {
+		chip.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
+			drawDashedOutline(p, bounds, radius, dashColor)
+		})
 	}
 	chip.Children(func() {
 		ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(textColor).Shrink(0)
@@ -900,6 +920,10 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 	}
 	wellBg := tonalWellSurface(c)
 	wellBorder := tonalWellBorder(c)
+	if replaces {
+		wellBg = statusTintSurface(c, t.Danger)
+		wellBorder = statusTintBorder(c, t.Danger)
+	}
 	ui.Column(c).Padding(10, 12).Gap(4).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "保存方式").FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
@@ -1088,41 +1112,22 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 				neutralCapsule(c, status).Role(ui.RoleStatus).Tooltip(status)
 			}
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
-			for index, row := range []struct{ label, value string }{
-				{firstLabel, firstValue}, {secondLabel, secondValue},
-			} {
-				if index == 1 {
-					ui.Row(c).Width(14).Height(24).Center().Children(func() {
-						ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine()
-					})
-				}
-				grow := float32(1)
-				if index == 1 {
-					grow = 1.25
-				}
-				ui.Column(c).Width(0).Grow(grow).Gap(2).Children(func() {
-					ui.Text(c, row.label).FontSize(11).TextColor(metadataColor(c))
-					size := float32(14)
-					weight := 500
-					valColor := t.TextMuted
-					if compact {
-						size = 13
-					}
-					if index == 1 {
-						size = 20
-						weight = 700
-						valColor = t.Text
-						if compact {
-							size = 18
-						}
-					}
-					ui.Row(c).Height(24).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, row.value).FontSize(size).FontWeight(weight).FontFeatures("tnum").
-							TextColor(valColor).SingleLine().Tooltip(row.value)
-					})
-				})
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
+			firstSize, secondSize := float32(14), float32(19)
+			if compact {
+				firstSize, secondSize = 13, 17
 			}
+			ui.Column(c).Gap(3).Shrink(0).Children(func() {
+				ui.Text(c, firstLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
+				ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
+					TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
+			})
+			ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Shrink(0).Padding(0, 0, 3, 0)
+			ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(3).Children(func() {
+				ui.Text(c, secondLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
+				ui.Text(c, secondValue).FontSize(secondSize).FontWeight(700).FontFeatures("tnum").
+					TextColor(t.Text).SingleLine().TruncateMiddle().Tooltip(secondValue)
+			})
 		})
 		if ratio >= 0 || statusDetail != "" || note != "" {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -1140,16 +1145,20 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 						fillRatio = 1
 						tooltip = "输出体积未减小（100.0%）"
 					}
-					ui.Box(c).FillWidth().Height(6).Tooltip(tooltip).
+					ui.Box(c).FillWidth().Height(5).Tooltip(tooltip).
 						Draw(func(p *ui.Painter, r ui.Rect) {
-							p.Fill(r, meterTrackColor(c), 3)
-							fillW := max(6, r.W*float32(min(1, fillRatio)))
-							p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 3)
+							p.Fill(r, meterTrackColor(c), 2.5)
+							fillW := max(5, r.W*float32(min(1, fillRatio)))
+							p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
 						})
 				}
 				if statusDetail != "" {
+					detailColor := metadataColor(c)
+					if statusColor == t.Success {
+						detailColor = t.TextMuted
+					}
 					ui.Text(c, statusDetail).FontSize(12).FontWeight(500).FontFeatures("tnum").
-						TextColor(metadataColor(c)).FillWidth().SingleLine().TruncateMiddle().Tooltip(statusDetail)
+						TextColor(detailColor).FillWidth().SingleLine().TruncateMiddle().Tooltip(statusDetail)
 				}
 				if note != "" {
 					ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
