@@ -50,6 +50,7 @@ func (g settingsPanelGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]f
 type settingsControlGlass struct {
 	material ui.Material
 	backing  ui.Color
+	border   ui.Color
 }
 
 func (g settingsControlGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
@@ -57,6 +58,9 @@ func (g settingsControlGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4
 	// holes. A neutral backing keeps small controls from sampling black.
 	p.FillRadii(box, radii, g.backing)
 	g.material.PaintMaterial(p, box, radii)
+	if g.border.A > 0 {
+		p.Stroke(box, g.border, radii[0], 1)
+	}
 }
 
 // The settings panels sample the native window material; fields stay inset and
@@ -79,8 +83,17 @@ func settingsGlassControl(el ui.Element, c *ui.Context, height float32, disabled
 	height = settingsControlHeight(c, height)
 	if usesGlass(c) && !disabled {
 		material := glass.Glass{Tint: tint, Interactive: !c.Preferences().ReduceMotion}.BuildMaterial(el)
+		border := controlBorder(c)
+		if el.Pressed() || el.Hovered() {
+			border = controlHoverBorder(c)
+		}
+		if tint.A >= 230 {
+			border = ui.Transparent
+		} else if tint.A > 0 {
+			border = selectionBorder(c)
+		}
 		el.Radius(height/2).Background(ui.Transparent).Border(0, ui.Transparent).
-			Material(settingsControlGlass{material: material, backing: glassControlSurface(c)})
+			Material(settingsControlGlass{material: material, backing: glassControlSurface(c), border: border})
 	}
 	return el
 }

@@ -563,10 +563,10 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if outPath := batchItemOutputPath(item); outPath != "" {
-				ghostButton(c, "batch-reveal-item", "定位文件", 30, s.modalOpen()).FontSize(12).Padding(0, 9).
+				ghostButton(c, "batch-reveal-item", "定位文件", 30, s.modalOpen()).FontSize(12).Padding(0, 7).
 					Tooltip("在文件夹中显示输出文件").
 					OnClick(func() { s.revealFileInFolder(outPath) })
-				ghostButton(c, "batch-copy-item", "复制", 30, !s.canCopyBatchItem(item)).FontSize(12).Padding(0, 9).
+				ghostButton(c, "batch-copy-item", "复制", 30, !s.canCopyBatchItem(item)).FontSize(12).Padding(0, 7).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
 				idx := selected
@@ -576,7 +576,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
 			ghostButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).
-				FontSize(12).FontWeight(500).Padding(0, 9).
+				FontSize(12).FontWeight(500).Padding(0, 7).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
 			if compact {
@@ -584,7 +584,7 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			} else {
 				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 			}
-			ghostDestructiveButton(c, "batch-remove", "移除", 30, s.modalOpen()).FontSize(12).Padding(0, 9).
+			ghostDestructiveButton(c, "batch-remove", "移除", 30, s.modalOpen()).FontSize(12).Padding(0, 7).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}

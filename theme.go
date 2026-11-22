@@ -781,6 +781,32 @@ func destructiveAction(c *ui.Context, key, label string, height float32, disable
 	return button.Background(panelSurface(c).Mix(t.Danger, mix)).Border(1, border).TextColor(t.Danger)
 }
 
+func solidDestructiveAction(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
+	t := c.Theme()
+	bg := ui.Hex("#c92a36")
+	hoverBg := ui.Hex("#b4222e")
+	pressBg := ui.Hex("#9c1b26")
+	if t.Dark {
+		bg = ui.Hex("#cf3340")
+		hoverBg = ui.Hex("#e04350")
+		pressBg = ui.Hex("#b52834")
+	}
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = ui.Hex("#ffffff").Alpha(0.7)
+	}
+	btn := ui.Button(c.Key(key), label).Height(height).Radius(pillRadius(height, c)).
+		FontWeight(500).Background(bg).Border(1, border).TextColor(ui.Hex("#ffffff")).Disabled(disabled)
+	if !disabled {
+		if btn.Pressed() {
+			btn.Background(pressBg)
+		} else if btn.Hovered() {
+			btn.Background(hoverBg)
+		}
+	}
+	return btn
+}
+
 func ghostButton(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
 	t := c.Theme()
 	border := ui.Transparent

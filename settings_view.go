@@ -146,20 +146,29 @@ func settingsSegmentsWithSelection(c *ui.Context, key, label string, selected *i
 
 func (s *application) generalSettingsContent(c *ui.Context) {
 	t := c.Theme()
-	width, _ := c.Size()
+	width, height := c.Size()
 	narrow := width < 560
+	compactHeight := height > 0 && height <= 620
 	sideBySideWorkflow := !narrow && c.Preferences().TextScale <= 1.1
 	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
 	scrollPadV, scrollGap := float32(12), float32(10)
-	if narrow {
-		scrollPadV, scrollGap = 12, 8
+	if narrow || compactHeight {
+		scrollPadV, scrollGap = 10, 8
 	}
 	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
-		settingsPanel(c, "settings-appearance-panel").Children(func() {
+		appearancePanel := settingsPanel(c, "settings-appearance-panel")
+		if compactHeight {
+			appearancePanel.Padding(12, 16).Gap(8)
+		}
+		appearancePanel.Children(func() {
 			ui.Text(c, "外观").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
 		})
-		settingsPanel(c, "settings-workflow-panel").Children(func() {
+		workflowPanel := settingsPanel(c, "settings-workflow-panel")
+		if compactHeight {
+			workflowPanel.Padding(12, 16).Gap(8)
+		}
+		workflowPanel.Children(func() {
 			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			locked := s.settingsDraftLocked()
 			autoCheck := func() {
@@ -211,7 +220,11 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 					OnClick(s.cleanupDownloadedImages)
 			})
 		})
-		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
+		shortcutsPanel := settingsPanel(c, "settings-shortcuts-panel")
+		if compactHeight {
+			shortcutsPanel.Padding(12, 16).Gap(8)
+		}
+		shortcutsPanel.Children(func() {
 			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			shortcuts := []struct{ label, key string }{
 				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
@@ -219,8 +232,12 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			if s.clipboardPNGCompressionAvailable() {
 				shortcuts = append(shortcuts, struct{ label, key string }{"压缩剪贴板图片", "⇧V"})
 			}
+			rowHeight := float32(26)
+			if compactHeight {
+				rowHeight = 24
+			}
 			renderRow := func(label, key string) {
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 26)).Padding(2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, rowHeight)).Padding(2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
 						Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(label)
 					keyboardKeycap(c, key).FontSize(settingsFontSize(c, 12))
@@ -269,6 +286,11 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 
 func (s *application) settingsThemeSelection(c *ui.Context) {
 	t := c.Theme()
+	_, height := c.Size()
+	cardHeight := float32(74)
+	if height > 0 && height <= 620 {
+		cardHeight = 68
+	}
 	selected := 0
 	for index, option := range themeOptions {
 		if option.mode == s.editor.theme.normalized() {
@@ -277,18 +299,18 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 	}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
 	locked := s.settingsDraftLocked()
-	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 74)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, cardHeight)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
-					Center().Radius(innerRadius(c)).Padding(8, 10).
+					Center().Radius(innerRadius(c)).Padding(6, 10).
 					Background(tonalWellSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
-					settingsGlassControl(segment, c, 74, locked, t.Accent.Alpha(0.14)).
+					settingsGlassControl(segment, c, cardHeight, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
@@ -369,7 +391,7 @@ func (s *application) settingsFooter(c *ui.Context) {
 					editor.focusField = "delete-preset"
 				})
 			s.focusSettingsFieldDuringDelete(keep)
-			destructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 30), false).
+			solidDestructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 30), false).
 				FontSize(settingsFontSize(c, 13)).Padding(0, 12).OnClick(s.deletePreset)
 		})
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
@@ -389,7 +411,9 @@ func (s *application) settingsFooter(c *ui.Context) {
 			message = "有未保存的更改"
 		}
 		width, _ := c.Size()
-		statusAbove := editor.message != "" || editor.notice != "" || presetChanged || (dirty && width < 560)
+		statusAbove := editor.message != "" ||
+			(message != "" && width < 560) ||
+			(editor.section == settingsPresets && width < 640 && (presetChanged || editor.notice != ""))
 		if statusAbove {
 			statusText := ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).
 				FillWidth().Tooltip(message)

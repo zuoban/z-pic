@@ -1113,20 +1113,26 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
-			firstSize, secondSize := float32(14), float32(19)
+			firstSize, secondSize, valueHeight := float32(14), float32(19), float32(24)
 			if compact {
-				firstSize, secondSize = 13, 17
+				firstSize, secondSize, valueHeight = 13, 17, 22
 			}
 			ui.Column(c).Gap(3).Shrink(0).Children(func() {
 				ui.Text(c, firstLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
-				ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
-					TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
+				ui.Row(c).Height(valueHeight).AlignItems(ui.End).Children(func() {
+					ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
+						TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
+				})
 			})
-			ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Shrink(0).Padding(0, 0, 3, 0)
+			ui.Row(c).Height(valueHeight).AlignItems(ui.End).Shrink(0).Children(func() {
+				ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Padding(0, 0, 3, 0)
+			})
 			ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(3).Children(func() {
 				ui.Text(c, secondLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
-				ui.Text(c, secondValue).FontSize(secondSize).FontWeight(700).FontFeatures("tnum").
-					TextColor(t.Text).SingleLine().TruncateMiddle().Tooltip(secondValue)
+				ui.Row(c).FillWidth().Height(valueHeight).AlignItems(ui.End).Children(func() {
+					ui.Text(c, secondValue).FontSize(secondSize).FontWeight(700).FontFeatures("tnum").
+						TextColor(t.Text).FillWidth().SingleLine().TruncateMiddle().Tooltip(secondValue)
+				})
 			})
 		})
 		if ratio >= 0 || statusDetail != "" || note != "" {

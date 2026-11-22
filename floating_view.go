@@ -718,30 +718,30 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		item := s.floatingImage(indices[position])
 		bitmap := s.floatingBitmap(item)
 		selected := s.floating.cursor == position
-		background, border := glassCardSurface(c), glassBorder(c)
+		background, border := glassCardSurface(c), controlBorder(c)
 		borderWidth := float32(1)
 		foreground, secondary := theme.Text, metadataColor(c)
 		if selected {
 			background, border, borderWidth = cardSelectionBackground(c), selectionBorder(c), 1.5
 		}
-		tile := ui.Column(c).Fill().Padding(6, 8).Gap(4).Radius(innerRadius(c)).Background(background).
+		tile := ui.Column(c).Fill().Padding(9, 8, 7, 8).Gap(5).Radius(innerRadius(c)).Background(background).
 			Border(borderWidth, border).Tooltip(item.path)
 		if tile.Hovered() && !selected {
 			tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}
 		if list {
-			tile.Row().Height(54).Gap(8).AlignItems(ui.Center)
+			tile.Row().Height(54).Padding(6, 8).Gap(8).AlignItems(ui.Center)
 		}
 		tile.Children(func() {
-			image := ui.Column(c).Grow(1).FillWidth().Center()
+			image := ui.Column(c).FillWidth().Center().Shrink(0)
 			if list {
-				image.Grow(0).Size(52, 38).Shrink(0)
+				image.Size(52, 38)
 			} else {
-				image.Height(42).Grow(0).Shrink(0)
+				image.Height(40)
 			}
 			image.Children(func() {
 				if bitmap != nil {
-					maxWidth, maxHeight := float32(92), float32(42)
+					maxWidth, maxHeight := float32(92), float32(40)
 					if list {
 						maxWidth, maxHeight = 52, 38
 					}
