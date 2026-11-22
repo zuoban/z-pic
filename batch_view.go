@@ -54,7 +54,9 @@ func (s *application) batchListPanel(c *ui.Context) {
 					"添加文件夹", actionFolderIcon, 12, 500).
 					Tooltip("从文件夹添加图片").
 					OnClick(s.chooseFolder)
-				ghostDestructiveButton(c, "batch-clear", "清空", 30, s.modalOpen()).FontSize(12).Padding(0, 8).
+				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+				iconLabelButton(c, ghostDestructiveButton(c, "batch-clear", "", 30, s.modalOpen()).Padding(0, 8),
+					"清空", actionCloseIcon, 12, 500).
 					Tooltip("清空当前批量队列").
 					OnClick(s.clearBatch)
 			})
@@ -128,13 +130,10 @@ func (s *application) batchListPanel(c *ui.Context) {
 								FontSize(12).Padding(0, 9).
 								Tooltip("从队列移除全部失败的图片").
 								OnClick(s.removeFailedBatchItems)
-							retryBtn := quietButton(c, "batch-retry-failed", "重试失败项", 28, s.modalOpen()).
-								FontSize(12).FontWeight(500).Padding(0, 10).
+							iconLabelButton(c, quietButton(c, "batch-retry-failed", "", 28, s.modalOpen()).Padding(0, 10),
+								"重试失败项", toolbarRestartIcon, 12, 500).
 								Tooltip(fmt.Sprintf("重新压缩 %d 张失败的图片", retryFailed)).
 								OnClick(s.retryFailedBatchItems)
-							if !s.modalOpen() {
-								retryBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
-							}
 						}
 					}
 					if compactQueue {
@@ -568,7 +567,8 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					Tooltip("重新压缩此失败图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
-			if outPath := batchItemOutputPath(item); outPath != "" {
+			outPath := batchItemOutputPath(item)
+			if outPath != "" {
 				iconLabelButton(c, ghostButton(c, "batch-reveal-item", "", 30, s.modalOpen()).Padding(0, 8),
 					"定位文件", actionRevealIcon, 12, 500).
 					Tooltip("在文件夹中显示输出文件").
@@ -577,16 +577,18 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					"复制", actionCopyIcon, 12, 500).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
+			}
+			iconLabelButton(c, ghostButton(c, "batch-preview", "", 30, s.modalOpen() || item.invalidInput).Padding(0, 8),
+				"预览", actionPreviewIcon, 12, 500).
+				Tooltip("查看或对比选中图片").
+				OnClick(func() { s.openBatchPreview(selected) })
+			if outPath != "" {
 				idx := selected
 				dragExportControl(c, "batch-drag-item", "拖出图片", "拖出",
 					"按住将此压缩输出文件拖到 Finder 或其他应用",
 					30, 12, 500, s.modalOpen(),
 					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
-			iconLabelButton(c, ghostButton(c, "batch-preview", "", 30, s.modalOpen() || item.invalidInput).Padding(0, 8),
-				"预览", actionPreviewIcon, 12, 500).
-				Tooltip("查看或对比选中图片").
-				OnClick(func() { s.openBatchPreview(selected) })
 			if compact {
 				ui.Box(c).Grow(1).MinWidth(4)
 			} else {

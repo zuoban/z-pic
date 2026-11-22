@@ -28,11 +28,15 @@ func (s *application) settingsView(c *ui.Context) {
 		ui.Column(c).FillWidth().Background(sidebarSurface(c)).Children(func() {
 			s.settingsNavigation(c)
 			if s.editor.section != settingsFolderWatch {
-				ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				s.settingsPresetSelection(c)
 			}
 		})
-		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+		if s.editor.section == settingsPresets {
+			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+		} else {
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+		}
 		switch s.editor.section {
 		case settingsPresets:
 			s.presetSettingsContent(c)
@@ -177,13 +181,13 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			locked := s.settingsDraftLocked()
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Padding(3, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 36)).Padding(5, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
 						FontSize(settingsFontSize(c, 13)).Disabled(locked).
 						Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Padding(3, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 36)).Padding(5, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Checkbox(c.Key("settings-backup-to-trash"), &s.editor.backupToTrash, "覆盖原图前移入废纸篓").
 						FontSize(settingsFontSize(c, 13)).Disabled(locked).
 						Tooltip("覆盖单图或批量原图前先将原文件移至系统废纸篓（回收站）")
@@ -314,6 +318,7 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
+					controlElevation(segment, c)
 					settingsGlassControl(segment, c, cardHeight, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
@@ -429,10 +434,10 @@ func (s *application) settingsFooter(c *ui.Context) {
 		}
 		ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			if editor.section == settingsPresets {
-				ghostButton(c, "duplicate-preset", "复制预设", settingsControlHeight(c, 32), s.settingsDraftLocked()).
-					FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 10).OnClick(s.duplicatePreset)
-				deleteButton := ghostDestructiveButton(c, "delete-preset", "删除预设", settingsControlHeight(c, 32), s.settingsDraftLocked() || len(editor.presets) <= 1).
-					FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 10).OnClick(s.requestDeletePreset)
+				iconLabelButton(c, ghostButton(c, "duplicate-preset", "", settingsControlHeight(c, 32), s.settingsDraftLocked()).Padding(0, 10),
+					"复制预设", actionCopyIcon, settingsFontSize(c, 13), 500).OnClick(s.duplicatePreset)
+				deleteButton := iconLabelButton(c, ghostDestructiveButton(c, "delete-preset", "", settingsControlHeight(c, 32), s.settingsDraftLocked() || len(editor.presets) <= 1).Padding(0, 10),
+					"删除预设", actionTrashIcon, settingsFontSize(c, 13), 500).OnClick(s.requestDeletePreset)
 				if len(editor.presets) <= 1 {
 					deleteButton.Tooltip("至少保留一个预设")
 				}

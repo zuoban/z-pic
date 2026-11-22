@@ -423,8 +423,16 @@ func (s *application) floatingView(c *ui.Context) {
 			ui.Row(c).FillWidth().Height(28).Gap(6).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					compressLabel, canCompress := s.floatingCompressAction()
-					primaryAction(c, "floating-compress", compressLabel, !canCompress).
-						Height(28).Radius(pillRadius(28, c)).FontSize(12).FontWeight(500).Padding(0, 10).
+					compressIcon := toolbarCompressIcon
+					switch compressLabel {
+					case "继续压缩":
+						compressIcon = toolbarContinueIcon
+					case "重新压缩":
+						compressIcon = toolbarRestartIcon
+					}
+					iconLabelButton(c, primaryAction(c, "floating-compress", "", !canCompress).
+						Height(28).Radius(pillRadius(28, c)).Padding(0, 10),
+						compressLabel, compressIcon, 12, 500).
 						Tooltip("直接按当前预设压缩队列图片").
 						OnClick(s.compressFromFloating)
 					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
@@ -449,7 +457,8 @@ func (s *application) floatingView(c *ui.Context) {
 							}, s.dragExportOptions())
 					}
 				})
-				ghostButton(c, "floating-downloads", "下载位置", 28, false).FontSize(12).Padding(0, 8).
+				iconLabelButton(c, ghostButton(c, "floating-downloads", "", 28, false).Padding(0, 8),
+					"下载位置", actionFolderIcon, 12, 500).
 					Tooltip("打开网页原图下载文件夹").
 					OnClick(s.openDownloadedImagesDir)
 			})
@@ -719,8 +728,12 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 			if list {
 				button.Height(40).Row().Gap(6)
 			}
+			revealIconSize := float32(18)
+			if list {
+				revealIconSize = 14
+			}
 			button.Children(func() {
-				floatingIcon(c, "reveal", 14, iconColor)
+				floatingIcon(c, "reveal", revealIconSize, iconColor)
 				ui.Text(c, floatingRevealLabel()).FontSize(12).FontWeight(500).TextColor(foreground)
 			})
 			return

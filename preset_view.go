@@ -172,24 +172,16 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(8, bodyPad, 8, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(12, bodyPad, 18, bodyPad).Gap(12).Children(func() {
+		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(12, bodyPad, 18, bodyPad).Gap(10).Children(func() {
 			preset := editor.selectedPreset()
-			settingsPanel(c, "settings-preset-name-panel").Gap(8).Children(func() {
-				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(600).Grow(1)
-					color := chromeMetadataColor(c)
-					if utf8.RuneCountInString(preset.name) > 40 {
-						color = c.Theme().Danger
-					}
-					ui.Textf(c, "%d / 40", utf8.RuneCountInString(preset.name)).FontSize(settingsFontSize(c, 12)).
-						FontFeatures("tnum").TextColor(color).Description("预设名称最多 40 个字符")
-				})
+			settingsPanel(c, "settings-preset-name-panel").Padding(10, 16).Gap(6).Children(func() {
 				var name ui.Element
-				ui.Row(c).FillWidth().Height(settingsControlHeight(c, 34)).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(600).SingleLine().Shrink(0)
 					name = ui.TextInput(c.Key("preset-name"), &preset.name).Label("预设名称").
-						Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 34)).
-						Width(0).Grow(1).MinWidth(0).FontSize(settingsFontSize(c, 13)).Padding(0, 12).Disabled(locked)
-					styleGlassField(name, c, 34)
+						Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 32)).
+						Width(0).Grow(1).MinWidth(0).FontSize(settingsFontSize(c, 13)).Padding(0, 10).Disabled(locked)
+					styleGlassField(name, c, 32)
 					if editor.focusField == "preset-name" && !locked {
 						name.Focus()
 						if editor.selectName {
@@ -200,8 +192,15 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 					if name.Changed() {
 						editor.message = ""
 					}
+					color := chromeMetadataColor(c)
+					if utf8.RuneCountInString(preset.name) > 40 {
+						color = c.Theme().Danger
+					}
+					ui.Textf(c, "%d / 40", utf8.RuneCountInString(preset.name)).FontSize(settingsFontSize(c, 11)).
+						FontFeatures("tnum").TextColor(color).SingleLine().Shrink(0).Description("预设名称最多 40 个字符")
 					if editor.active != editor.selected {
-						settingsButton(c, "activate-preset", "设为当前预设", 32, s.busy || editor.confirmDelete).
+						settingsButton(c, "activate-preset", "设为当前预设", 30, s.busy || editor.confirmDelete).
+							FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 							OnClick(func() { s.selectSettingsPreset(editor.selected) })
 					}
 				})
@@ -274,8 +273,11 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 		if !locked {
 			if addBtn.Pressed() {
 				addBtn.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-			} else if addBtn.Hovered() {
-				addBtn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			} else {
+				controlElevation(addBtn, c)
+				if addBtn.Hovered() {
+					addBtn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+				}
 			}
 		}
 		settingsGlassControl(addBtn, c, 32, locked, ui.Transparent)

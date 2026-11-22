@@ -398,8 +398,9 @@ func (s *application) previewPanel(c *ui.Context) {
 								for _, format := range supportedImageFormats() {
 									neutralCapsule(c, format).FontSize(11).Padding(2, 7).Border(1, hairlineDivider(c))
 								}
+								ui.Box(c).Size(1, 10).Margin(0, 2).Background(hairlineDivider(c))
 								ui.Text(c, "≤ 64 MiB").FontSize(11).FontWeight(500).FontFeatures("tnum").
-									TextColor(metadataColor(c)).Padding(0, 2).SingleLine()
+									TextColor(metadataColor(c)).SingleLine()
 							})
 						})
 						ui.Row(c).Gap(10).Children(func() {
@@ -573,7 +574,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 					formatTip = "转为 JPEG 时透明区域将自动填充白色背景"
 				}
 				if formatTip != "" {
-					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Start).Children(func() {
+					ui.Row(c).FillWidth().Padding(2, 4).Gap(6).AlignItems(ui.Start).Children(func() {
 						ui.Icon(c, presetInfoIcon).Size(13, 13).Padding(1, 0, 0, 0).
 							TextColor(metadataColor(c)).Shrink(0)
 						ui.Text(c, formatTip).FontSize(11).TextColor(t.TextMuted).
@@ -1153,10 +1154,10 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 			ui.Column(c).Gap(2).Shrink(0).AlignItems(ui.Start).Children(func() {
 				ui.Text(c, firstLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
 				ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
-					TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
+					TextColor(t.TextMuted).SingleLine().Padding(0, 0, 3, 0).Tooltip(firstValue)
 			})
 			ui.Row(c).Grow(1).MinWidth(14).Justify(ui.Center).AlignItems(ui.End).Children(func() {
-				ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Padding(0, 0, 3, 0)
+				ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Padding(0, 0, 5, 0)
 			})
 			ui.Column(c).Gap(2).Shrink(0).AlignItems(ui.End).Children(func() {
 				ui.Text(c, secondLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
@@ -1180,11 +1181,11 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 						fillRatio = 1
 						tooltip = "输出体积未减小（100.0%）"
 					}
-					ui.Box(c).FillWidth().Height(6).Tooltip(tooltip).
+					ui.Box(c).FillWidth().Height(5).Tooltip(tooltip).
 						Draw(func(p *ui.Painter, r ui.Rect) {
-							p.Fill(r, meterTrackColor(c), 3)
-							fillW := max(6, r.W*float32(min(1, fillRatio)))
-							p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 3)
+							p.Fill(r, meterTrackColor(c), 2.5)
+							fillW := max(5, r.W*float32(min(1, fillRatio)))
+							p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
 						})
 				}
 				if statusDetail != "" {

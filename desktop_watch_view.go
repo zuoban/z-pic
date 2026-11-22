@@ -52,7 +52,23 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 			if s.watch.session == nil {
 				_, validPreset := s.folderWatchPreset(editor.watch.Preset)
 				disabled := locked || editor.watch.InputDir == "" || editor.watch.OutputDir == "" || !validPreset
-				ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
+				hint := "就绪 · 点击开始自动压缩新增图片"
+				if editor.watch.InputDir == "" || editor.watch.OutputDir == "" {
+					hint = "请先选择输入目录与输出目录"
+				} else if !validPreset {
+					hint = "请先选择可用的监听预设"
+				}
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				ui.Row(c).FillWidth().Padding(4, 0, 0, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Width(0).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+						dotColor := metadataColor(c).Alpha(0.55)
+						if !disabled {
+							dotColor = t.Success
+						}
+						ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(dotColor)
+						ui.Text(c, hint).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).
+							Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(hint)
+					})
 					iconLabelButton(c, primaryAction(c, "start-folder-watch", "", disabled).
 						Height(settingsControlHeight(c, 34)).Radius(pillRadius(settingsControlHeight(c, 34), c)).
 						Padding(0, 14), "开始监听", toolbarContinueIcon, settingsFontSize(c, 13), 500).OnClick(func() {
