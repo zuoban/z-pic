@@ -513,13 +513,14 @@ func (s *application) previewCanvas(c *ui.Context) {
 		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
 				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+					ui.Box(c).Size(6, 6).Radius(3).Background(metadataColor(c).Alpha(0.82))
 					ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(11).FontWeight(500).
 						FontFeatures("tnum").TextColor(t.Text).SingleLine()
 				})
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				var dotColor ui.Color
+				dotColor := metadataColor(c).Alpha(0.82)
 				switch {
 				case !s.result.Unchanged && s.result.OutputSize < s.result.OriginalSize:
 					dotColor = t.Success
@@ -527,9 +528,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 					dotColor = t.Warning
 				}
 				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
-					if dotColor.A > 0 {
-						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
-					}
+					ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
 					ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).
 						FontFeatures("tnum").TextColor(t.Text).SingleLine()
 				})

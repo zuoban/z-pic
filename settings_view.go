@@ -333,37 +333,64 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 					ui.Column(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Box(c).Size(58, 34).Draw(func(p *ui.Painter, r ui.Rect) {
 							lightWin, darkWin := ui.Hex("#eef1f5"), ui.Hex("#141720")
-							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#202634")
-							lightCard, darkCard := ui.Hex("#dde2ec"), ui.Hex("#283042")
-							drawTrafficLights := func(x, y float32, dotColor ui.Color) {
-								for i := range 3 {
-									p.Fill(ui.Rect{X: x + float32(i)*4.5, Y: y, W: 2.5, H: 2.5}, dotColor, 1.25)
+							lightSide, darkSide := ui.Hex("#ffffff"), ui.Hex("#1e2432")
+							lightCard, darkCard := ui.Hex("#dce2ec"), ui.Hex("#283042")
+							lightLine, darkLine := ui.RGBA(17, 20, 26, 0.08), ui.RGBA(255, 255, 255, 0.09)
+							drawTrafficLights := func(x, y float32, dark bool) {
+								if dark {
+									for i := range 3 {
+										p.Fill(ui.Rect{X: x + float32(i)*4.5, Y: y, W: 2.5, H: 2.5}, ui.Hex("#505a70"), 1.25)
+									}
+									return
+								}
+								dots := [3]ui.Color{ui.Hex("#e26b63"), ui.Hex("#e8b64c"), ui.Hex("#63be68")}
+								for i, dot := range dots {
+									p.Fill(ui.Rect{X: x + float32(i)*4.5, Y: y, W: 2.5, H: 2.5}, dot.Alpha(0.82), 1.25)
 								}
 							}
-							switch mode {
-							case themeLight:
-								p.Fill(r, lightWin, 5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.60, Y: r.Y, W: r.W * 0.40, H: r.H}, lightSide, 4)
-								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#c4cad6"))
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 24, H: 17}, lightCard, 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 7, W: r.W * 0.27, H: 3.5}, lightCard, 1.75)
-								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 23, W: r.W * 0.27, H: 5}, t.Accent, 2.5)
-							case themeDark:
-								p.Fill(r, darkWin, 5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.60, Y: r.Y, W: r.W * 0.40, H: r.H}, darkSide, 4)
-								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#475066"))
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 24, H: 17}, darkCard, 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 7, W: r.W * 0.27, H: 3.5}, ui.Hex("#364056"), 1.75)
-								p.Fill(ui.Rect{X: r.X + r.W*0.66, Y: r.Y + 23, W: r.W * 0.27, H: 5}, accentForeground(ui.DarkTheme()), 2.5)
-							default:
-								p.Fill(r, lightWin, 5)
-								p.Fill(ui.Rect{X: r.X + r.W/2, Y: r.Y, W: r.W / 2, H: r.H}, darkWin, 4)
-								drawTrafficLights(r.X+5, r.Y+4.5, ui.Hex("#c4cad6"))
-								p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 11, W: 18, H: 17}, lightCard, 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W/2 + 5, Y: r.Y + 8, W: 18, H: 18}, darkSide, 2.5)
-								p.Fill(ui.Rect{X: r.X + r.W/2 + 8, Y: r.Y + 19, W: 12, H: 4}, accentForeground(ui.DarkTheme()), 2)
+							if !t.Dark {
+								p.Shadow(r, 5, 0, 1, 3, 0, ui.RGBA(17, 20, 26, 0.07))
 							}
-							p.Stroke(r, controlBorder(c), 5, 1)
+							p.Clip(r, 5, func() {
+								switch mode {
+								case themeLight:
+									p.Fill(r, lightWin, 0)
+									sideX := r.X + r.W*0.60
+									p.Fill(ui.Rect{X: sideX, Y: r.Y, W: r.W - r.W*0.60, H: r.H}, lightSide, 0)
+									p.Line(sideX, r.Y, sideX, r.Y+r.H, 1, lightLine)
+									p.Line(r.X, r.Y+9, r.X+r.W, r.Y+9, 1, lightLine)
+									drawTrafficLights(r.X+4.5, r.Y+3.5, false)
+									p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 12.5, W: 24, H: 16}, lightCard, 2.5)
+									p.Fill(ui.Rect{X: sideX + 4, Y: r.Y + 12.5, W: r.W*0.40 - 8, H: 3.5}, lightCard, 1.75)
+									p.Fill(ui.Rect{X: sideX + 4, Y: r.Y + 23.5, W: r.W*0.40 - 8, H: 5}, t.Accent, 2.5)
+								case themeDark:
+									p.Fill(r, darkWin, 0)
+									sideX := r.X + r.W*0.60
+									p.Fill(ui.Rect{X: sideX, Y: r.Y, W: r.W - r.W*0.60, H: r.H}, darkSide, 0)
+									p.Line(sideX, r.Y, sideX, r.Y+r.H, 1, darkLine)
+									p.Line(r.X, r.Y+9, r.X+r.W, r.Y+9, 1, darkLine)
+									drawTrafficLights(r.X+4.5, r.Y+3.5, true)
+									p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 12.5, W: 24, H: 16}, darkCard, 2.5)
+									p.Fill(ui.Rect{X: sideX + 4, Y: r.Y + 12.5, W: r.W*0.40 - 8, H: 3.5}, ui.Hex("#364056"), 1.75)
+									p.Fill(ui.Rect{X: sideX + 4, Y: r.Y + 23.5, W: r.W*0.40 - 8, H: 5}, accentForeground(ui.DarkTheme()), 2.5)
+								default:
+									midX := r.X + r.W/2
+									p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W / 2, H: r.H}, lightWin, 0)
+									p.Fill(ui.Rect{X: midX, Y: r.Y, W: r.W / 2, H: r.H}, darkWin, 0)
+									p.Line(r.X, r.Y+9, midX, r.Y+9, 1, lightLine)
+									p.Line(midX, r.Y+9, r.X+r.W, r.Y+9, 1, darkLine)
+									p.Line(midX, r.Y, midX, r.Y+r.H, 1, ui.RGBA(120, 130, 150, 0.28))
+									drawTrafficLights(r.X+4.5, r.Y+3.5, false)
+									p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 12.5, W: 19, H: 16}, lightCard, 2.5)
+									p.Fill(ui.Rect{X: midX + 4.5, Y: r.Y + 12.5, W: 20, H: 16}, darkSide, 2.5)
+									p.Fill(ui.Rect{X: midX + 7.5, Y: r.Y + 21, W: 14, H: 4}, accentForeground(ui.DarkTheme()), 2)
+								}
+							})
+							frameBorder := controlBorder(c)
+							if !t.Dark {
+								frameBorder = t.Text.Alpha(0.14)
+							}
+							p.Stroke(r, frameBorder, 5, 1)
 						})
 						ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, option.label).FontSize(settingsFontSize(c, 12)).FontWeight(500).SingleLine().TextColor(t.Text)

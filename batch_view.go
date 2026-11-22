@@ -66,15 +66,66 @@ func (s *application) batchListPanel(c *ui.Context) {
 			}
 			filterRow.Children(func() {
 				stats := s.batch.cachedStats
-				labels := []string{
-					fmt.Sprintf("全部 %d", stats.total), fmt.Sprintf("待处理 %d", stats.pending),
-					fmt.Sprintf("已完成 %d", stats.done), fmt.Sprintf("失败 %d", stats.failed),
-					fmt.Sprintf("未达目标 %d", stats.targetSizeMissed),
+				options := [...]struct {
+					label string
+					count int
+					dot   ui.Color
+				}{
+					{fmt.Sprintf("全部 %d", stats.total), stats.total, ui.Transparent},
+					{fmt.Sprintf("待处理 %d", stats.pending), stats.pending, ui.Transparent},
+					{fmt.Sprintf("已完成 %d", stats.done), stats.done, ui.Transparent},
+					{fmt.Sprintf("失败 %d", stats.failed), stats.failed, t.Danger},
+					{fmt.Sprintf("未达目标 %d", stats.targetSizeMissed), stats.targetSizeMissed, t.Warning},
 				}
-				seg := segmentedControl(c, "batch-filter", "队列筛选", &s.batch.filter, 30, false, labels...).
-					FillEqually().FillWidth().
-					Tooltip("按整个队列计数。未达目标的图片也计入已完成。搜索仅在当前筛选中查找。")
-				if seg.Changed() {
+				parts := ui.SegmentedBase(c.Key("batch-filter"), &s.batch.filter, len(options))
+				trackRadius, segRadius := innerRadius(c), float32(6)
+				if usesGlass(c) {
+					trackRadius, segRadius = 15, 13
+				}
+				trackBg := tonalWellSurface(c)
+				if !usesGlass(c) && !t.Dark {
+					trackBg = ui.Hex("#e6eaf1")
+				}
+				parts.Track.Label("队列筛选").Height(30).Padding(2).Gap(2).
+					AlignItems(ui.Stretch).Radius(trackRadius).
+					Background(trackBg).Border(1, segmentedTrackBorder(c)).
+					FillWidth().
+					Tooltip("按整个队列计数。未达目标的图片也计入已完成。搜索仅在当前筛选中查找。").
+					Children(func() {
+						for index, opt := range options {
+							active := s.batch.filter == index
+							segment := parts.Segment(index).Label(opt.label).Padding(0, 6).Radius(segRadius).
+								Center().Border(1, ui.Transparent)
+							textColor, weight := t.TextMuted, 400
+							if !active && opt.count == 0 && index > 0 {
+								textColor = metadataColor(c).Alpha(0.75)
+							}
+							if active {
+								textColor, weight = t.Text, 600
+								segment.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c))
+								if !t.Dark && !c.Preferences().HighContrast {
+									segment.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.08))
+								}
+							} else if segment.Pressed() {
+								textColor = t.Text
+								segment.Background(glassControlPressed(c))
+							} else if segment.Hovered() {
+								textColor = t.Text
+								segment.Background(glassControlHover(c))
+							}
+							showDot := opt.count > 0 && opt.dot != ui.Transparent
+							segment.Children(func() {
+								ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+									if showDot {
+										ui.Box(c).Size(5, 5).Radius(2.5).Shrink(0).Background(opt.dot)
+									}
+									ui.Text(c, opt.label).FontSize(12).FontWeight(weight).FontFeatures("tnum").
+										TextColor(textColor).SingleLine().NoWrap()
+								})
+							})
+						}
+					}).FillEqually()
+				if parts.Track.Changed() {
 					visible = s.filteredBatchIndices()
 				}
 			})
@@ -364,8 +415,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, showDivider bool
 					case item.status == batchProcessing:
 						accentCapsule(c, statusText)
 					default:
-						ui.Text(c, statusText).FontSize(11).FontWeight(500).
-							FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Shrink(0)
+						neutralCapsule(c, statusText).Padding(2, 7)
 					}
 				})
 				width, _ := c.Size()
@@ -790,8 +840,8 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 	}
 	hasCopyResult := s.batch.previewOpen && s.result != nil
 	if showOutput || len(donePaths) > 0 || hasCopyResult {
-		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-		ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c)).Shrink(0)
+		ui.Column(c).FillWidth().Gap(8).Shrink(0).Children(func() {
 			if showOutput {
 				iconLabelButton(c, primaryAction(c, "batch-open-output", "", s.modalOpen()).Height(36).FillWidth(),
 					"打开输出文件夹", actionFolderIcon, 13, 500).
@@ -804,7 +854,8 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 					32, 12, 500, false, s.batchAllDoneDragExportData, s.dragExportOptions()).FillWidth()
 			}
 			if hasCopyResult {
-				quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).FillWidth().
+				iconLabelButton(c, quietButton(c, "copy-result", "", 32, !s.canCopyResult()).FillWidth().Padding(0, 10),
+					"复制图片", actionCopyIcon, 12, 500).
 					KeyShortcuts(ui.Cmd, ui.KeyC).
 					Tooltip("将当前图片的压缩结果复制到剪贴板，可直接粘贴图片 · " + shortcutLabel("C")).OnClick(s.copyResult)
 			}
@@ -821,12 +872,15 @@ func (s *application) batchOutputCard(c *ui.Context) {
 		wellBg = statusTintSurface(c, t.Danger)
 		wellBorder = statusTintBorder(c, t.Danger)
 	}
-	ui.Column(c).Padding(10, 12).Gap(4).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
+	ui.Column(c).Padding(10, 12).Gap(5).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
 		if s.batch.previewOpen && s.batch.previewIndex >= 0 && s.batch.previewIndex < len(s.batch.items) {
 			item := s.batch.items[s.batch.previewIndex]
 			if path := batchItemOutputPath(item); path != "" {
-				ui.Text(c, "输出文件").FontSize(11).FontWeight(600).TextColor(metadataColor(c))
-				ui.Text(c, path).FontSize(12).SingleLine().TruncateMiddle().FillWidth().Tooltip(path)
+				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, presetSaveIcon).Size(13, 13).TextColor(metadataColor(c)).Shrink(0)
+					ui.Text(c, "输出文件").FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
+				})
+				ui.Text(c, path).FontSize(12).FontWeight(500).TextColor(t.Text).SingleLine().TruncateMiddle().FillWidth().Tooltip(path)
 				if item.overwritten {
 					ui.Text(c, "已覆盖原图，无法撤销").FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 				}
@@ -838,6 +892,7 @@ func (s *application) batchOutputCard(c *ui.Context) {
 			if s.batch.outputMode == batchOutputFolder && !s.batch.previewOpen && s.output.Mode == presetSaveAsk {
 				title = "输出位置"
 			}
+			ui.Icon(c, presetSaveIcon).Size(13, 13).TextColor(metadataColor(c)).Shrink(0)
 			ui.Text(c, title).FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
 			if isOverwrite {
 				statusCapsule(c, "覆盖原图", t.Danger)

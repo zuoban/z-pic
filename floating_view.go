@@ -396,7 +396,7 @@ func (s *application) floatingView(c *ui.Context) {
 		options.Formats = append(options.Formats, "image/avif")
 	}
 	background := windowRootBackground(c)
-	root := ui.Column(c).Fill().Padding(10).Gap(6).Background(background)
+	root := ui.Column(c).Fill().Padding(0).Gap(0).Background(background)
 	if !s.floating.expanded {
 		root.Padding(8).Gap(4)
 	}
@@ -415,13 +415,18 @@ func (s *application) floatingView(c *ui.Context) {
 	}
 	root.Children(func() {
 		if s.floating.expanded {
-			s.floatingHeader(c)
-			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-			s.floatingGallery(c, indices)
-			s.floatingFeedback(c)
-			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-			ui.Row(c).FillWidth().Height(28).Gap(6).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
-				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).FillWidth().Padding(6, 12).Background(sidebarSurface(c)).Shrink(0).Children(func() {
+				s.floatingHeader(c)
+			})
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c)).Shrink(0)
+			ui.Column(c).FillWidth().Grow(1).MinHeight(0).Padding(10, 12, 8, 12).Gap(6).Children(func() {
+				s.floatingGallery(c, indices)
+				s.floatingFeedback(c)
+			})
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c)).Shrink(0)
+			ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(6).Background(sidebarSurface(c)).Shrink(0).
+				Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 					compressLabel, canCompress := s.floatingCompressAction()
 					compressIcon := toolbarCompressIcon
 					switch compressLabel {
@@ -435,14 +440,15 @@ func (s *application) floatingView(c *ui.Context) {
 						compressLabel, compressIcon, 12, 500).
 						Tooltip("直接按当前预设压缩队列图片").
 						OnClick(s.compressFromFloating)
-					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
+					ui.Box(c).Size(1, 14).Margin(0, 3).Background(hairlineDivider(c))
+					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 7).
 						OnClick(s.showMainWindow)
 					item, selected := s.floatingSelectedImage()
-					ghostButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 8).
+					ghostButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 7).
 						Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
 						OnClick(s.openFloatingSelection)
 					if s.canCopyFloatingSelection() {
-						ghostButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 8).
+						ghostButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 7).
 							Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
 							OnClick(s.copyFloatingSelection)
 						dragExportControl(c, "floating-drag", "拖出图片", "拖出",
@@ -530,14 +536,19 @@ func (s *application) floatingStack(c *ui.Context) {
 					rect.X, rect.Y = centerX-rect.W/2, centerY-rect.H/2
 				}
 				p.Transform(ui.Rotation(angle), centerX, centerY, func() {
-					shadowAlpha := float32(0.14)
-					strokeColor := controlBorder(c)
+					isFront := index == len(bitmaps)-1
+					shadowAlpha := float32(0.16)
+					strokeColor := theme.Text.Alpha(0.14)
+					fillColor := cardSurface(c)
+					if !isFront && !theme.Dark {
+						fillColor = fillColor.Mix(theme.Text, 0.03)
+					}
 					if theme.Dark {
-						shadowAlpha = 0.34
+						shadowAlpha = 0.36
 						strokeColor = ui.RGBA(255, 255, 255, 0.16)
 					}
 					p.Shadow(rect, 8, 0, 2, 7, 0, ui.Hex("#000000").Alpha(shadowAlpha))
-					p.Fill(rect, cardSurface(c), 8)
+					p.Fill(rect, fillColor, 8)
 					if bitmap != nil {
 						p.Clip(rect, 8, func() { p.Image(bitmap, rect, ui.Contain) })
 					} else {
@@ -747,7 +758,7 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		if selected {
 			background, border, borderWidth = cardSelectionBackground(c), selectionBorder(c), 1.5
 		}
-		tile := ui.Column(c).Fill().Padding(9, 8, 7, 8).Gap(5).Radius(innerRadius(c)).Background(background).
+		tile := ui.Column(c).Fill().Padding(10, 8, 8, 8).Gap(5).Radius(innerRadius(c)).Background(background).
 			Border(borderWidth, border).Tooltip(item.path)
 		if !selected {
 			cardElevation(tile, c)
@@ -763,18 +774,18 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 			if list {
 				image.Size(52, 38)
 			} else {
-				image.Height(40)
+				image.Height(42)
 			}
 			image.Children(func() {
 				if bitmap != nil {
-					maxWidth, maxHeight := float32(92), float32(40)
+					maxWidth, maxHeight := float32(92), float32(42)
 					if list {
 						maxWidth, maxHeight = 52, 38
 					}
 					width, height := bitmap.Size()
 					scale := min(maxWidth/float32(width), maxHeight/float32(height))
 					ui.Image(c, bitmap).Size(float32(width)*scale, float32(height)*scale).
-						Fit(ui.Contain).Radius(6).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
+						Fit(ui.Contain).Radius(7).Clip().Role(ui.RoleImage).Label(item.relPath + " 缩略图")
 				} else {
 					floatingIcon(c, "photo", 30, secondary)
 					if item.invalidInput {
@@ -785,6 +796,8 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 			details := ui.Column(c).FillWidth().Gap(3)
 			if list {
 				details.Width(0).Grow(1)
+			} else {
+				details.Grow(1).Justify(ui.Center)
 			}
 			details.Children(func() {
 				filename := ui.Text(c, filepath.Base(item.relPath)).FontSize(12).FontWeight(600).

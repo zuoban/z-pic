@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -84,6 +85,33 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				})
 			}
 		})
+		settingsPanel(c, "folder-watch-rules-panel").Padding(12, 16).Gap(8).Children(func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, presetInfoIcon).Size(14, 14).TextColor(metadataColor(c)).Shrink(0)
+				ui.Text(c, "监听说明").FontSize(settingsFontSize(c, 13)).FontWeight(600).TextColor(t.Text)
+			})
+			rules := [...]struct {
+				title string
+				body  string
+			}{
+				{"触发范围", "仅处理监听启动后新写入输入目录顶层的图片，不改动已有历史文件"},
+				{"支持格式", strings.Join(supportedImageFormats(), " / ") + "，按所选预设输出副本且保留原图"},
+				{"状态控制", "运行期间可在主窗口底部状态栏查看最近处理结果或随时停止监听"},
+			}
+			ui.Column(c).FillWidth().Gap(0).Children(func() {
+				for index, rule := range rules {
+					if index > 0 {
+						ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+					}
+					ui.Row(c).FillWidth().Padding(6, 0).Gap(12).AlignItems(ui.Start).Children(func() {
+						ui.Text(c, rule.title).FontSize(settingsFontSize(c, 12)).FontWeight(500).
+							TextColor(metadataColor(c)).Width(settingsFontSize(c, 60)).Shrink(0).SingleLine()
+						ui.Text(c, rule.body).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).
+							Width(0).Grow(1).MinWidth(0).MaxLines(2)
+					})
+				}
+			})
+		})
 	})
 }
 
@@ -91,15 +119,20 @@ func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir s
 	t := c.Theme()
 	display := dir
 	textColor := t.TextMuted
+	iconColor := metadataColor(c)
 	if display == "" {
 		display = "未选择文件夹"
 		textColor = metadataColor(c)
+		iconColor = metadataColor(c).Alpha(0.65)
 	}
 	ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 46)).Padding(6, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(2).Children(func() {
+		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Text(c, label).FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).SingleLine()
-			ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
-				FillWidth().SingleLine().TruncateMiddle().Tooltip(display)
+			ui.Row(c).FillWidth().Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, actionFolderIcon).Size(13, 13).TextColor(iconColor).Shrink(0)
+				ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
+					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
+			})
 		})
 		settingsButton(c, key, "选择…", 28, disabled).FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 			Label("选择" + label).Shrink(0).OnClick(choose)

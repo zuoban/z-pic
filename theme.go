@@ -549,8 +549,13 @@ func keycapSurface(c *ui.Context) ui.Color {
 }
 
 func keyboardKeycap(c *ui.Context, key string) ui.Element {
+	t := c.Theme()
+	fg := t.TextMuted
+	if t.Dark {
+		fg = t.Text.Alpha(0.82)
+	}
 	return ui.Text(c, shortcutLabel(key)).FontSize(11).FontWeight(500).FontFeatures("tnum").
-		TextColor(c.Theme().TextMuted).Padding(2, 7).Radius(5).
+		TextColor(fg).Padding(2, 7).Radius(5).
 		Background(keycapSurface(c)).Border(1, controlBorder(c)).SingleLine()
 }
 
@@ -821,13 +826,19 @@ func destructiveAction(c *ui.Context, key, label string, height float32, disable
 		return button
 	}
 	t := c.Theme()
-	mix := float32(0.06)
-	if button.Pressed() {
-		mix = 0.16
-	} else if button.Hovered() {
-		mix = 0.10
+	mix := float32(0.09)
+	if t.Dark {
+		mix = 0.11
 	}
-	border := t.Danger.Alpha(0.35)
+	if button.Pressed() {
+		mix = 0.20
+	} else if button.Hovered() {
+		mix = 0.14
+	}
+	border := t.Danger.Alpha(0.42)
+	if t.Dark {
+		border = t.Danger.Alpha(0.45)
+	}
 	if c.Preferences().HighContrast {
 		border = t.Danger
 	}

@@ -170,11 +170,11 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 	locked := s.settingsDraftLocked()
 	bodyPad := settingsPagePadding(c)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(8, bodyPad, 8, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
+		ui.Column(c).FillWidth().Padding(6, bodyPad, 6, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(12, bodyPad, 18, bodyPad).Gap(10).Children(func() {
+		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(10, bodyPad, 16, bodyPad).Gap(8).Children(func() {
 			preset := editor.selectedPreset()
-			settingsPanel(c, "settings-preset-name-panel").Padding(10, 16).Gap(6).Children(func() {
+			settingsPanel(c, "settings-preset-name-panel").Padding(9, 14).Gap(6).Children(func() {
 				var name ui.Element
 				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Gap(10).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(600).SingleLine().Shrink(0)
@@ -300,7 +300,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 		losslessFormats += "、AVIF"
 	}
 	losslessNote := losslessFormats + " 支持无损。同格式 JPEG 可无损优化，转为 JPEG 使用有损编码。"
-	settingsPanel(c, "settings-quality-panel").Children(func() {
+	settingsPanel(c, "settings-quality-panel").Padding(11, 14).Gap(6).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetQualityIcon).Size(15, 15).TextColor(metadataColor(c))
 			ui.Text(c, "图片质量").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
@@ -330,7 +330,7 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 		sliderDisabled := locked || preset.lossless
 		slider := ui.SliderBase(c.Key("quality-level"), &value, 0, float64(len(imageQualityLevels)-1)).Step(1).
 			Label("图片质量").Value(presetQualityLabel(*preset)).Description(description).Tooltip(description).
-			Height(settingsControlHeight(c, 32)).PaddingX(12).Disabled(sliderDisabled)
+			Height(settingsControlHeight(c, 26)).PaddingX(12).Disabled(sliderDisabled)
 		s.focusSettingsField(slider, "quality-level")
 		at := float32(value / float64(len(imageQualityLevels)-1))
 		slider.Draw(func(p *ui.Painter, r ui.Rect) {
@@ -393,7 +393,7 @@ var resizeDimensionPresets = [...]struct {
 
 func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPreset) {
 	locked := s.settingsDraftLocked()
-	settingsPanel(c, "settings-processing-panel").Gap(10).Children(func() {
+	settingsPanel(c, "settings-processing-panel").Padding(11, 14).Gap(9).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetProcessingIcon).Size(15, 15).TextColor(metadataColor(c))
 			ui.Text(c, "格式与优化").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
@@ -731,7 +731,7 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 	locked := s.settingsDraftLocked()
 	replaces := options.replacesOriginal()
 	inlineReplaceBadge := replaces && preset.outputFormat == compress.OutputFormatKeep
-	settingsPanel(c, "settings-output-panel").Children(func() {
+	settingsPanel(c, "settings-output-panel").Padding(11, 14).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetSaveIcon).Size(15, 15).TextColor(metadataColor(c))
 			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
@@ -809,8 +809,8 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 			Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "保存示例").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-			ui.Text(c, example).Label("保存示例：" + example).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").
-				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(example)
+			ui.Text(c, example).Label("保存示例：" + example).FontSize(settingsFontSize(c, 12)).FontWeight(500).FontFeatures("tnum").
+				TextColor(t.Text).Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(example)
 		})
 		if _, err := options.validateField(); err != nil {
 			ui.Text(c, err.Error()).FontSize(settingsFontSize(c, 12)).TextColor(t.Danger).FillWidth().MaxLines(2)

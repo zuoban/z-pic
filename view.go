@@ -610,8 +610,8 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 			})
 		}
 		if s.result != nil {
-			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-			ui.Column(c).FillWidth().Gap(6).Children(func() {
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c)).Shrink(0)
+			ui.Column(c).FillWidth().Gap(6).Shrink(0).Children(func() {
 				label, hint := s.saveActionDescription()
 				replaces := s.singleReplacesOriginal()
 				disabled := s.modalOpen() || (replaces && !s.canOverwrite())
@@ -806,7 +806,7 @@ func (s *application) presetOverview(c *ui.Context) {
 	saved, hasSaved := s.activeSavedPreset()
 	overridden := s.hasQuickOverrides()
 	disabled := s.modalOpen()
-	ui.Column(c).Gap(10).Children(func() {
+	ui.Column(c).Gap(10).Shrink(0).Children(func() {
 		ui.Row(c).MinHeight(30).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(14).FontWeight(600).Width(0).Grow(1).SingleLine()
 			if overridden {
@@ -956,6 +956,7 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 	}
 	ui.Column(c).Padding(10, 12).Gap(5).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, presetSaveIcon).Size(13, 13).TextColor(metadataColor(c)).Shrink(0)
 			ui.Text(c, "保存方式").FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
 			if replaces {
 				statusCapsule(c, "覆盖原图", t.Danger)
@@ -1109,12 +1110,13 @@ func outputFilenamePreviewForResolved(c *ui.Context, options presetSaveOptions, 
 	if replaces {
 		return
 	}
+	t := c.Theme()
 	example := presetOutputNameForResolved(options, filename, sourceFormat, targetFormat, lossless)
 	ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
-	ui.Column(c).Gap(2).Children(func() {
+	ui.Column(c).Gap(3).Children(func() {
 		ui.Text(c, "文件示例").FontSize(11).TextColor(metadataColor(c))
-		ui.Text(c, example).FontSize(12).FontFeatures("tnum").SingleLine().TruncateMiddle().
-			FillWidth().Label("输出文件示例：" + example).
+		ui.Text(c, example).FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).
+			SingleLine().TruncateMiddle().FillWidth().Label("输出文件示例：" + example).
 			Tooltip(example + "\n已有同名文件时自动使用新名称")
 	})
 }
