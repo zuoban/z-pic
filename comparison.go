@@ -172,56 +172,75 @@ func (s *application) previewZoomControls(c *ui.Context) {
 		Role(ui.RoleToolbar).Label("图片缩放").Children(func() {
 		ui.Row(c).Height(30).Gap(0).Radius(pillRadius(30, c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
-			for index, action := range []struct {
-				key, label string
-				keyCode    ui.Key
-				hintKey    string
-				factor     float64
-			}{
-				{"zoom-out", "缩小", ui.KeyMinus, "-", 0.8},
-				{"zoom-in", "放大", ui.KeyEqual, "=", 1.25},
-			} {
-				if index > 0 {
-					ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-				}
-				disabled := locked || (action.factor < 1 && scale <= 0.01) || (action.factor > 1 && scale >= 16)
+			zoomBtn := func(key, label string, keyCode ui.Key, hintKey string, factor float64) {
+				disabled := locked || (factor < 1 && scale <= 0.01) || (factor > 1 && scale >= 16)
 				strokeColor := t.Text
 				if disabled {
-					strokeColor = t.TextMuted.Alpha(0.45)
+					strokeColor = t.TextMuted.Alpha(0.42)
 				}
-				button := quietButton(c, action.key, "", 30, disabled).
-					Background(ui.Transparent).Border(0, ui.Transparent).Label(action.label).
-					KeyShortcuts(ui.Cmd, action.keyCode).
-					Tooltip(action.label+" · "+shortcutLabel(action.hintKey)).
-					Size(30, 30)
+				button := ui.Button(c.Key(key), "").Size(28, 28).Radius(pillRadius(28, c)).
+					Background(ui.Transparent).Border(0, ui.Transparent).Label(label).
+					KeyShortcuts(ui.Cmd, keyCode).
+					Tooltip(label+" · "+shortcutLabel(hintKey)).
+					Disabled(disabled)
+				if !disabled {
+					if button.Pressed() {
+						button.Background(glassControlPressed(c))
+					} else if button.Hovered() {
+						button.Background(glassControlHover(c))
+					}
+				}
 				button.DrawOver(func(p *ui.Painter, r ui.Rect) {
-					p.Line(r.X+10, r.Y+r.H/2, r.X+r.W-10, r.Y+r.H/2, 1.5, strokeColor)
-					if action.factor > 1 {
-						p.Line(r.X+r.W/2, r.Y+10, r.X+r.W/2, r.Y+r.H-10, 1.5, strokeColor)
+					p.Line(r.X+9, r.Y+r.H/2, r.X+r.W-9, r.Y+r.H/2, 1.5, strokeColor)
+					if factor > 1 {
+						p.Line(r.X+r.W/2, r.Y+9, r.X+r.W/2, r.Y+r.H-9, 1.5, strokeColor)
 					}
 				}).OnClick(func() {
-					s.zoomPreviewBy(action.factor)
+					s.zoomPreviewBy(factor)
 				})
 			}
+			zoomBtn("zoom-out", "缩小", ui.KeyMinus, "-", 0.8)
 			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-			ui.Textf(c, "%.0f%%", scale*100).Width(48).FontSize(12).
+			ui.Textf(c, "%.0f%%", scale*100).Width(46).FontSize(12).FontWeight(500).
 				FontFeatures("tnum").TextAlign(ui.Center).TextColor(t.TextMuted).SingleLine()
+			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+			zoomBtn("zoom-in", "放大", ui.KeyEqual, "=", 1.25)
 		})
-		fit := quietButton(c, "preview-fit", "适应", 30, locked).Padding(0, 10).
-			KeyShortcuts(ui.Cmd, ui.Key0).
-			Tooltip("完整显示图片，重置缩放和位置 · " + shortcutLabel("0")).
-			OnClick(s.resetPreviewFit)
-		actual := quietButton(c, "preview-actual", "1:1", 30, locked).Padding(0, 10).
-			KeyShortcuts(ui.Cmd, ui.Key1).
-			Tooltip("按原始尺寸查看（100%） · " + shortcutLabel("1")).
-			OnClick(s.zoomPreviewActual)
-		fit.Selected(s.comparison.scale == 0)
-		actual.Selected(s.comparison.scale == 1)
-		if s.comparison.scale == 0 {
-			fit.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
-		} else if s.comparison.scale == 1 {
-			actual.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+		trackBg := tonalWellSurface(c)
+		if !usesGlass(c) && !t.Dark {
+			trackBg = ui.Hex("#e8ecf2")
 		}
+		trackRadius, segRadius := innerRadius(c), float32(7)
+		if usesGlass(c) {
+			trackRadius, segRadius = 15, 14
+		}
+		ui.Row(c).Height(30).Padding(1).Gap(2).Radius(trackRadius).
+			Background(trackBg).Border(1, tonalWellBorder(c)).AlignItems(ui.Stretch).Children(func() {
+			scaleOption := func(key, label, tooltip string, keyCode ui.Key, active bool, action func()) {
+				btn := ui.Button(c.Key(key), label).Height(28).Padding(0, 9).Radius(segRadius).
+					FontSize(12).FontFeatures("tnum").
+					KeyShortcuts(ui.Cmd, keyCode).Tooltip(tooltip).
+					Disabled(locked).Selected(active).OnClick(action)
+				if active {
+					btn.FontWeight(500).Background(segmentedThumbSurface(c)).
+						Border(1, segmentedThumbBorder(c)).TextColor(t.Text)
+				} else {
+					btn.FontWeight(400).Background(ui.Transparent).
+						Border(1, ui.Transparent).TextColor(t.TextMuted)
+					if !locked {
+						if btn.Pressed() {
+							btn.Background(glassControlPressed(c)).TextColor(t.Text)
+						} else if btn.Hovered() {
+							btn.Background(glassControlHover(c)).TextColor(t.Text)
+						}
+					}
+				}
+			}
+			scaleOption("preview-fit", "适应", "完整显示图片，重置缩放和位置 · "+shortcutLabel("0"),
+				ui.Key0, s.comparison.scale == 0, s.resetPreviewFit)
+			scaleOption("preview-actual", "1:1", "按原始尺寸查看（100%） · "+shortcutLabel("1"),
+				ui.Key1, s.comparison.scale == 1, s.zoomPreviewActual)
+		})
 	})
 }
 
@@ -465,23 +484,51 @@ func (s *application) previewCanvas(c *ui.Context) {
 		if s.result == nil || s.overwritten {
 			return
 		}
+		reduceGlass := c.Preferences().ReduceTransparency || c.Preferences().HighContrast
+		badgeBg := ui.RGBA(255, 255, 255, 0.86)
+		if t.Dark {
+			badgeBg = ui.RGBA(20, 24, 32, 0.84)
+		}
+		if reduceGlass {
+			badgeBg = panelSurface(c)
+		}
+		styleBadge := func(el ui.Element) ui.Element {
+			el.Padding(4, 10).Radius(badgeRadius(22)).Background(badgeBg).Border(1, controlBorder(c))
+			if !reduceGlass {
+				el.Material(glass.Glass{})
+			}
+			return el
+		}
 		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).Children(func() {
 			if comparing || s.comparison.mode == previewOriginal {
-				ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(11).FontWeight(500).FontFeatures("tnum").
-					Padding(3, 10).Radius(badgeRadius(22)).Material(glass.Glass{}).
-					Border(1, hairlineDivider(c)).TextColor(t.Text).SingleLine()
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+					ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(11).FontWeight(500).
+						FontFeatures("tnum").TextColor(t.Text).SingleLine()
+				})
 			}
 			ui.Box(c).Grow(1)
 			if comparing || s.comparison.mode == previewResult {
-				ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).FontFeatures("tnum").
-					Padding(3, 10).Radius(badgeRadius(22)).Material(glass.Glass{}).
-					Border(1, hairlineDivider(c)).TextColor(t.Text).SingleLine()
+				var dotColor ui.Color
+				switch {
+				case !s.result.Unchanged && s.result.OutputSize < s.result.OriginalSize:
+					dotColor = t.Success
+				case s.result.OutputSize > s.result.OriginalSize:
+					dotColor = t.Warning
+				}
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+					if dotColor.A > 0 {
+						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
+					}
+					ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).
+						FontFeatures("tnum").TextColor(t.Text).SingleLine()
+				})
 			}
 		})
 	})
 	if comparing {
 		pointerX, _, pointerOver := canvas.PointerPosition()
 		dividerHovered := pointerOver && !s.comparison.panning && s.nearComparisonDivider(s.comparison.viewport.W, pointerX)
+		reduceGlass := c.Preferences().ReduceTransparency || c.Preferences().HighContrast
 		canvas.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 			centerX := bounds.X + bounds.W*float32(s.comparison.split/100)
 			centerY := bounds.Y + bounds.H/2
@@ -494,21 +541,28 @@ func (s *application) previewCanvas(c *ui.Context) {
 			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
 			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
 			p.Shadow(handle, 16, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.22))
-			glass.Paint(p, handle, 16, glass.Glass{})
-			handleBorder := ui.RGBA(255, 255, 255, 0.65)
+			if reduceGlass {
+				p.Fill(handle, panelSurface(c), 16)
+			} else {
+				glass.Paint(p, handle, 16, glass.Glass{})
+			}
+			handleBorder := ui.RGBA(255, 255, 255, 0.72)
+			if t.Dark {
+				handleBorder = ui.RGBA(255, 255, 255, 0.30)
+			}
 			chevronColor := t.Text
 			if dividerHovered {
 				handleBorder = accentForeground(t)
 				chevronColor = accentForeground(t)
-			} else if c.Preferences().ReduceTransparency {
-				handleBorder = t.Text.Alpha(0.28)
+			} else if reduceGlass {
+				handleBorder = controlBorder(c)
 			}
 			p.Stroke(handle, handleBorder, 16, 1.25)
 			p.StrokePolyline([][2]float32{
-				{handleX - 4, centerY - 4}, {handleX - 8, centerY}, {handleX - 4, centerY + 4},
+				{handleX - 3.5, centerY - 4}, {handleX - 7.5, centerY}, {handleX - 3.5, centerY + 4},
 			}, 1.5, chevronColor)
 			p.StrokePolyline([][2]float32{
-				{handleX + 4, centerY - 4}, {handleX + 8, centerY}, {handleX + 4, centerY + 4},
+				{handleX + 3.5, centerY - 4}, {handleX + 7.5, centerY}, {handleX + 3.5, centerY + 4},
 			}, 1.5, chevronColor)
 		})
 	}

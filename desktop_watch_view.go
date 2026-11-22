@@ -17,11 +17,11 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 	t := c.Theme()
 	locked := s.settingsDraftLocked() || s.watch.session != nil
 	ui.Scroll(c.Key("folder-watch-settings")).FillWidth().Grow(1).MinHeight(0).
-		Padding(16, settingsPagePadding(c)).Gap(12).Children(func() {
+		Padding(12, settingsPagePadding(c)).Gap(12).Children(func() {
 		settingsPanel(c, "folder-watch-panel").Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, folderWatchIcon).Size(16, 16).TextColor(t.TextMuted)
-				ui.Text(c, "文件夹监听").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+				ui.Icon(c, folderWatchIcon).Size(15, 15).TextColor(metadataColor(c))
+				ui.Text(c, "文件夹监听").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			})
 			ui.Text(c, "仅处理监听开始后加入输入目录顶层的图片，请在输入目录之外选择输出位置").
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
@@ -31,8 +31,8 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 			s.folderWatchDirectoryField(c, "watch-output-dir", "输出目录", editor.watch.OutputDir, locked, func() {
 				s.chooseFolderWatchDirectory(true)
 			})
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
-				ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 13)).FontWeight(500)
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c))
 				s.folderWatchPresetPicker(c, locked)
 			})
 			if _, ok := s.folderWatchPreset(editor.watch.Preset); !ok && s.watch.session == nil {
@@ -49,7 +49,8 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				disabled := locked || editor.watch.InputDir == "" || editor.watch.OutputDir == "" || !validPreset
 				ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 					primaryAction(c, "start-folder-watch", "开始监听", disabled).
-						Height(settingsControlHeight(c, 36)).FontSize(settingsFontSize(c, 13)).OnClick(func() {
+						Height(settingsControlHeight(c, 34)).Radius(pillRadius(settingsControlHeight(c, 34), c)).
+						FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 14).OnClick(func() {
 						if s.settingsDraftLocked() || s.editor != editor {
 							return
 						}
@@ -68,19 +69,19 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir string, disabled bool, choose func()) {
 	t := c.Theme()
 	display := dir
-	textColor := t.TextMuted
+	textColor := t.Text
 	if display == "" {
 		display = "未选择文件夹"
 		textColor = metadataColor(c)
 	}
-	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, label).FontSize(settingsFontSize(c, 13)).FontWeight(500)
-		ui.Row(c).FillWidth().Gap(8).Padding(8, 12).Radius(innerRadius(c)).
-			Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
-				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
-			settingsButton(c, key, "选择…", 32, disabled).Label("选择" + label).Shrink(0).OnClick(choose)
-		})
+	ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
+		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
+		ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+		ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
+			Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
+		settingsButton(c, key, "选择…", 28, disabled).FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+			Label("选择" + label).Shrink(0).OnClick(choose)
 	})
 }
 
@@ -107,19 +108,19 @@ func (s *application) folderWatchPresetPicker(c *ui.Context, disabled bool) {
 			stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 		},
 	}).Label("监听预设").Value(selected).Tooltip(selected).FillWidth().MinWidth(0).
-		Height(settingsControlHeight(c, 36)).Padding(0, 12).Gap(8).AlignItems(ui.Center).
+		Height(settingsControlHeight(c, 34)).Padding(0, 12).Gap(8).AlignItems(ui.Center).
 		Radius(innerRadius(c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 	if !disabled {
 		if picker.Pressed() {
-			picker.Background(glassControlPressed(c))
+			picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 		} else if picker.Hovered() {
-			picker.Background(glassControlHover(c))
+			picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}
 	}
-	settingsGlassControl(picker, c, 36, disabled, ui.Transparent)
+	settingsGlassControl(picker, c, 34, disabled, ui.Transparent)
 	picker.Children(func() {
 		ui.Text(c, selected).FontSize(settingsFontSize(c, 13)).FontWeight(500).Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle()
-		ui.Icon(c, settingsChevronIcon).Size(16, 16).Shrink(0).TextColor(t.TextMuted)
+		ui.Icon(c, settingsChevronIcon).Size(15, 15).Shrink(0).TextColor(t.TextMuted)
 	})
 }
 
@@ -182,11 +183,17 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 			status = "正在启动监听"
 		}
 	}
+	surface, border := tonalWellSurface(c), tonalWellBorder(c)
+	if watch.err != nil {
+		surface, border = statusTintSurface(c, t.Danger), statusTintBorder(c, t.Danger)
+	} else if session != nil && session.ready {
+		surface, border = statusTintSurface(c, t.Success), statusTintBorder(c, t.Success)
+	}
 	ui.Row(c.Key("folder-watch-status")).FillWidth().Gap(8).AlignItems(ui.Center).
-		Padding(8, 12).Radius(innerRadius(c)).
-		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).Children(func() {
+		Padding(7, 10).Radius(innerRadius(c)).
+		Background(surface).Border(1, border).Children(func() {
 		statusCapsule(c, status, color).FontSize(fontSize).Role(ui.RoleStatus)
-		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(4).Children(func() {
+		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			if watch.err != nil {
 				message := watch.err.Error()
 				ui.Text(c, message).Role(ui.RoleAlert).FontSize(fontSize).TextColor(t.Danger).
@@ -204,7 +211,8 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 			if session.stopping {
 				label = "正在停止…"
 			}
-			quietButton(c, "stop-folder-watch", label, 28, session.stopping).FontSize(fontSize).Shrink(0).OnClick(s.stopFolderWatch)
+			ghostDestructiveButton(c, "stop-folder-watch", label, 28, session.stopping).
+				FontSize(fontSize).FontWeight(500).Padding(0, 10).Shrink(0).OnClick(s.stopFolderWatch)
 		}
 	})
 }

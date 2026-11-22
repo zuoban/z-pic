@@ -169,30 +169,30 @@ func applyThemeMode(c *ui.Context, mode themeMode) {
 	theme.ScrollbarWidth = 6
 	if theme.Dark {
 		theme.Background = ui.Hex(darkWindowBackgroundHex)
-		theme.Surface = ui.Hex("#161920")
-		theme.SurfaceHover = ui.Hex("#282e3a")
-		theme.SurfacePressed = ui.Hex("#2f3644")
-		theme.Text = ui.Hex("#f1f3f8")
-		theme.TextMuted = ui.Hex("#c2cad7")
+		theme.Surface = ui.Hex("#161a22")
+		theme.SurfaceHover = ui.Hex("#262c38")
+		theme.SurfacePressed = ui.Hex("#2e3544")
+		theme.Text = ui.Hex("#f1f4f9")
+		theme.TextMuted = ui.Hex("#bcc5d4")
 		theme.Danger = ui.Hex("#ff808a")
 		theme.Warning = ui.Hex("#f4be5c")
 		theme.Success = ui.Hex("#4ee09a")
-		theme.Border = theme.Text.Alpha(0.09)
-		theme.Selection = accentForeground(theme).Alpha(0.28)
-		theme.Scrollbar = theme.Text.Alpha(0.20)
+		theme.Border = theme.Text.Alpha(0.08)
+		theme.Selection = accentForeground(theme).Alpha(0.26)
+		theme.Scrollbar = theme.Text.Alpha(0.18)
 	} else {
 		theme.Background = ui.Hex(lightWindowBackgroundHex)
 		theme.Surface = ui.Hex("#ffffff")
-		theme.SurfaceHover = ui.Hex("#eef1f6")
-		theme.SurfacePressed = ui.Hex("#e5e9f0")
+		theme.SurfaceHover = ui.Hex("#edf0f5")
+		theme.SurfacePressed = ui.Hex("#e3e7ef")
 		theme.Text = ui.Hex("#11141a")
-		theme.TextMuted = ui.Hex("#374050")
+		theme.TextMuted = ui.Hex("#3d4657")
 		theme.Danger = ui.Hex("#bc1c2c")
 		theme.Warning = ui.Hex("#8d4b06")
 		theme.Success = ui.Hex("#0c6d43")
-		theme.Border = theme.Text.Alpha(0.08)
-		theme.Selection = theme.Accent.Alpha(0.20)
-		theme.Scrollbar = theme.Text.Alpha(0.18)
+		theme.Border = theme.Text.Alpha(0.07)
+		theme.Selection = theme.Accent.Alpha(0.18)
+		theme.Scrollbar = theme.Text.Alpha(0.16)
 	}
 	theme.Focus = accentForeground(theme).Alpha(0.85)
 	preferences := c.Preferences()
@@ -459,14 +459,14 @@ func statusTintSurface(c *ui.Context, semantic ui.Color) ui.Color {
 	t := c.Theme()
 	if usesGlass(c) {
 		if t.Dark {
-			return semantic.Alpha(0.16)
+			return semantic.Alpha(0.14)
 		}
-		return semantic.Alpha(0.11)
+		return semantic.Alpha(0.09)
 	}
 	if t.Dark {
-		return t.Surface.Mix(semantic, 0.14)
+		return t.Surface.Mix(semantic, 0.12)
 	}
-	return t.Surface.Mix(semantic, 0.09)
+	return t.Surface.Mix(semantic, 0.07)
 }
 
 func statusTintBorder(c *ui.Context, semantic ui.Color) ui.Color {
@@ -474,9 +474,9 @@ func statusTintBorder(c *ui.Context, semantic ui.Color) ui.Color {
 		return semantic
 	}
 	if c.Theme().Dark {
-		return semantic.Alpha(0.32)
+		return semantic.Alpha(0.28)
 	}
-	return semantic.Alpha(0.26)
+	return semantic.Alpha(0.20)
 }
 
 func statusCapsule(c *ui.Context, text string, semantic ui.Color) ui.Element {
@@ -484,6 +484,13 @@ func statusCapsule(c *ui.Context, text string, semantic ui.Color) ui.Element {
 		TextColor(semantic).Padding(2, 8).Radius(badgeRadius(20)).
 		Background(statusTintSurface(c, semantic)).Border(1, statusTintBorder(c, semantic)).
 		Shrink(0)
+}
+
+func neutralCapsule(c *ui.Context, text string) ui.Element {
+	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
+		TextColor(metadataColor(c)).Padding(2, 8).Radius(badgeRadius(20)).
+		Background(keycapSurface(c)).Border(1, controlBorder(c)).
+		SingleLine().Shrink(0)
 }
 
 func accentCapsule(c *ui.Context, text string) ui.Element {
@@ -516,9 +523,9 @@ func controlBorder(c *ui.Context) ui.Color {
 		return t.Border
 	}
 	if t.Dark {
-		return t.Text.Alpha(0.14)
+		return t.Text.Alpha(0.12)
 	}
-	return t.Text.Alpha(0.12)
+	return t.Text.Alpha(0.10)
 }
 
 func controlHoverBorder(c *ui.Context) ui.Color {
@@ -527,9 +534,9 @@ func controlHoverBorder(c *ui.Context) ui.Color {
 		return t.Border
 	}
 	if t.Dark {
-		return t.Text.Alpha(0.22)
+		return t.Text.Alpha(0.20)
 	}
-	return t.Text.Alpha(0.18)
+	return t.Text.Alpha(0.17)
 }
 
 func glassBorder(c *ui.Context) ui.Color {
@@ -605,7 +612,7 @@ func tonalWellSurface(c *ui.Context) ui.Color {
 	t := c.Theme()
 	if !usesGlass(c) {
 		if t.Dark {
-			return ui.Hex("#1b1f29")
+			return ui.Hex("#1c212c")
 		}
 		return ui.Hex("#f3f5f8")
 	}
@@ -774,15 +781,56 @@ func destructiveAction(c *ui.Context, key, label string, height float32, disable
 	return button.Background(panelSurface(c).Mix(t.Danger, mix)).Border(1, border).TextColor(t.Danger)
 }
 
+func ghostButton(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
+	t := c.Theme()
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = t.Border
+	}
+	btn := ui.Button(c.Key(key), label).Height(height).Radius(pillRadius(height, c)).
+		Background(ui.Transparent).Border(1, border).TextColor(t.TextMuted).Disabled(disabled)
+	if !disabled {
+		if btn.Pressed() {
+			btn.Background(glassControlPressed(c)).Border(1, controlBorder(c)).TextColor(t.Text)
+		} else if btn.Hovered() {
+			btn.Background(glassControlHover(c)).Border(1, controlBorder(c)).TextColor(t.Text)
+		}
+	}
+	return btn
+}
+
+func ghostDestructiveButton(c *ui.Context, key, label string, height float32, disabled bool) ui.Element {
+	t := c.Theme()
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = t.Danger
+	}
+	btn := ui.Button(c.Key(key), label).Height(height).Radius(pillRadius(height, c)).
+		Background(ui.Transparent).Border(1, border).TextColor(t.Danger).Disabled(disabled)
+	if !disabled {
+		if btn.Pressed() {
+			btn.Background(panelSurface(c).Mix(t.Danger, 0.16)).Border(1, t.Danger.Alpha(0.35))
+		} else if btn.Hovered() {
+			btn.Background(panelSurface(c).Mix(t.Danger, 0.09)).Border(1, t.Danger.Alpha(0.28))
+		}
+	}
+	return btn
+}
+
 func quietToolbarButton(c *ui.Context, key, label string, disabled bool) ui.Element {
 	t := c.Theme()
 	btn := ui.Button(c.Key(key), label).Height(32).Radius(pillRadius(32, c)).
+		FontSize(13).FontWeight(500).
 		Background(ui.Transparent).Border(1, ui.Transparent).TextColor(chromeMutedColor(c)).Disabled(disabled)
 	if !disabled {
+		hoverBorder := hairlineDivider(c)
+		if c.Preferences().HighContrast {
+			hoverBorder = controlHoverBorder(c)
+		}
 		if btn.Pressed() {
-			btn.Background(glassControlPressed(c)).TextColor(t.Text)
+			btn.Background(glassControlPressed(c)).Border(1, hoverBorder).TextColor(t.Text)
 		} else if btn.Hovered() {
-			btn.Background(glassControlHover(c)).TextColor(t.Text)
+			btn.Background(glassControlHover(c)).Border(1, hoverBorder).TextColor(t.Text)
 		}
 	}
 	return btn

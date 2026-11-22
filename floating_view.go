@@ -396,7 +396,10 @@ func (s *application) floatingView(c *ui.Context) {
 		options.Formats = append(options.Formats, "image/avif")
 	}
 	background := windowRootBackground(c)
-	root := ui.Column(c).Fill().Padding(8).Gap(4).Background(background)
+	root := ui.Column(c).Fill().Padding(10).Gap(6).Background(background)
+	if !s.floating.expanded {
+		root.Padding(8).Gap(4)
+	}
 	over := false
 	if !s.draggingOut {
 		_, over = ui.DataDragOver(root, options)
@@ -417,25 +420,26 @@ func (s *application) floatingView(c *ui.Context) {
 			s.floatingGallery(c, indices)
 			s.floatingFeedback(c)
 			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-			ui.Row(c).FillWidth().Height(28).Gap(8).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Height(28).Gap(6).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					compressLabel, canCompress := s.floatingCompressAction()
-					primaryAction(c, "floating-compress", compressLabel, !canCompress).Height(28).FontSize(12).Padding(0, 10).
+					primaryAction(c, "floating-compress", compressLabel, !canCompress).
+						Height(28).Radius(pillRadius(28, c)).FontSize(12).FontWeight(500).Padding(0, 10).
 						Tooltip("直接按当前预设压缩队列图片").
 						OnClick(s.compressFromFloating)
-					quietButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
+					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
 						OnClick(s.showMainWindow)
 					item, selected := s.floatingSelectedImage()
-					quietButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 8).
+					ghostButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 8).
 						Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
 						OnClick(s.openFloatingSelection)
 					if s.canCopyFloatingSelection() {
-						quietButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 8).
+						ghostButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 8).
 							Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
 							OnClick(s.copyFloatingSelection)
 						dragExportControl(c, "floating-drag", "拖出图片", "拖出",
 							"按住将所选压缩结果拖到 Finder 或其他应用",
-							28, 12, 400, false,
+							28, 12, 500, false,
 							func() transfer.Data {
 								sel, ok := s.floatingSelectedImage()
 								if !ok {
@@ -445,7 +449,7 @@ func (s *application) floatingView(c *ui.Context) {
 							}, s.dragExportOptions())
 					}
 				})
-				quietButton(c, "floating-downloads", "下载位置", 28, false).FontSize(12).Padding(0, 8).
+				ghostButton(c, "floating-downloads", "下载位置", 28, false).FontSize(12).Padding(0, 8).
 					Tooltip("打开网页原图下载文件夹").
 					OnClick(s.openDownloadedImagesDir)
 			})
@@ -535,18 +539,18 @@ func (s *application) floatingStack(c *ui.Context) {
 }
 
 func (s *application) floatingHeader(c *ui.Context) {
-	ui.Row(c).Height(40).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
+	ui.Row(c).Height(38).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		floatingIconButton(c, "floating-collapse", "收起图片", "back",
 			func() { s.setFloatingExpanded(false) })
-		ui.Column(c).Grow(1).Width(0).Gap(4).Children(func() {
+		ui.Column(c).Grow(1).Width(0).Gap(2).Children(func() {
 			count := fmt.Sprintf("%d 张图片", s.floatingImageCount())
 			if s.floating.filter != batchFilterAll {
 				count = fmt.Sprintf("%d / %d 张图片", len(s.floating.paths), s.floatingImageCount())
 			}
-			ui.Text(c, count).FontSize(15).FontWeight(500).FontFeatures("tnum").SingleLine()
+			ui.Text(c, count).FontSize(14).FontWeight(600).FontFeatures("tnum").SingleLine()
 			if item, ok := s.floatingSelectedImage(); ok {
 				ui.Text(c, "已选 1 张 · "+formatSize(item.originalSize)).
-					FontSize(12).FontFeatures("tnum").TextColor(chromeMetadataColor(c)).SingleLine().TruncateMiddle()
+					FontSize(11).FontFeatures("tnum").TextColor(chromeMetadataColor(c)).SingleLine().TruncateMiddle()
 			}
 		})
 		filterLabels := []string{"全部图片", "待处理", "已完成", "失败"}
@@ -576,7 +580,11 @@ func (s *application) floatingHeader(c *ui.Context) {
 				At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
 				Panel: func(panel ui.Element) { stylePopoverPanel(panel, c) },
 			})
-		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(panelSubtleSurface(c)).Border(1, glassBorder(c)).Children(func() {
+		trackBg := tonalWellSurface(c)
+		if !usesGlass(c) && !c.Theme().Dark {
+			trackBg = ui.Hex("#e8ecf2")
+		}
+		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(trackBg).Border(1, tonalWellBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -667,25 +675,25 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		theme := c.Theme()
 		if position == len(indices) {
 			_, selected := s.floatingSelectedImage()
-			foreground, iconColor := theme.TextMuted, theme.TextMuted
+			foreground, iconColor := metadataColor(c), metadataColor(c)
 			button := ui.ButtonBase(c.Key("floating-reveal")).Fill().Column().Center().Gap(6).Radius(innerRadius(c)).
 				Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
 				Label(floatingRevealLabel()).Disabled(!selected || s.modalOpen()).
 				Tooltip("在文件夹中定位选中图片，有压缩输出时优先显示输出文件").
 				OnClick(s.revealFloatingSelection)
 			if button.Hovered() && selected && !s.modalOpen() {
-				foreground = theme.Text
+				foreground, iconColor = theme.Text, theme.Text
 				button.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 			}
 			if s.floating.cursor == position {
-				foreground = theme.Text
+				foreground, iconColor = theme.Text, theme.Text
 				button.Background(cardSelectionBackground(c)).Border(1.5, selectionBorder(c))
 			}
 			if list {
-				button.Height(52).Row().Gap(8)
+				button.Height(44).Row().Gap(6)
 			}
 			button.Children(func() {
-				floatingIcon(c, "reveal", 15, iconColor)
+				floatingIcon(c, "reveal", 14, iconColor)
 				ui.Text(c, floatingRevealLabel()).FontSize(12).FontWeight(500).TextColor(foreground)
 			})
 			return
@@ -745,9 +753,15 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 					detail += fmt.Sprintf(" · %d×%d", item.width, item.height)
 				}
 				if item.status == batchFailed {
-					detail = "失败 · " + detail
+					if list {
+						if item.errMsg != "" {
+							detail = item.errMsg
+						}
+					} else {
+						detail = "失败 · " + detail
+					}
 					secondary = theme.Danger
-				} else if item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
+				} else if !list && item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0 {
 					saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
 					detail = fmt.Sprintf("%s (-%.0f%%)", formatSize(item.outputSize), saved)
 					secondary = theme.Success
@@ -783,6 +797,18 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 					metadata.MaxLines(2).TextAlign(ui.Center)
 				}
 			})
+			if list {
+				switch {
+				case item.status == batchFailed:
+					statusCapsule(c, "失败", theme.Danger).SingleLine()
+				case item.status == batchDone && !item.unchanged && item.outputSize < item.originalSize && item.originalSize > 0:
+					saved := float64(item.originalSize-item.outputSize) / float64(item.originalSize) * 100
+					statusCapsule(c, fmt.Sprintf("-%.0f%%", saved), theme.Success).SingleLine()
+				case item.status == batchDone && !item.unchanged && item.outputSize > item.originalSize && item.originalSize > 0:
+					grew := float64(item.outputSize-item.originalSize) / float64(item.originalSize) * 100
+					statusCapsule(c, fmt.Sprintf("+%.0f%%", grew), theme.Warning).SingleLine()
+				}
+			}
 		})
 	})
 }
@@ -830,15 +856,19 @@ func floatingIconButton(c *ui.Context, key, label, icon string, action func()) u
 	if icon == "close" || icon == "back" || icon == "down" {
 		radius = 14
 	}
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = controlBorder(c)
+	}
 	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Shrink(0).Radius(radius).
-		Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).Tooltip(label)
+		Background(ui.Transparent).Border(1, border).Label(label).Tooltip(label)
 	iconColor := theme.TextMuted
 	if button.Pressed() {
 		iconColor = theme.Text
-		button.Background(glassControlPressed(c))
+		button.Background(glassControlPressed(c)).Border(1, controlBorder(c))
 	} else if button.Hovered() {
 		iconColor = theme.Text
-		button.Background(glassControlHover(c))
+		button.Background(glassControlHover(c)).Border(1, controlBorder(c))
 	}
 	if action != nil {
 		button.OnClick(action)

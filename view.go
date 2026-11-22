@@ -26,9 +26,9 @@ var (
 )
 
 func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
-	return button.Label(label).Gap(6).Children(func() {
-		ui.Icon(c, icon).Size(16, 16).Shrink(0)
-		ui.Text(c, label).SingleLine()
+	return button.Label(label).Padding(0, 10).Gap(5).Children(func() {
+		ui.Icon(c, icon).Size(15, 15).Shrink(0)
+		ui.Text(c, label).FontSize(13).FontWeight(500).SingleLine()
 	})
 }
 
@@ -42,26 +42,29 @@ func dragExportControl(
 	opts transfer.DragOptions,
 ) ui.Element {
 	t := c.Theme()
-	padX, gap := float32(12), float32(8)
+	padX, gap := float32(12), float32(6)
 	if height <= 28 {
 		padX, gap = 8, 4
 	}
 	chip := ui.Row(c.Key(key)).Height(height).Padding(0, padX).Gap(gap).
 		Center().Shrink(0).Radius(pillRadius(height, c)).
-		Background(glassControlSurface(c)).Border(1, controlBorder(c)).
+		Background(tonalWellSurface(c)).Border(1, controlBorder(c)).
 		Label(label).Tooltip(tooltip).Disabled(disabled)
+	textColor := t.TextMuted
 	if !disabled {
 		chip.DragDataFrom(data, opts)
 		if chip.Pressed() {
+			textColor = t.Text
 			chip.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 		} else if chip.Hovered() {
+			textColor = t.Text
 			chip.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}
 	}
 	chip.Children(func() {
-		ui.Icon(c, toolbarDragIcon).Size(16, 16).TextColor(t.TextMuted).Shrink(0)
+		ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(textColor).Shrink(0)
 		ui.Text(c, text).FontSize(fontSize).FontWeight(weight).FontFeatures("tnum").
-			TextColor(t.Text).SingleLine().NoWrap()
+			TextColor(textColor).SingleLine().NoWrap()
 	})
 	return chip
 }
@@ -69,8 +72,12 @@ func dragExportControl(
 func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 	button := ui.PrimaryButton(c.Key(key), label).Radius(pillRadius(36, c)).Disabled(disabled)
 	if disabled {
-		button.Background(keycapSurface(c)).Border(1, controlBorder(c)).
-			TextColor(c.Theme().TextMuted).DimDisabled(false)
+		border := hairlineDivider(c)
+		if c.Preferences().HighContrast {
+			border = controlBorder(c)
+		}
+		button.Background(tonalWellSurface(c)).Border(1, border).
+			TextColor(metadataColor(c)).DimDisabled(false)
 	}
 	return button
 }
@@ -78,16 +85,16 @@ func primaryAction(c *ui.Context, key, label string, disabled bool) ui.Element {
 func brandLockup(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Grow(1).MinWidth(0).Children(func() {
-		ui.Box(c).Size(22, 22).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
-			frame := ui.Rect{X: r.X + 1, Y: r.Y + 1, W: 20, H: 20}
-			p.Fill(frame, t.Accent, 5)
-			p.Stroke(frame, ui.RGBA(255, 255, 255, 0.22), 5, 1)
+		ui.Box(c).Size(24, 24).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
+			frame := ui.Rect{X: r.X + 1, Y: r.Y + 1, W: 22, H: 22}
+			p.Fill(frame, t.Accent, 6)
+			p.Stroke(frame, ui.RGBA(255, 255, 255, 0.22), 6, 1)
 			p.StrokePolyline([][2]float32{
-				{r.X + 5.5, r.Y + 9}, {r.X + 5.5, r.Y + 5.5}, {r.X + 9, r.Y + 5.5},
-			}, 1.5, t.AccentText)
+				{r.X + 6, r.Y + 10}, {r.X + 6, r.Y + 6}, {r.X + 10, r.Y + 6},
+			}, 1.6, t.AccentText)
 			p.StrokePolyline([][2]float32{
-				{r.X + 13, r.Y + 16.5}, {r.X + 16.5, r.Y + 16.5}, {r.X + 16.5, r.Y + 13},
-			}, 1.5, t.AccentText)
+				{r.X + 14, r.Y + 18}, {r.X + 18, r.Y + 18}, {r.X + 18, r.Y + 14},
+			}, 1.6, t.AccentText)
 		})
 		ui.Text(c, "Z Pic").FontSize(15).FontWeight(600).SingleLine()
 	})
@@ -193,7 +200,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		if availWidth >= 820 || mobile {
 			toolbarButtonContent(c, pasteButton, "粘贴", toolbarPasteIcon).Label("粘贴图片")
 		} else {
-			pasteButton.Size(32, 32).Center().Children(func() { ui.Icon(c, toolbarPasteIcon).Size(16, 16) })
+			pasteButton.Size(32, 32).Padding(0).Center().Children(func() { ui.Icon(c, toolbarPasteIcon).Size(15, 15) })
 		}
 		if s.clipboardPNGCompressionAvailable() {
 			const label = "压缩剪贴板图片"
@@ -203,7 +210,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 			if availWidth >= 820 || mobile {
 				toolbarButtonContent(c, button, "剪贴板压缩", toolbarClipboardCompressIcon).Label(label)
 			} else {
-				button.Size(32, 32).Center().Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(16, 16) })
+				button.Size(32, 32).Padding(0).Center().Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(15, 15) })
 			}
 		}
 		floatingLabel := "悬浮窗"
@@ -214,7 +221,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
 			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
 		if s.floatingOpen {
-			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
 		}
 		settingsDisabled := s.busy || s.confirmOverwrite || s.confirmBatchOverwrite
 		toolbarButtonContent(c, quietToolbarButton(c, "open-settings", "", settingsDisabled), "设置", toolbarSettingsIcon).
@@ -254,7 +261,7 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 		brandLockup(c)
 		s.compressionControls(c, pending, done, canRun)
 		if _, runnable := s.batchPreviewTarget(); s.batch == nil || !s.batch.previewOpen || runnable {
-			ui.Box(c).Size(1, 16).Background(chromeDivider(c))
+			ui.Box(c).Size(1, 14).Margin(0, 2).Background(chromeDivider(c))
 		}
 		utilityControls()
 	})
@@ -312,60 +319,68 @@ func (s *application) previewPanel(c *ui.Context) {
 			dropzone := ui.Column(c).Grow(1).FillWidth().MinHeight(240).Center().Padding(16).
 				Radius(panelRadius(c)).Background(emptyDropzoneSurface(c)).Border(1, glassBorder(c))
 			dropzone.Draw(func(p *ui.Painter, bounds ui.Rect) {
-				inset := float32(14)
-				if bounds.W <= inset*2+24 || bounds.H <= inset*2+24 {
+				inset := float32(16)
+				if bounds.W <= inset*2+36 || bounds.H <= inset*2+36 {
 					return
 				}
-				dashColor := t.Text.Alpha(0.11)
+				dashColor := t.Text.Alpha(0.10)
+				cornerColor := t.Text.Alpha(0.18)
 				if t.Dark {
-					dashColor = ui.RGBA(255, 255, 255, 0.12)
+					dashColor = ui.RGBA(255, 255, 255, 0.10)
+					cornerColor = ui.RGBA(255, 255, 255, 0.18)
 				}
 				x1, y1 := bounds.X+inset, bounds.Y+inset
 				x2, y2 := bounds.X+bounds.W-inset, bounds.Y+bounds.H-inset
-				const seg, gap = float32(6), float32(6)
-				for x := x1 + 8; x < x2-8; x += seg + gap {
-					end := min(x+seg, x2-8)
+				const corner = float32(10)
+				// Subtle corner brackets anchor the drop frame cleanly.
+				p.StrokePolyline([][2]float32{{x1, y1 + corner}, {x1, y1}, {x1 + corner, y1}}, 1.25, cornerColor)
+				p.StrokePolyline([][2]float32{{x2 - corner, y1}, {x2, y1}, {x2, y1 + corner}}, 1.25, cornerColor)
+				p.StrokePolyline([][2]float32{{x1, y2 - corner}, {x1, y2}, {x1 + corner, y2}}, 1.25, cornerColor)
+				p.StrokePolyline([][2]float32{{x2 - corner, y2}, {x2, y2}, {x2, y2 - corner}}, 1.25, cornerColor)
+				const seg, gap = float32(5), float32(7)
+				for x := x1 + corner + gap; x < x2-corner-gap; x += seg + gap {
+					end := min(x+seg, x2-corner-gap)
 					p.Line(x, y1, end, y1, 1, dashColor)
 					p.Line(x, y2, end, y2, 1, dashColor)
 				}
-				for y := y1 + 8; y < y2-8; y += seg + gap {
-					end := min(y+seg, y2-8)
+				for y := y1 + corner + gap; y < y2-corner-gap; y += seg + gap {
+					end := min(y+seg, y2-corner-gap)
 					p.Line(x1, y, x1, end, 1, dashColor)
 					p.Line(x2, y, x2, end, 1, dashColor)
 				}
 			})
 			dropzone.Children(func() {
-				ui.Column(c).Center().Gap(18).Padding(24).Children(func() {
-					ui.Box(c).Size(56, 56).Draw(func(p *ui.Painter, bounds ui.Rect) {
-						bg := ui.Rect{X: bounds.X + 4, Y: bounds.Y + 4, W: 48, H: 48}
+				ui.Column(c).Center().Gap(16).Padding(24).Children(func() {
+					ui.Box(c).Size(52, 52).Draw(func(p *ui.Painter, bounds ui.Rect) {
+						bg := ui.Rect{X: bounds.X + 2, Y: bounds.Y + 2, W: 48, H: 48}
 						p.Fill(bg, statusTintSurface(c, t.Accent), 14)
 						p.Stroke(bg, statusTintBorder(c, accentForeground(t)), 14, 1)
-						frame := ui.Rect{X: bounds.X + 16, Y: bounds.Y + 18, W: 24, H: 20}
-						p.Stroke(frame, accentForeground(t), 4, 1.6)
-						p.Fill(ui.Rect{X: bounds.X + 21, Y: bounds.Y + 23, W: 3.5, H: 3.5}, accentForeground(t), 1.75)
+						frame := ui.Rect{X: bounds.X + 14, Y: bounds.Y + 16, W: 24, H: 20}
+						p.Stroke(frame, accentForeground(t), 4, 1.5)
+						p.Fill(ui.Rect{X: bounds.X + 19, Y: bounds.Y + 21, W: 3.5, H: 3.5}, accentForeground(t), 1.75)
 						p.StrokePolyline([][2]float32{
-							{bounds.X + 18, bounds.Y + 35},
-							{bounds.X + 25, bounds.Y + 28},
-							{bounds.X + 30, bounds.Y + 33},
-							{bounds.X + 34, bounds.Y + 29},
-							{bounds.X + 38, bounds.Y + 35},
+							{bounds.X + 16, bounds.Y + 33},
+							{bounds.X + 23, bounds.Y + 26},
+							{bounds.X + 28, bounds.Y + 31},
+							{bounds.X + 32, bounds.Y + 27},
+							{bounds.X + 36, bounds.Y + 33},
 						}, 1.5, accentForeground(t))
 					})
 					ui.Column(c).Center().Gap(6).Children(func() {
-						ui.Text(c, "选择或拖入图片").FontSize(18).FontWeight(600)
+						ui.Text(c, "选择或拖入图片").FontSize(17).FontWeight(600)
 						formats := strings.Join(supportedImageFormats(), " · ")
-						ui.Text(c, formats+"  ·  最大 64 MiB").FontSize(12).FontFeatures("tnum").
+						ui.Text(c, formats+" · 最大 64 MiB").FontSize(12).FontFeatures("tnum").
 							TextColor(metadataColor(c)).SingleLine()
 					})
-					ui.Row(c).Gap(8).Children(func() {
-						primaryAction(c, "select", "选择图片", s.modalOpen()).Height(36).Padding(0, 18).
+					ui.Row(c).Gap(10).Children(func() {
+						primaryAction(c, "select", "选择图片", s.modalOpen()).Height(36).Padding(0, 20).
 							KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("选择单张或多张图片 · " + shortcutLabel("O")).
 							OnClick(s.chooseFile)
 						quietButton(c, "select-folder", "选择文件夹", 36, s.modalOpen()).Padding(0, 16).
 							Tooltip("选择包含图片的文件夹").
 							OnClick(s.chooseFolder)
 					})
-					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Gap(5).AlignItems(ui.Center).Padding(2, 0, 0, 0).Children(func() {
 						ui.Text(c, "本机处理不上传 · 按").FontSize(12).TextColor(metadataColor(c)).SingleLine()
 						keyboardKeycap(c, "V")
 						ui.Text(c, "粘贴或拖入悬浮窗").FontSize(12).TextColor(metadataColor(c)).SingleLine()
@@ -381,7 +396,7 @@ func (s *application) previewPanel(c *ui.Context) {
 			s.previewCanvas(c)
 		})
 		if s.file != nil {
-			ui.Row(c).MinHeight(34).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).MinHeight(34).Padding(2, 0, 0, 0).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Width(0).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(600).
 						SingleLine().TruncateMiddle().Tooltip(s.file.path)
@@ -405,15 +420,20 @@ func (s *application) previewPanel(c *ui.Context) {
 					ui.Text(c, meta).
 						FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().TruncateMiddle().Tooltip(meta)
 				})
-				quietButton(c, "replace", "更换图片", 30, s.modalOpen()).
+				quietButton(c, "replace", "更换图片", 30, s.modalOpen()).Padding(0, 10).
 					KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("更换图片 · " + shortcutLabel("O")).
 					OnClick(s.chooseFile)
-				quietButton(c, "single-clear", "清空", 30, s.modalOpen()).
+				ghostButton(c, "single-clear", "清空", 30, s.modalOpen()).Padding(0, 10).
 					Tooltip("关闭当前图片").
 					OnClick(s.clearSingleImage)
 			})
 		}
 	})
+}
+
+func toolbarPrimaryAction(c *ui.Context, key, label string, icon *ui.SVG, disabled bool) ui.Element {
+	return toolbarButtonContent(c, primaryAction(c, key, "", disabled), label, icon).
+		Height(32).Radius(pillRadius(32, c)).Padding(0, 12)
 }
 
 func (s *application) compressionControls(c *ui.Context, pending, done int, canRun bool) {
@@ -425,7 +445,7 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 			label = "重新压缩"
 			icon = toolbarRestartIcon
 		}
-		toolbarButtonContent(c, primaryAction(c, "compress", "", disabled || s.file == nil), label, icon).Height(32).
+		toolbarPrimaryAction(c, "compress", label, icon, disabled || s.file == nil).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("压缩当前图片 · " + shortcutLabel("↵")).
 			OnClick(s.startCompression)
 		return
@@ -440,7 +460,7 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 		if item.status == batchFailed {
 			label, key, icon = "重试", "batch-preview-retry", toolbarRestartIcon
 		}
-		toolbarButtonContent(c, primaryAction(c, key, "", disabled), label, icon).Height(32).
+		toolbarPrimaryAction(c, key, label, icon, disabled).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).
 			Tooltip("仅处理当前预览图片 · " + shortcutLabel("↵")).
 			OnClick(func() { s.compressBatchItem(index) })
@@ -449,19 +469,19 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 	disabled = disabled || !canRun || s.batch.previewOpen
 	switch {
 	case (pending > 0 && done == 0) || !canRun:
-		toolbarButtonContent(c, primaryAction(c, "batch-start", "", disabled), "开始压缩", toolbarCompressIcon).Height(32).
+		toolbarPrimaryAction(c, "batch-start", "开始压缩", toolbarCompressIcon, disabled).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("开始批量压缩 · " + shortcutLabel("↵")).
 			OnClick(s.startBatchCompression)
 	case pending > 0 && done > 0:
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			toolbarButtonContent(c, quietButton(c, "batch-restart", "", 32, disabled), "重新压缩", toolbarRestartIcon).
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			toolbarButtonContent(c, ghostButton(c, "batch-restart", "", 32, disabled), "重新压缩", toolbarRestartIcon).
 				OnClick(s.restartBatchCompression)
-			toolbarButtonContent(c, primaryAction(c, "batch-continue", "", disabled), "继续压缩", toolbarContinueIcon).Height(32).
+			toolbarPrimaryAction(c, "batch-continue", "继续压缩", toolbarContinueIcon, disabled).
 				KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("继续压缩剩余图片 · " + shortcutLabel("↵")).
 				OnClick(s.startBatchCompression)
 		})
 	default:
-		toolbarButtonContent(c, primaryAction(c, "batch-restart", "", disabled), "重新压缩", toolbarRestartIcon).Height(32).
+		toolbarPrimaryAction(c, "batch-restart", "重新压缩", toolbarRestartIcon, disabled).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).Tooltip("重新压缩全部图片 · " + shortcutLabel("↵")).
 			OnClick(s.restartBatchCompression)
 	}
@@ -487,7 +507,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 	if width < 960 {
 		panelWidth = 280
 	}
-	panel := ui.Column(c).Padding(16).Gap(12).Background(sidebarSurface(c))
+	panel := ui.Column(c).Padding(16).Gap(10).Background(sidebarSurface(c))
 	if mobile {
 		panel.FillWidth()
 	} else {
@@ -495,7 +515,6 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 	}
 	panel.Children(func() {
 		s.presetOverview(c)
-		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 		if s.batch != nil {
 			s.batchControls(c, showBatchOutput, mobile)
 			return
@@ -516,43 +535,43 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				}
 				if formatTip != "" {
 					ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Start).Children(func() {
-						ui.Icon(c, presetInfoIcon).Size(14, 14).Padding(1, 0, 0, 0).
+						ui.Icon(c, presetInfoIcon).Size(13, 13).Padding(1, 0, 0, 0).
 							TextColor(metadataColor(c)).Shrink(0)
-						ui.Text(c, formatTip).FontSize(12).TextColor(t.TextMuted).
+						ui.Text(c, formatTip).FontSize(11).TextColor(t.TextMuted).
 							Width(0).Grow(1).MaxLines(2)
 					})
 				}
 			}
 		}
 		if mobile {
-			ui.Column(c).FillWidth().Gap(10).Children(summaryBody)
+			ui.Column(c).FillWidth().Gap(8).Children(summaryBody)
 		} else {
-			ui.Scroll(c.Key("single-compression-summary")).Grow(1).MinHeight(0).FillWidth().Gap(10).Children(summaryBody)
+			ui.Scroll(c.Key("single-compression-summary")).Grow(1).MinHeight(0).FillWidth().Gap(8).Children(summaryBody)
 		}
 		if s.busy {
 			s.workFeedback(c)
 		} else if s.message != "" {
 			color := t.TextMuted
 			role := ui.RoleStatus
+			bg, border := tonalWellSurface(c), tonalWellBorder(c)
 			if s.failed {
 				color, role = t.Danger, ui.RoleAlert
+				bg, border = statusTintSurface(c, t.Danger), statusTintBorder(c, t.Danger)
 			}
-			if !s.failed && s.lastSavedPath != "" {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
-						Width(0).Grow(1).MaxLines(2).Tooltip(s.message)
-					quietButton(c, "reveal-saved", "定位文件", 30, s.modalOpen()).
+			ui.Row(c).FillWidth().Padding(8, 10).Gap(8).Radius(innerRadius(c)).
+				Background(bg).Border(1, border).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
+					Width(0).Grow(1).MaxLines(3).Tooltip(s.message)
+				if !s.failed && s.lastSavedPath != "" {
+					quietButton(c, "reveal-saved", "定位文件", 28, s.modalOpen()).Padding(0, 8).FontSize(12).
 						Tooltip("在文件夹中显示输出文件").
 						OnClick(func() { s.revealFileInFolder(s.lastSavedPath) })
-				})
-			} else {
-				ui.Text(c, s.message).FontSize(12).TextColor(color).Role(role).
-					MaxLines(2).Tooltip(s.message)
-			}
+				}
+			})
 		}
 		if s.result != nil {
 			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				label, hint := s.saveActionDescription()
 				replaces := s.singleReplacesOriginal()
 				disabled := s.modalOpen() || (replaces && !s.canOverwrite())
@@ -564,7 +583,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				}
 				save.FillWidth().KeyShortcuts(ui.Cmd, ui.KeyS).
 					Tooltip(hint + " · " + shortcutLabel("S")).OnClick(s.savePresetResult)
-				ui.Row(c).FillWidth().Gap(8).Children(func() {
+				ui.Row(c).FillWidth().Gap(6).Children(func() {
 					quietButton(c, "save-copy", "另存副本", 32, s.modalOpen()).Width(0).Grow(1).
 						OnClick(s.saveCopy)
 					quietButton(c, "copy-result", "复制图片", 32, !s.canCopyResult()).Width(0).Grow(1).
@@ -573,7 +592,7 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				})
 				dragExportControl(c, "drag-out-single", "拖出压缩图", "拖出压缩图",
 					"按住拖动压缩后的图片到 Finder、聊天窗口或其他应用",
-					32, 12, 500, s.modalOpen(), s.singleDragExportData, s.dragExportOptions()).FillWidth()
+					30, 12, 500, s.modalOpen(), s.singleDragExportData, s.dragExportOptions()).FillWidth()
 			})
 		}
 	})
@@ -581,40 +600,43 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 
 func (s *application) workFeedback(c *ui.Context) {
 	batchRunning := s.batch != nil && s.batch.running
-	if batchRunning && s.batch.total > 0 {
-		done, total := min(s.batch.done, s.batch.total), s.batch.total
-		progress := float64(done) / float64(total)
+	ui.Column(c).FillWidth().Padding(10, 12).Gap(8).Radius(innerRadius(c)).
+		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).Children(func() {
+		if batchRunning && s.batch.total > 0 {
+			done, total := min(s.batch.done, s.batch.total), s.batch.total
+			progress := float64(done) / float64(total)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "本次进度").FontSize(12).TextColor(metadataColor(c)).Grow(1)
+				ui.Textf(c, "%d / %d · %.0f%%", done, total, progress*100).
+					FontSize(12).FontWeight(500).FontFeatures("tnum").SingleLine()
+			})
+			ui.Progress(c, progress).Label("批量压缩进度").FillWidth()
+		}
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本次进度").FontSize(12).TextColor(metadataColor(c)).Grow(1)
-			ui.Textf(c, "%d / %d · %.0f%%", done, total, progress*100).
-				FontSize(12).FontFeatures("tnum").SingleLine()
+			ui.Spinner(c).Size(15, 15).Shrink(0)
+			ui.Text(c, s.phase).FontSize(12).Role(ui.RoleStatus).Width(0).Grow(1).
+				MaxLines(3).Tooltip(s.phase)
 		})
-		ui.Progress(c, progress).Label("批量压缩进度").FillWidth()
-	}
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Spinner(c).Size(16, 16).Shrink(0)
-		ui.Text(c, s.phase).FontSize(12).Role(ui.RoleStatus).Width(0).Grow(1).
-			MaxLines(3).Tooltip(s.phase)
+		if s.cancel != nil {
+			label := "取消操作"
+			if s.canceling {
+				label = "正在取消…"
+			}
+			quietButton(c, "cancel", label, 30, s.canceling).FillWidth().
+				Description("等待当前编解码步骤结束后停止").OnClick(s.cancelWork)
+			if batchRunning {
+				ui.Text(c, "已完成项会保留，可继续剩余图片").FontSize(11).
+					TextColor(metadataColor(c)).MaxLines(2)
+			}
+		}
+		if len(s.dropQueue) > 0 {
+			queuedNote := fmt.Sprintf("已暂存 %d 次拖入，当前操作结束后入队", len(s.dropQueue))
+			if s.dropFailed && s.dropMessage != "" {
+				queuedNote = s.dropMessage
+			}
+			ui.Text(c, queuedNote).FontSize(11).TextColor(metadataColor(c)).MaxLines(2)
+		}
 	})
-	if s.cancel != nil {
-		label := "取消操作"
-		if s.canceling {
-			label = "正在取消…"
-		}
-		quietButton(c, "cancel", label, 32, s.canceling).
-			Description("等待当前编解码步骤结束后停止").OnClick(s.cancelWork)
-		if batchRunning {
-			ui.Text(c, "已完成项会保留，可继续剩余图片").FontSize(12).
-				TextColor(metadataColor(c)).MaxLines(2)
-		}
-	}
-	if len(s.dropQueue) > 0 {
-		queuedNote := fmt.Sprintf("已暂存 %d 次拖入，当前操作结束后入队", len(s.dropQueue))
-		if s.dropFailed && s.dropMessage != "" {
-			queuedNote = s.dropMessage
-		}
-		ui.Text(c, queuedNote).FontSize(12).TextColor(metadataColor(c)).MaxLines(2)
-	}
 }
 
 func (s *application) activePresetSnapshot() compressionPreset {
@@ -701,8 +723,10 @@ func quickPickerButton(
 ) ui.Element {
 	t := c.Theme()
 	picker := ui.ButtonBase(c.Key(key))
+	bg := glassControlSurface(c)
 	border := controlBorder(c)
 	if highlighted && !disabled {
+		bg = glassSelectionBackground(c)
 		border = selectionBorder(c)
 	}
 	picker.PopoverMenuButton(buildMenu, ui.PopoverMenuButtonOptions{
@@ -713,12 +737,12 @@ func quickPickerButton(
 	}).Label(label).Value(display).Tooltip(tooltip).
 		Height(30).Padding(0, 10).Gap(6).
 		AlignItems(ui.Center).Radius(innerRadius(c)).
-		Background(glassControlSurface(c)).Border(1, border).Disabled(disabled)
+		Background(bg).Border(1, border).Disabled(disabled)
 	if !disabled {
 		if picker.Pressed() {
-			picker.Background(glassControlPressed(c))
+			picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 		} else if picker.Hovered() {
-			picker.Background(glassControlHover(c))
+			picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}
 	}
 	picker.Children(func() {
@@ -736,7 +760,7 @@ func (s *application) presetOverview(c *ui.Context) {
 	overridden := s.hasQuickOverrides()
 	disabled := s.modalOpen()
 	ui.Column(c).Gap(10).Children(func() {
-		ui.Row(c).Height(26).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).MinHeight(30).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "压缩概览").FontSize(14).FontWeight(600).Width(0).Grow(1).SingleLine()
 			if overridden {
 				accentCapsule(c, "已微调").
@@ -746,108 +770,114 @@ func (s *application) presetOverview(c *ui.Context) {
 				accentCapsule(c, "单张预览")
 			}
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "预设").FontSize(12).TextColor(metadataColor(c)).Width(36).Shrink(0)
-			quickPickerButton(c, "quick-preset-picker", "快速切换预设", s.scheme, "快速切换预设："+s.scheme,
-				13, 500, disabled, false, func(menu *ui.Menu) {
-					menu.MaxWidth(280)
-					for _, option := range s.presets {
-						name := presetDisplayName(option)
-						if menu.Item(name).Radio(option.name == s.scheme).Tooltip(name).Disabled(disabled).Chosen() {
-							s.setScheme(option.name)
-						}
-					}
-				}).Width(0).Grow(1).MinWidth(0)
-			quietButton(c, "manage-preset", "编辑", 30, disabled).Padding(0, 10).
-				Label("管理预设").Tooltip("编辑当前预设的质量和保存方式").
-				OnClick(s.openPresetSettings)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "质量").FontSize(12).TextColor(metadataColor(c)).Width(36).Shrink(0)
-			level := qualityLevel(active)
-			exactLevel := !s.lossless && s.quality == imageQualityLevels[level].quality && s.png == imageQualityLevels[level].png
-			qualityTweaked := hasSaved && (s.quality != saved.quality || s.png != saved.png || s.lossless != saved.lossless)
-			display := presetQualityLabel(active)
-			quickPickerButton(c, "quick-quality-picker", "快速调整质量", display,
-				"临时调整本次图片质量，不修改预设", 12, 500, disabled, qualityTweaked, func(menu *ui.Menu) {
-					menu.MaxWidth(220)
-					for index, option := range imageQualityLevels {
-						itemLabel := fmt.Sprintf("%d · %s", index, option.label)
-						if menu.Item(itemLabel).Radio(exactLevel && index == level).Disabled(disabled).Chosen() {
-							s.quickSetQualityLevel(index)
-						}
-					}
-					menu.Separator()
-					if menu.Item("无损压缩").Radio(s.lossless).Disabled(disabled).Chosen() {
-						s.quickSetLossless()
-					}
-				}).Width(0).Grow(1).MinWidth(0)
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "输出").FontSize(12).TextColor(metadataColor(c)).Width(36).Shrink(0)
-			formatTweaked := hasSaved && s.outputFormat != saved.outputFormat
-			formats := []compress.OutputFormat{
-				compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
-			}
-			if compress.SupportsAVIF() || s.outputFormat == compress.OutputFormatAVIF {
-				formats = append(formats, compress.OutputFormatAVIF)
-			}
-			formatDisplay := presetOutputFormatLabel(s.outputFormat)
-			quickPickerButton(c, "quick-format-picker", "快速切换输出格式", formatDisplay,
-				"临时修改本次输出格式，不修改预设", 12, 500, disabled, formatTweaked, func(menu *ui.Menu) {
-					menu.MaxWidth(200)
-					for _, format := range formats {
-						if menu.Item(presetOutputFormatLabel(format)).Radio(s.outputFormat == format).Disabled(disabled).Chosen() {
-							s.quickSetOutputFormat(format)
-						}
-					}
-				}).Width(0).Grow(1.1).MinWidth(0)
-
-			dimTweaked := hasSaved && s.resizeLimits != saved.resizeLimits()
-			dimDisplay := quickDimensionLabel(s.resizeLimits)
-			quickPickerButton(c, "quick-dimension-picker", "快速切换尺寸缩放", dimDisplay,
-				"临时调整本次输出尺寸 · "+presetResizeLabel(s.resizeLimits), 12, 500, disabled, dimTweaked, func(menu *ui.Menu) {
-					menu.MaxWidth(200)
-					for _, option := range resizeDimensionPresets {
-						limits := resizeLimits{maxDimension: option.value}
-						if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
-							s.quickSetMaxDimension(option.value)
-						}
-					}
-					menu.Separator()
-					for _, percent := range [...]int{75, 50, 25} {
-						limits := resizeLimits{scalePercent: percent}
-						if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
-							s.quickSetResize(limits)
-						}
-					}
-					menu.Separator()
-					if menu.Item("编辑预设缩放…").Disabled(disabled).Chosen() {
-						s.openPresetSettings()
-						if s.editor != nil {
-							s.editor.focusField = presetResizeModeField
-						}
-					}
-				}).Width(0).Grow(0.9).MinWidth(0)
-		})
-		if summary := presetProcessingSummary(active); summary != "" {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "选项").FontSize(12).TextColor(metadataColor(c)).Width(36).Shrink(0)
-				ui.Text(c, summary).FontSize(12).FontFeatures("tnum").TextColor(t.TextMuted).
-					Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(summary)
+				ui.Text(c, "预设").FontSize(12).TextColor(metadataColor(c)).Width(32).Shrink(0)
+				ui.Row(c).Width(0).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+					quickPickerButton(c, "quick-preset-picker", "快速切换预设", s.scheme, "快速切换预设："+s.scheme,
+						13, 500, disabled, false, func(menu *ui.Menu) {
+							menu.MaxWidth(280)
+							for _, option := range s.presets {
+								name := presetDisplayName(option)
+								if menu.Item(name).Radio(option.name == s.scheme).Tooltip(name).Disabled(disabled).Chosen() {
+									s.setScheme(option.name)
+								}
+							}
+						}).Width(0).Grow(1).MinWidth(0)
+					quietButton(c, "manage-preset", "编辑", 30, disabled).Padding(0, 10).
+						Label("管理预设").Tooltip("编辑当前预设的质量和保存方式").
+						OnClick(s.openPresetSettings)
+				})
 			})
-		}
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "质量").FontSize(12).TextColor(metadataColor(c)).Width(32).Shrink(0)
+				level := qualityLevel(active)
+				exactLevel := !s.lossless && s.quality == imageQualityLevels[level].quality && s.png == imageQualityLevels[level].png
+				qualityTweaked := hasSaved && (s.quality != saved.quality || s.png != saved.png || s.lossless != saved.lossless)
+				display := presetQualityLabel(active)
+				quickPickerButton(c, "quick-quality-picker", "快速调整质量", display,
+					"临时调整本次图片质量，不修改预设", 12, 500, disabled, qualityTweaked, func(menu *ui.Menu) {
+						menu.MaxWidth(220)
+						for index, option := range imageQualityLevels {
+							itemLabel := fmt.Sprintf("%d · %s", index, option.label)
+							if menu.Item(itemLabel).Radio(exactLevel && index == level).Disabled(disabled).Chosen() {
+								s.quickSetQualityLevel(index)
+							}
+						}
+						menu.Separator()
+						if menu.Item("无损压缩").Radio(s.lossless).Disabled(disabled).Chosen() {
+							s.quickSetLossless()
+						}
+					}).Width(0).Grow(1).MinWidth(0)
+			})
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "输出").FontSize(12).TextColor(metadataColor(c)).Width(32).Shrink(0)
+				ui.Row(c).Width(0).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+					formatTweaked := hasSaved && s.outputFormat != saved.outputFormat
+					formats := []compress.OutputFormat{
+						compress.OutputFormatKeep, compress.OutputFormatJPEG, compress.OutputFormatPNG, compress.OutputFormatWebP,
+					}
+					if compress.SupportsAVIF() || s.outputFormat == compress.OutputFormatAVIF {
+						formats = append(formats, compress.OutputFormatAVIF)
+					}
+					formatDisplay := presetOutputFormatLabel(s.outputFormat)
+					quickPickerButton(c, "quick-format-picker", "快速切换输出格式", formatDisplay,
+						"临时修改本次输出格式，不修改预设", 12, 500, disabled, formatTweaked, func(menu *ui.Menu) {
+							menu.MaxWidth(200)
+							for _, format := range formats {
+								if menu.Item(presetOutputFormatLabel(format)).Radio(s.outputFormat == format).Disabled(disabled).Chosen() {
+									s.quickSetOutputFormat(format)
+								}
+							}
+						}).Width(0).Grow(1.1).MinWidth(0)
+
+					dimTweaked := hasSaved && s.resizeLimits != saved.resizeLimits()
+					dimDisplay := quickDimensionLabel(s.resizeLimits)
+					quickPickerButton(c, "quick-dimension-picker", "快速切换尺寸缩放", dimDisplay,
+						"临时调整本次输出尺寸 · "+presetResizeLabel(s.resizeLimits), 12, 500, disabled, dimTweaked, func(menu *ui.Menu) {
+							menu.MaxWidth(200)
+							for _, option := range resizeDimensionPresets {
+								limits := resizeLimits{maxDimension: option.value}
+								if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
+									s.quickSetMaxDimension(option.value)
+								}
+							}
+							menu.Separator()
+							for _, percent := range [...]int{75, 50, 25} {
+								limits := resizeLimits{scalePercent: percent}
+								if menu.Item(presetResizeLabel(limits)).Radio(s.resizeLimits == limits).Disabled(disabled).Chosen() {
+									s.quickSetResize(limits)
+								}
+							}
+							menu.Separator()
+							if menu.Item("编辑预设缩放…").Disabled(disabled).Chosen() {
+								s.openPresetSettings()
+								if s.editor != nil {
+									s.editor.focusField = presetResizeModeField
+								}
+							}
+						}).Width(0).Grow(0.9).MinWidth(0)
+				})
+			})
+			if summary := presetProcessingSummary(active); summary != "" {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(2, 0, 0, 0).Children(func() {
+					ui.Text(c, "选项").FontSize(12).TextColor(metadataColor(c)).Width(32).Shrink(0)
+					ui.Text(c, summary).FontSize(11).FontFeatures("tnum").TextColor(metadataColor(c)).
+						Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(summary)
+				})
+			}
+		})
 		if overridden {
 			ui.Row(c).Padding(6, 10).Gap(6).Radius(innerRadius(c)).
-				Background(glassSelectionBackground(c)).Border(1, tonalWellBorder(c)).
+				Background(glassSelectionBackground(c)).Border(1, statusTintBorder(c, accentForeground(t))).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "临时生效，未改动预设").FontSize(11).TextColor(accentForeground(t)).
+				ui.Text(c, "临时生效，未改动预设").FontSize(11).FontWeight(500).TextColor(accentForeground(t)).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().
 					Tooltip("已临时调整本次压缩参数，不会修改预设本身")
-				quietButton(c, "quick-reset-overrides", "重置", 26, disabled).FontSize(11).Padding(0, 8).
+				quietButton(c, "quick-reset-overrides", "重置", 24, disabled).FontSize(11).Padding(0, 8).
 					Label("恢复预设参数").Tooltip("放弃临时微调，恢复当前预设参数").
 					OnClick(s.resetQuickOverrides)
-				quietButton(c, "quick-save-preset", "存为预设", 26, disabled).FontSize(11).Padding(0, 8).
+				quietButton(c, "quick-save-preset", "存为预设", 24, disabled).FontSize(11).Padding(0, 8).
 					Label("将微调存为新预设").Tooltip("打开设置并将当前临时参数保存为新预设").
 					OnClick(s.openSaveQuickPreset)
 			})
@@ -870,12 +900,13 @@ func (s *application) singleOutputSummary(c *ui.Context) {
 	}
 	wellBg := tonalWellSurface(c)
 	wellBorder := tonalWellBorder(c)
-	if replaces {
-		wellBg = statusTintSurface(c, t.Danger)
-		wellBorder = statusTintBorder(c, t.Danger)
-	}
-	ui.Column(c).Padding(12).Gap(6).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
-		ui.Text(c, "保存方式").FontSize(11).FontWeight(600).TextColor(metadataColor(c))
+	ui.Column(c).Padding(10, 12).Gap(4).Radius(innerRadius(c)).Background(wellBg).Border(1, wellBorder).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "保存方式").FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1)
+			if replaces {
+				statusCapsule(c, "覆盖原图", t.Danger)
+			}
+		})
 		description, color := presetSaveDescription(s.output), t.Text
 		if replaces {
 			color = t.Danger
@@ -1021,8 +1052,9 @@ func outputFilenamePreviewForResolved(c *ui.Context, options presetSaveOptions, 
 		return
 	}
 	example := presetOutputNameForResolved(options, filename, sourceFormat, targetFormat, lossless)
-	ui.Column(c).Gap(4).Children(func() {
-		ui.Text(c, "文件示例").FontSize(12).TextColor(metadataColor(c))
+	ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+	ui.Column(c).Gap(2).Children(func() {
+		ui.Text(c, "文件示例").FontSize(11).TextColor(metadataColor(c))
 		ui.Text(c, example).FontSize(12).FontFeatures("tnum").SingleLine().TruncateMiddle().
 			FillWidth().Label("输出文件示例：" + example).
 			Tooltip(example + "\n已有同名文件时自动使用新名称")
@@ -1045,25 +1077,24 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 	t := c.Theme()
 	width, _ := c.Size()
 	compact := width >= 720 && width < 960
-	ui.Column(c).Padding(14, 12).Gap(10).Radius(innerRadius(c)).
+	ui.Column(c).Padding(11, 14).Gap(8).Radius(innerRadius(c)).
 		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(11).FontWeight(600).TextColor(metadataColor(c)).Grow(1).SingleLine()
 			if statusColor == t.Success || statusColor == t.Warning || statusColor == t.Danger {
 				statusCapsule(c, status, statusColor).Role(ui.RoleStatus).
 					MaxLines(2).Tooltip(status)
-			} else {
-				ui.Text(c, status).FontSize(12).FontWeight(500).FontFeatures("tnum").Role(ui.RoleStatus).
-					TextColor(statusColor).SingleLine().Tooltip(status)
+			} else if status != "" {
+				neutralCapsule(c, status).Role(ui.RoleStatus).Tooltip(status)
 			}
 		})
-		ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
 			for index, row := range []struct{ label, value string }{
 				{firstLabel, firstValue}, {secondLabel, secondValue},
 			} {
 				if index == 1 {
-					ui.Row(c).Width(14).Height(26).Center().Children(func() {
-						ui.Text(c, "→").FontSize(13).TextColor(metadataColor(c)).SingleLine()
+					ui.Row(c).Width(14).Height(24).Center().Children(func() {
+						ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine()
 					})
 				}
 				grow := float32(1)
@@ -1072,55 +1103,59 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 				}
 				ui.Column(c).Width(0).Grow(grow).Gap(2).Children(func() {
 					ui.Text(c, row.label).FontSize(11).TextColor(metadataColor(c))
-					size := float32(15)
+					size := float32(14)
 					weight := 500
 					valColor := t.TextMuted
 					if compact {
-						size = 14
+						size = 13
 					}
 					if index == 1 {
-						size = 22
+						size = 20
 						weight = 700
 						valColor = t.Text
 						if compact {
-							size = 19
+							size = 18
 						}
 					}
-					ui.Row(c).Height(26).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Height(24).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, row.value).FontSize(size).FontWeight(weight).FontFeatures("tnum").
 							TextColor(valColor).SingleLine().Tooltip(row.value)
 					})
 				})
 			}
 		})
-		if ratio >= 0 {
-			barColor := t.Success
-			fillRatio := max(0, 1-ratio)
-			tooltip := fmt.Sprintf("已节省 %.1f%%（输出体积为原始体积的 %.1f%%）", fillRatio*100, ratio*100)
-			switch {
-			case ratio > 1:
-				barColor = t.Warning
-				fillRatio = 1
-				tooltip = fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)
-			case ratio >= 1:
-				barColor = t.TextMuted.Alpha(0.45)
-				fillRatio = 1
-				tooltip = "输出体积未减小（100.0%）"
-			}
-			ui.Box(c).FillWidth().Height(5).Tooltip(tooltip).
-				Draw(func(p *ui.Painter, r ui.Rect) {
-					p.Fill(r, meterTrackColor(c), 2.5)
-					fillW := max(5, r.W*float32(min(1, fillRatio)))
-					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 2.5)
-				})
-		}
-		if statusDetail != "" {
-			ui.Text(c, statusDetail).FontSize(12).FontWeight(500).FontFeatures("tnum").
-				TextColor(metadataColor(c)).FillWidth().SingleLine().TruncateMiddle().Tooltip(statusDetail)
-		}
-		if note != "" {
-			ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
-				MaxLines(2).Tooltip(note)
+		if ratio >= 0 || statusDetail != "" || note != "" {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				if ratio >= 0 {
+					barColor := t.Success
+					fillRatio := max(0, 1-ratio)
+					tooltip := fmt.Sprintf("已节省 %.1f%%（输出体积为原始体积的 %.1f%%）", fillRatio*100, ratio*100)
+					switch {
+					case ratio > 1:
+						barColor = t.Warning
+						fillRatio = 1
+						tooltip = fmt.Sprintf("输出体积为原始体积的 %.1f%%", ratio*100)
+					case ratio >= 1:
+						barColor = t.TextMuted.Alpha(0.45)
+						fillRatio = 1
+						tooltip = "输出体积未减小（100.0%）"
+					}
+					ui.Box(c).FillWidth().Height(6).Tooltip(tooltip).
+						Draw(func(p *ui.Painter, r ui.Rect) {
+							p.Fill(r, meterTrackColor(c), 3)
+							fillW := max(6, r.W*float32(min(1, fillRatio)))
+							p.Fill(ui.Rect{X: r.X, Y: r.Y, W: fillW, H: r.H}, barColor, 3)
+						})
+				}
+				if statusDetail != "" {
+					ui.Text(c, statusDetail).FontSize(12).FontWeight(500).FontFeatures("tnum").
+						TextColor(metadataColor(c)).FillWidth().SingleLine().TruncateMiddle().Tooltip(statusDetail)
+				}
+				if note != "" {
+					ui.Text(c, note).FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).
+						MaxLines(2).Tooltip(note)
+				}
+			})
 		}
 		if hint != "" {
 			ui.Text(c, hint).FontSize(12).TextColor(t.Warning).

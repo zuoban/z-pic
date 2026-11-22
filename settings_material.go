@@ -62,7 +62,7 @@ func (g settingsControlGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4
 // The settings panels sample the native window material; fields stay inset and
 // opaque enough to read. Accessibility preferences keep the ordinary surfaces.
 func settingsPanel(c *ui.Context, key string) ui.Element {
-	panel := ui.Column(c.Key(key)).FillWidth().Padding(16).Gap(12).Radius(panelRadius(c)).
+	panel := ui.Column(c.Key(key)).FillWidth().Padding(14, 16).Gap(10).Radius(panelRadius(c)).
 		Background(panelSurface(c)).Border(1, glassBorder(c))
 	if usesGlass(c) {
 		tint := ui.RGBA(255, 255, 255, 0.62)
@@ -86,8 +86,9 @@ func settingsGlassControl(el ui.Element, c *ui.Context, height float32, disabled
 }
 
 func settingsSaveButton(c *ui.Context, disabled bool) ui.Element {
+	h := settingsControlHeight(c, 36)
 	button := primaryAction(c, "save-settings", "保存", disabled).FontSize(settingsFontSize(c, 13)).
-		Height(settingsControlHeight(c, 36))
+		Height(h).Radius(pillRadius(h, c))
 	if usesGlass(c) && !disabled {
 		settingsGlassControl(button, c, 36, false, c.Theme().AccentHover).
 			TextColor(c.Theme().AccentText)

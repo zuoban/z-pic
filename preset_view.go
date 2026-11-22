@@ -170,13 +170,13 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 	locked := s.settingsDraftLocked()
 	bodyPad := settingsPagePadding(c)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(10, bodyPad, 10, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
+		ui.Column(c).FillWidth().Padding(8, bodyPad, 8, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(16, bodyPad, 20, bodyPad).Gap(14).Children(func() {
+		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(12, bodyPad, 18, bodyPad).Gap(12).Children(func() {
 			preset := editor.selectedPreset()
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
+			settingsPanel(c, "settings-preset-name-panel").Gap(8).Children(func() {
 				ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
+					ui.Text(c, "预设名称").FontSize(settingsFontSize(c, 13)).FontWeight(600).Grow(1)
 					color := chromeMetadataColor(c)
 					if utf8.RuneCountInString(preset.name) > 40 {
 						color = c.Theme().Danger
@@ -185,11 +185,11 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 						FontFeatures("tnum").TextColor(color).Description("预设名称最多 40 个字符")
 				})
 				var name ui.Element
-				ui.Row(c).FillWidth().Height(settingsControlHeight(c, 36)).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().Height(settingsControlHeight(c, 34)).Gap(8).AlignItems(ui.Center).Children(func() {
 					name = ui.TextInput(c.Key("preset-name"), &preset.name).Label("预设名称").
-						Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 36)).
-						Width(0).Grow(1).MinWidth(0).FontSize(settingsFontSize(c, 14)).Padding(0, 12).Disabled(locked)
-					styleGlassField(name, c, 36)
+						Description("最多 40 个字符，名称不能重复；保存时去除首尾空格").Height(settingsControlHeight(c, 34)).
+						Width(0).Grow(1).MinWidth(0).FontSize(settingsFontSize(c, 13)).Padding(0, 12).Disabled(locked)
+					styleGlassField(name, c, 34)
 					if editor.focusField == "preset-name" && !locked {
 						name.Focus()
 						if editor.selectName {
@@ -221,16 +221,17 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 	t := c.Theme()
 	editor := s.editor
 	locked := s.settingsDraftLocked()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 36)).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.ScrollHorizontal(c.Key("preset-list")).Height(settingsControlHeight(c, 36)).Width(0).Grow(1).Children(func() {
+	tabH := settingsControlHeight(c, 32)
+	ui.Row(c).FillWidth().Height(tabH).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.ScrollHorizontal(c.Key("preset-list")).Height(tabH).Width(0).Grow(1).Children(func() {
 			tabs := ui.TabsBase(c.Key("preset-tabs"), &editor.selected, len(editor.presets))
 			shown := ui.Local(tabs.List, "shown-selection", func() int { return -1 })
-			tabs.List.Label("编辑预设").Gap(4).Height(settingsControlHeight(c, 36)).AlignItems(ui.Center).Disabled(locked).Children(func() {
+			tabs.List.Label("编辑预设").Gap(4).Height(tabH).AlignItems(ui.Center).Disabled(locked).Children(func() {
 				for index, preset := range editor.presets {
 					name := presetDisplayName(preset)
 					button := tabs.Tab(index).
-						Label("编辑预设："+name).Tooltip(name).Height(settingsControlHeight(c, 36)).
-						MinWidth(88).MaxWidth(196).Padding(0, 12).Gap(8).Radius(innerRadius(c)).
+						Label("编辑预设："+name).Tooltip(name).Height(tabH).
+						MinWidth(84).MaxWidth(192).Padding(0, 11).Gap(6).Radius(innerRadius(c)).
 						Border(1, ui.Transparent).AlignItems(ui.Center).
 						TextColor(chromeMutedColor(c)).Disabled(locked).AccessSelected(editor.selected == index)
 					if editor.active == index {
@@ -238,7 +239,7 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 					}
 					if editor.selected == index {
 						button.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
-						settingsGlassControl(button, c, 36, locked, t.Accent.Alpha(0.14))
+						settingsGlassControl(button, c, 32, locked, t.Accent.Alpha(0.14))
 						if *shown != index {
 							button.ScrollIntoView()
 							*shown = index
@@ -267,18 +268,18 @@ func (s *application) presetEditorTabs(c *ui.Context) {
 				editor.message = ""
 			}
 		})
-		addBtn := ui.ButtonBase(c.Key("add-preset")).Size(settingsControlHeight(c, 32), settingsControlHeight(c, 32)).Center().Radius(innerRadius(c)).
+		addBtn := ui.ButtonBase(c.Key("add-preset")).Size(tabH, tabH).Center().Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).
 			Label("新增预设").Tooltip("新增预设").Disabled(locked).OnClick(s.addPreset)
 		if !locked {
 			if addBtn.Pressed() {
-				addBtn.Background(glassControlPressed(c))
+				addBtn.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 			} else if addBtn.Hovered() {
-				addBtn.Background(glassControlHover(c))
+				addBtn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 			}
 		}
 		settingsGlassControl(addBtn, c, 32, locked, ui.Transparent)
-		addBtn.Children(func() { ui.Icon(c, presetPlusIcon).Size(16, 16).TextColor(t.Text) })
+		addBtn.Children(func() { ui.Icon(c, presetPlusIcon).Size(15, 15).TextColor(t.Text) })
 	})
 }
 
@@ -299,9 +300,9 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 	losslessNote := losslessFormats + " 支持无损。同格式 JPEG 可无损优化，转为 JPEG 使用有损编码。"
 	settingsPanel(c, "settings-quality-panel").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, presetQualityIcon).Size(16, 16).TextColor(t.TextMuted)
-			ui.Text(c, "图片质量").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
-			ui.Icon(c, presetInfoIcon).Size(16, 16).TextColor(t.TextMuted).
+			ui.Icon(c, presetQualityIcon).Size(15, 15).TextColor(metadataColor(c))
+			ui.Text(c, "图片质量").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Icon(c, presetInfoIcon).Size(14, 14).TextColor(metadataColor(c)).
 				Tooltip("压缩参数随图片质量自动调整。质量越高，越接近原图；质量越低，文件通常越小。")
 			ui.Box(c).Grow(1)
 			if ui.Checkbox(c.Key("preset-lossless"), &preset.lossless, "无损").
@@ -309,9 +310,12 @@ func (s *application) presetQualityCard(c *ui.Context, preset *compressionPreset
 				Tooltip(losslessNote).Changed() {
 				s.editor.message = ""
 			}
-			ui.Box(c).Size(1, 14).Background(glassDivider(c))
-			ui.Text(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).
-				FontFeatures("tnum").TextColor(t.Text).SingleLine()
+			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+			if preset.lossless {
+				neutralCapsule(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 12))
+			} else {
+				accentCapsule(c, presetQualityLabel(*preset)).FontSize(settingsFontSize(c, 12))
+			}
 		})
 		value := float64(qualityLevel(*preset))
 		description := fmt.Sprintf("%s 质量 %.0f，PNG 质量 %d–%d，最多 %d 色。左右方向键调整，Home / End 跳到两端。", lossyQualityFormats(), preset.quality,
@@ -386,12 +390,11 @@ var resizeDimensionPresets = [...]struct {
 }
 
 func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPreset) {
-	t := c.Theme()
 	locked := s.settingsDraftLocked()
-	settingsPanel(c, "settings-processing-panel").Gap(8).Children(func() {
+	settingsPanel(c, "settings-processing-panel").Gap(10).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, presetProcessingIcon).Size(16, 16).TextColor(t.TextMuted)
-			ui.Text(c, "格式与优化").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Icon(c, presetProcessingIcon).Size(15, 15).TextColor(metadataColor(c))
+			ui.Text(c, "格式与优化").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 		})
 		// Output format
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
@@ -441,11 +444,11 @@ func (s *application) presetProcessingCard(c *ui.Context, preset *compressionPre
 			}
 			ui.Text(c, note).FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 		})
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 		s.presetResizeSection(c, preset)
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 		s.presetTargetSizeSection(c, preset)
-		ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+		ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 		// Metadata policy
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Text(c, "元数据").FontSize(settingsFontSize(c, 13)).FontWeight(500)
@@ -511,15 +514,15 @@ func (s *application) presetResizeSection(c *ui.Context, preset *compressionPres
 			reveal = true
 		}
 		if mode == resizeNone || mode == resizeLongEdge {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "长边快捷值（px）").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
 				for _, choice := range resizeDimensionPresets[1:] {
 					active := mode == resizeLongEdge && preset.maxDimension == choice.value
-					button := settingsButton(c, "resize-quick-"+choice.label, choice.label, 32, locked).
-						Width(0).MinWidth(0).Grow(1).PaddingX(8).FontFeatures("tnum").Selected(active)
+					button := settingsButton(c, "resize-quick-"+choice.label, choice.label, 28, locked).
+						Width(0).MinWidth(0).Grow(1).PaddingX(6).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").Selected(active)
 					if active {
 						button.FontWeight(500).Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(c.Theme().Text)
-						settingsGlassControl(button, c, 32, locked, c.Theme().Accent.Alpha(0.14))
+						settingsGlassControl(button, c, 28, locked, c.Theme().Accent.Alpha(0.14))
 					}
 					if button.Clicked() {
 						mode = resizeLongEdge
@@ -587,7 +590,11 @@ func (s *application) presetTargetSizeSection(c *ui.Context, preset *compression
 		}
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "目标体积").FontSize(settingsFontSize(c, 13)).FontWeight(500).Grow(1)
-			ui.Text(c, limit).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine()
+			if preset.targetSizeBytes > 0 {
+				accentCapsule(c, limit).FontSize(settingsFontSize(c, 12))
+			} else {
+				neutralCapsule(c, limit).FontSize(settingsFontSize(c, 12))
+			}
 		})
 		sizes := [...]int64{0, 200 << 10, 500 << 10, 1 << 20, 2 << 20}
 		choice := -1
@@ -722,8 +729,8 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 	locked := s.settingsDraftLocked()
 	settingsPanel(c, "settings-output-panel").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, presetSaveIcon).Size(16, 16).TextColor(t.TextMuted)
-			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Icon(c, presetSaveIcon).Size(15, 15).TextColor(metadataColor(c))
+			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 		})
 		if options.replacesOriginal() {
 			warning := presetSaveDescription(*options)
@@ -731,22 +738,28 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 				format := strings.TrimPrefix(presetOutputFormatLabel(preset.outputFormat), "转为 ")
 				warning = fmt.Sprintf("同格式 %s 文件缩小后将被替换；其他格式另存为 %s", format, outputExtensionForFormat(string(preset.outputFormat)))
 			}
-			ui.Text(c, warning).FontSize(settingsFontSize(c, 12)).
-				TextColor(t.Danger).FillWidth().MaxLines(2)
+			ui.Row(c).FillWidth().Padding(7, 10).Radius(innerRadius(c)).
+				Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger)).Children(func() {
+				ui.Text(c, warning).FontSize(settingsFontSize(c, 12)).FontWeight(500).
+					TextColor(t.Danger).FillWidth().MaxLines(2)
+			})
 		}
 		if presetSaveSegments(c, options, locked) {
 			s.editor.message = ""
 		}
 		if options.Mode == presetSaveFixed {
-			ui.Row(c).Gap(8).Padding(8, 12).Radius(innerRadius(c)).Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).
+			ui.Row(c).Gap(8).Padding(6, 10).Radius(innerRadius(c)).Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).
 				AlignItems(ui.Center).Children(func() {
 				path := options.Directory
+				pathColor := t.Text
 				if path == "" {
 					path = "未选择文件夹"
+					pathColor = metadataColor(c)
 				}
-				ui.Text(c, path).FontSize(settingsFontSize(c, 12)).TextColor(t.TextMuted).Width(0).Grow(1).
+				ui.Text(c, path).FontSize(settingsFontSize(c, 12)).TextColor(pathColor).Width(0).Grow(1).
 					SingleLine().TruncateMiddle().Tooltip(path)
-				directory := settingsButton(c, "preset-output-directory", "选择文件夹…", 32, locked).
+				directory := settingsButton(c, "preset-output-directory", "选择文件夹…", 28, locked).
+					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 					OnClick(s.choosePresetOutputDirectory)
 				s.focusSettingsField(directory, "preset-output-directory")
 			})
@@ -788,8 +801,10 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 			}
 		})
 		example := presetOutputExampleForFormat(*options, preset.outputFormat)
-		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "保存示例").FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).Shrink(0)
+		ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
+			Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "保存示例").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
+			ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 			ui.Text(c, example).Label("保存示例：" + example).FontSize(settingsFontSize(c, 12)).FontFeatures("tnum").
 				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(example)
 		})

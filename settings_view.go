@@ -48,7 +48,7 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 46)).Padding(0, settingsPagePadding(c)).Gap(10).Background(tonalWellSurface(c)).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 42)).Padding(0, settingsPagePadding(c)).Gap(10).Background(sidebarSurface(c)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
@@ -69,17 +69,17 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 				stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 			},
 		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
-			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 32)).Padding(0, 10).Gap(8).
+			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 30)).Padding(0, 10).Gap(8).
 			AlignItems(ui.Center).Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 		if !disabled {
 			if picker.Pressed() {
-				picker.Background(glassControlPressed(c))
+				picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
 			} else if picker.Hovered() {
-				picker.Background(glassControlHover(c))
+				picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 			}
 		}
-		settingsGlassControl(picker, c, 32, disabled, ui.Transparent)
+		settingsGlassControl(picker, c, 30, disabled, ui.Transparent)
 		picker.Children(func() {
 			ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
 				Width(0).Grow(1).MinWidth(0)
@@ -87,7 +87,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 		})
 		ui.Box(c).Grow(1).MinWidth(0)
 		if editor.section == settingsGeneral {
-			settingsButton(c, "manage-presets", "管理预设", 30, s.settingsDraftLocked()).OnClick(func() {
+			settingsButton(c, "manage-presets", "管理预设", 30, s.settingsDraftLocked()).Padding(0, 12).OnClick(func() {
 				editor.selected = editor.active
 				editor.section = settingsPresets
 			})
@@ -96,7 +96,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 }
 
 func (s *application) settingsNavigation(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 52)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 50)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
 		section := int(s.editor.section)
 		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设", "文件夹监听").
@@ -150,17 +150,17 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 	narrow := width < 560
 	sideBySideWorkflow := !narrow && c.Preferences().TextScale <= 1.1
 	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
-	scrollPadV, scrollGap := float32(12), float32(12)
+	scrollPadV, scrollGap := float32(12), float32(10)
 	if narrow {
 		scrollPadV, scrollGap = 12, 8
 	}
 	ui.Scroll(c.Key("general-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
 		settingsPanel(c, "settings-appearance-panel").Children(func() {
-			ui.Text(c, "外观").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Text(c, "外观").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			s.settingsThemeSelection(c)
 		})
 		settingsPanel(c, "settings-workflow-panel").Children(func() {
-			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			locked := s.settingsDraftLocked()
 			autoCheck := func() {
 				ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
@@ -189,27 +189,30 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
 				downloadColor = t.TextMuted
 			}
-			ui.Row(c).FillWidth().Gap(8).Padding(7, 12).Radius(innerRadius(c)).
+			ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
 				Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
 				settingsButton(c, "settings-download-dir", "选择…", 28, locked).
+					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 					Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
 					OnClick(s.chooseDownloadDirectory)
 				if s.editor.downloadDir != "" {
 					settingsButton(c, "settings-download-reset", "默认", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 						Label("恢复默认下载目录").Tooltip("恢复为系统下载目录下的 Z Pic 文件夹").
 						OnClick(s.resetDownloadDirectory)
 				}
 				settingsButton(c, "settings-download-clean", "清理", 28, locked).
+					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 					Label("清理下载目录").Tooltip("将下载目录中未在队列里的图片移入废纸篓").
 					OnClick(s.cleanupDownloadedImages)
 			})
 		})
 		settingsPanel(c, "settings-shortcuts-panel").Children(func() {
-			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			shortcuts := []struct{ label, key string }{
 				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
 			}
@@ -217,7 +220,7 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				shortcuts = append(shortcuts, struct{ label, key string }{"压缩剪贴板图片", "⇧V"})
 			}
 			renderRow := func(label, key string) {
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 28)).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 26)).Padding(2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
 						Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(label)
 					keyboardKeycap(c, key).FontSize(settingsFontSize(c, 12))
@@ -233,14 +236,14 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Center).Children(func() {
 							ui.Column(c).Width(0).Grow(1).Children(func() {
 								if row > 0 {
-									ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+									ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 								}
 								renderRow(shortcuts[row].label, shortcuts[row].key)
 							})
 							if row+1 < len(shortcuts) {
 								ui.Column(c).Width(0).Grow(1).Children(func() {
 									if row > 0 {
-										ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+										ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 									}
 									renderRow(shortcuts[row+1].label, shortcuts[row+1].key)
 								})
@@ -254,7 +257,7 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				ui.Column(c).FillWidth().Children(func() {
 					for index, shortcut := range shortcuts {
 						if index > 0 {
-							ui.Box(c).FillWidth().Height(1).Background(glassDivider(c))
+							ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 						}
 						renderRow(shortcut.label, shortcut.key)
 					}
@@ -274,18 +277,18 @@ func (s *application) settingsThemeSelection(c *ui.Context) {
 	}
 	choice := ui.SegmentedBase(c.Key("settings-theme"), &selected, len(themeOptions))
 	locked := s.settingsDraftLocked()
-	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 68)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
+	choice.Track.Label("外观主题").Height(settingsControlHeight(c, 64)).Gap(10).AlignItems(ui.Stretch).Disabled(locked).
 		Children(func() {
 			for index, option := range themeOptions {
 				active := index == selected
 				segment := choice.Segment(index).Label(option.label).Width(0).MinWidth(0).
-					Radius(innerRadius(c)).Padding(6, 10).
+					Radius(innerRadius(c)).Padding(5, 10).
 					Background(tonalWellSurface(c)).Border(1, controlBorder(c))
 				color := t.TextMuted
 				if active {
 					color = accentForeground(t)
 					segment.Background(glassSelectionBackground(c)).Border(1.5, selectionBorder(c))
-					settingsGlassControl(segment, c, 68, locked, t.Accent.Alpha(0.14)).
+					settingsGlassControl(segment, c, 64, locked, t.Accent.Alpha(0.14)).
 						Radius(innerRadius(c))
 				} else if !locked {
 					if segment.Pressed() {
@@ -351,27 +354,27 @@ func (s *application) settingsFooter(c *ui.Context) {
 	padding := settingsPagePadding(c)
 	ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 	if editor.confirmDelete {
-		ui.Row(c).Padding(12, padding).Gap(8).Background(statusTintSurface(c, t.Danger)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Padding(10, padding).Gap(8).Background(statusTintSurface(c, t.Danger)).AlignItems(ui.Center).Children(func() {
 			name := presetDisplayName(*editor.selectedPreset())
 			short := []rune(name)
 			if len(short) > 16 {
 				short = append(short[:16], '…')
 			}
 			message := fmt.Sprintf("删除「%s」？保存后生效。", string(short))
-			ui.Text(c, message).FontSize(settingsFontSize(c, 12)).Width(0).Grow(1).MaxLines(2).
+			ui.Text(c, message).FontSize(settingsFontSize(c, 13)).FontWeight(500).Width(0).Grow(1).MaxLines(2).
 				Tooltip("删除「" + name + "」？保存后生效。")
-			keep := settingsButton(c, "cancel-delete", "保留预设", 32, false).
+			keep := settingsButton(c, "cancel-delete", "保留预设", 30, false).Padding(0, 12).
 				OnClick(func() {
 					editor.confirmDelete = false
 					editor.focusField = "delete-preset"
 				})
 			s.focusSettingsFieldDuringDelete(keep)
-			destructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 32), false).
-				FontSize(settingsFontSize(c, 13)).OnClick(s.deletePreset)
+			destructiveAction(c, "confirm-delete", "确认删除", settingsControlHeight(c, 30), false).
+				FontSize(settingsFontSize(c, 13)).Padding(0, 12).OnClick(s.deletePreset)
 		})
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 	}
-	ui.Column(c).Padding(12, padding).Gap(8).Background(sidebarSurface(c)).Children(func() {
+	ui.Column(c).Shrink(0).Padding(10, padding).Gap(8).Background(sidebarSurface(c)).Children(func() {
 		message, color, role := "", t.TextMuted, ui.RoleStatus
 		dirty := s.settingsHaveChanges()
 		presetChanged := editor.presets[editor.active].name != s.scheme
@@ -398,10 +401,10 @@ func (s *application) settingsFooter(c *ui.Context) {
 		}
 		ui.Row(c).FillWidth().Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			if editor.section == settingsPresets {
-				quietToolbarButton(c, "duplicate-preset", "复制预设", s.settingsDraftLocked()).
-					Height(settingsControlHeight(c, 32)).FontSize(settingsFontSize(c, 13)).OnClick(s.duplicatePreset)
-				deleteButton := quietToolbarButton(c, "delete-preset", "删除预设", s.settingsDraftLocked() || len(editor.presets) <= 1).
-					Height(settingsControlHeight(c, 32)).FontSize(settingsFontSize(c, 13)).TextColor(t.Danger).OnClick(s.requestDeletePreset)
+				ghostButton(c, "duplicate-preset", "复制预设", settingsControlHeight(c, 32), s.settingsDraftLocked()).
+					FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 10).OnClick(s.duplicatePreset)
+				deleteButton := ghostDestructiveButton(c, "delete-preset", "删除预设", settingsControlHeight(c, 32), s.settingsDraftLocked() || len(editor.presets) <= 1).
+					FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 10).OnClick(s.requestDeletePreset)
 				if len(editor.presets) <= 1 {
 					deleteButton.Tooltip("至少保留一个预设")
 				}
