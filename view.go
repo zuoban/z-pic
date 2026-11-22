@@ -33,6 +33,8 @@ var (
 	actionSlidersIcon            = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 5h2.5m3.5 0h5M2.5 11h5.5m3.5 0h2"/><circle cx="6.75" cy="5" r="1.65"/><circle cx="9.75" cy="11" r="1.65"/></svg>`))
 	actionBackIcon               = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8 10 12.5"/></svg>`))
 	actionNextIcon               = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5"/></svg>`))
+	actionCloseIcon              = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg>`))
+	actionOverwriteIcon          = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.25 4.25A1.25 1.25 0 0 1 4.5 3h5.25L12.75 6v6.75A1.25 1.25 0 0 1 11.5 14h-7a1.25 1.25 0 0 1-1.25-1.25Z"/><path d="M9.5 3v3h3M6.25 9.75 8 11.5l1.75-1.75M8 7.5v4"/></svg>`))
 )
 
 func toolbarButtonContent(c *ui.Context, button ui.Element, label string, icon *ui.SVG) ui.Element {
@@ -225,6 +227,17 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 	}
 	availWidth := max(0, width-leftPad-rightPad)
 	utilityControls := func() {
+		floatingLabel := "悬浮窗"
+		if s.floatingOpen {
+			floatingLabel = "收起悬浮窗"
+		}
+		floatingBtn := toolbarButtonContent(c, quietToolbarButton(c, "toggle-floating", "", false), floatingLabel, toolbarFloatingIcon).
+			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
+			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
+		if s.floatingOpen {
+			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
+		}
+		ui.Box(c).Size(1, 14).Margin(0, 2).Background(chromeDivider(c))
 		pasteButton := quietToolbarButton(c, "paste-images", "", !s.canPasteImages()).Label("粘贴图片").
 			KeyShortcuts(ui.Cmd, ui.KeyV).
 			Tooltip("粘贴图片 · " + shortcutLabel("V")).
@@ -236,16 +249,6 @@ func (s *application) topToolbar(c *ui.Context, width, pagePadding float32, mobi
 				Label(label).KeyShortcuts(ui.Cmd|ui.Shift, ui.KeyV).
 				Tooltip("压缩剪贴板中的单张 PNG 并写回 · " + shortcutLabel("⇧V")).OnClick(s.compressClipboardPNG)
 			button.Size(32, 32).Padding(0).Center().Children(func() { ui.Icon(c, toolbarClipboardCompressIcon).Size(15, 15) })
-		}
-		floatingLabel := "悬浮窗"
-		if s.floatingOpen {
-			floatingLabel = "收起悬浮窗"
-		}
-		floatingBtn := toolbarButtonContent(c, quietToolbarButton(c, "toggle-floating", "", false), floatingLabel, toolbarFloatingIcon).
-			Tooltip("打开置顶拖图窗口，接收本地或网页图片").
-			OnClick(func() { s.setFloatingOpen(!s.floatingOpen) })
-		if s.floatingOpen {
-			floatingBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(accentForeground(t))
 		}
 		settingsDisabled := s.busy || s.confirmOverwrite || s.confirmBatchOverwrite
 		settingsBtn := quietToolbarButton(c, "open-settings", "", settingsDisabled).Label("设置").
@@ -353,22 +356,28 @@ func (s *application) previewPanel(c *ui.Context) {
 					}
 					dashColor := t.Text.Alpha(0.11)
 					if t.Dark {
-						dashColor = ui.RGBA(255, 255, 255, 0.11)
+						dashColor = ui.RGBA(255, 255, 255, 0.13)
 					}
 					inner := ui.Rect{X: bounds.X + inset, Y: bounds.Y + inset, W: bounds.W - inset*2, H: bounds.H - inset*2}
 					drawDashedOutline(p, inner, max(8, panelRadius(c)-4), dashColor)
 				})
 				dropzone.Children(func() {
 					ui.Column(c).Center().Gap(18).Padding(20).Children(func() {
-						ui.Box(c).Size(64, 60).Draw(func(p *ui.Painter, bounds ui.Rect) {
-							back := ui.Rect{X: bounds.X + 6, Y: bounds.Y + 6, W: 44, H: 40}
-							p.Transform(ui.Rotation(-0.12), back.X+back.W/2, back.Y+back.H/2, func() {
-								p.Fill(back, controlSurface(c), 11)
+						ui.Box(c).Size(68, 60).Draw(func(p *ui.Painter, bounds ui.Rect) {
+							back := ui.Rect{X: bounds.X + 7, Y: bounds.Y + 6, W: 44, H: 40}
+							p.Transform(ui.Rotation(-9), back.X+back.W/2, back.Y+back.H/2, func() {
+								backFill := controlSurface(c)
+								if t.Dark {
+									backFill = ui.Hex("#252b38")
+								}
+								p.Fill(back, backFill, 11)
 								p.Stroke(back, controlBorder(c), 11, 1)
 							})
-							front := ui.Rect{X: bounds.X + 12, Y: bounds.Y + 10, W: 46, H: 42}
+							front := ui.Rect{X: bounds.X + 15, Y: bounds.Y + 11, W: 46, H: 42}
 							if !t.Dark {
-								p.Shadow(front, 12, 0, 4, 12, 0, ui.RGBA(33, 91, 230, 0.14))
+								p.Shadow(front, 12, 0, 4, 12, 0, ui.RGBA(33, 91, 230, 0.15))
+							} else {
+								p.Shadow(front, 12, 0, 4, 12, 0, ui.RGBA(0, 0, 0, 0.35))
 							}
 							p.Fill(front, statusTintSurface(c, t.Accent), 12)
 							p.Stroke(front, statusTintBorder(c, accentForeground(t)), 12, 1)
@@ -452,7 +461,8 @@ func (s *application) previewPanel(c *ui.Context) {
 					"更换图片", actionImageIcon, 12, 500).
 					KeyShortcuts(ui.Cmd, ui.KeyO).Tooltip("更换图片 · " + shortcutLabel("O")).
 					OnClick(s.chooseFile)
-				ghostButton(c, "single-clear", "清空", 30, s.modalOpen()).FontSize(12).Padding(0, 10).
+				iconLabelButton(c, ghostButton(c, "single-clear", "", 30, s.modalOpen()).Padding(0, 8),
+					"清空", actionCloseIcon, 12, 500).
 					Tooltip("关闭当前图片").
 					OnClick(s.clearSingleImage)
 			})
@@ -606,9 +616,11 @@ func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {
 				disabled := s.modalOpen() || (replaces && !s.canOverwrite())
 				var save ui.Element
 				if replaces {
-					save = destructiveAction(c, "save", label, 36, disabled)
+					save = iconLabelButton(c, destructiveAction(c, "save", "", 36, disabled),
+						label, actionOverwriteIcon, 13, 500)
 				} else {
-					save = primaryAction(c, "save", label, disabled).Height(36)
+					save = iconLabelButton(c, primaryAction(c, "save", "", disabled).Height(36),
+						label, actionSaveIcon, 13, 500)
 				}
 				save.FillWidth().KeyShortcuts(ui.Cmd, ui.KeyS).
 					Tooltip(hint + " · " + shortcutLabel("S")).OnClick(s.savePresetResult)
@@ -1134,26 +1146,22 @@ func summaryCardLayout(c *ui.Context, title, status, statusDetail string, status
 			}
 		})
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
-			firstSize, secondSize, valueHeight := float32(14), float32(20), float32(25)
+			firstSize, secondSize := float32(14), float32(20)
 			if compact {
-				firstSize, secondSize, valueHeight = 13, 18, 23
+				firstSize, secondSize = 13, 18
 			}
-			ui.Column(c).Gap(3).Shrink(0).Children(func() {
+			ui.Column(c).Gap(2).Shrink(0).AlignItems(ui.Start).Children(func() {
 				ui.Text(c, firstLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
-				ui.Row(c).Height(valueHeight).AlignItems(ui.End).Children(func() {
-					ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
-						TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
-				})
+				ui.Text(c, firstValue).FontSize(firstSize).FontWeight(500).FontFeatures("tnum").
+					TextColor(t.TextMuted).SingleLine().Padding(0, 0, 2, 0).Tooltip(firstValue)
 			})
-			ui.Row(c).Height(valueHeight).AlignItems(ui.End).Shrink(0).Children(func() {
+			ui.Row(c).Grow(1).MinWidth(14).Justify(ui.Center).AlignItems(ui.End).Children(func() {
 				ui.Text(c, "→").FontSize(12).TextColor(metadataColor(c)).SingleLine().Padding(0, 0, 3, 0)
 			})
-			ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(3).Children(func() {
+			ui.Column(c).Gap(2).Shrink(0).AlignItems(ui.End).Children(func() {
 				ui.Text(c, secondLabel).FontSize(11).TextColor(metadataColor(c)).SingleLine()
-				ui.Row(c).FillWidth().Height(valueHeight).AlignItems(ui.End).Children(func() {
-					ui.Text(c, secondValue).FontSize(secondSize).FontWeight(700).FontFeatures("tnum").
-						TextColor(t.Text).FillWidth().SingleLine().TruncateMiddle().Tooltip(secondValue)
-				})
+				ui.Text(c, secondValue).FontSize(secondSize).FontWeight(700).FontFeatures("tnum").
+					TextColor(t.Text).SingleLine().Tooltip(secondValue)
 			})
 		})
 		if ratio >= 0 || statusDetail != "" || note != "" {

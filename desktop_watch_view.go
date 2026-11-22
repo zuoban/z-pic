@@ -25,15 +25,20 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 			})
 			ui.Text(c, "仅处理监听开始后加入输入目录顶层的图片，请在输入目录之外选择输出位置").
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
-			s.folderWatchDirectoryField(c, "watch-input-dir", "输入目录", editor.watch.InputDir, locked, func() {
-				s.chooseFolderWatchDirectory(false)
-			})
-			s.folderWatchDirectoryField(c, "watch-output-dir", "输出目录", editor.watch.OutputDir, locked, func() {
-				s.chooseFolderWatchDirectory(true)
-			})
-			ui.Column(c).FillWidth().Gap(6).Children(func() {
-				ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c))
-				s.folderWatchPresetPicker(c, locked)
+			ui.Column(c).FillWidth().Gap(0).Children(func() {
+				s.folderWatchDirectoryField(c, "watch-input-dir", "输入目录", editor.watch.InputDir, locked, func() {
+					s.chooseFolderWatchDirectory(false)
+				})
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				s.folderWatchDirectoryField(c, "watch-output-dir", "输出目录", editor.watch.OutputDir, locked, func() {
+					s.chooseFolderWatchDirectory(true)
+				})
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 46)).Padding(8, 0, 2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "监听预设").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).Shrink(0)
+					ui.Box(c).Width(0).Grow(1).MinWidth(0)
+					s.folderWatchPresetPicker(c, locked)
+				})
 			})
 			if _, ok := s.folderWatchPreset(editor.watch.Preset); !ok && s.watch.session == nil {
 				ui.Text(c, "所选监听预设已不可用，请重新选择").Role(ui.RoleAlert).
@@ -48,9 +53,9 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				_, validPreset := s.folderWatchPreset(editor.watch.Preset)
 				disabled := locked || editor.watch.InputDir == "" || editor.watch.OutputDir == "" || !validPreset
 				ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-					primaryAction(c, "start-folder-watch", "开始监听", disabled).
+					iconLabelButton(c, primaryAction(c, "start-folder-watch", "", disabled).
 						Height(settingsControlHeight(c, 34)).Radius(pillRadius(settingsControlHeight(c, 34), c)).
-						FontSize(settingsFontSize(c, 13)).FontWeight(500).Padding(0, 14).OnClick(func() {
+						Padding(0, 14), "开始监听", toolbarContinueIcon, settingsFontSize(c, 13), 500).OnClick(func() {
 						if s.settingsDraftLocked() || s.editor != editor {
 							return
 						}
@@ -69,17 +74,17 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir string, disabled bool, choose func()) {
 	t := c.Theme()
 	display := dir
-	textColor := t.Text
+	textColor := t.TextMuted
 	if display == "" {
 		display = "未选择文件夹"
 		textColor = metadataColor(c)
 	}
-	ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
-		Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
-		ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-		ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
-			Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
+	ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 46)).Padding(6, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, label).FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).SingleLine()
+			ui.Text(c, display).FontSize(settingsFontSize(c, 12)).TextColor(textColor).
+				FillWidth().SingleLine().TruncateMiddle().Tooltip(display)
+		})
 		settingsButton(c, key, "选择…", 28, disabled).FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 			Label("选择" + label).Shrink(0).OnClick(choose)
 	})
@@ -103,21 +108,24 @@ func (s *application) folderWatchPresetPicker(c *ui.Context, disabled bool) {
 			}
 		}
 	}, ui.PopoverMenuButtonOptions{
-		At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
+		At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
 		Panel: func(panel ui.Element) {
 			stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 		},
-	}).Label("监听预设").Value(selected).Tooltip(selected).FillWidth().MinWidth(0).
-		Height(settingsControlHeight(c, 34)).Padding(0, 12).Gap(8).AlignItems(ui.Center).
+	}).Label("监听预设").Value(selected).Tooltip(selected).MinWidth(180).MaxWidth(280).
+		Height(settingsControlHeight(c, 32)).Padding(0, 12).Gap(8).AlignItems(ui.Center).
 		Radius(innerRadius(c)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 	if !disabled {
 		if picker.Pressed() {
 			picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-		} else if picker.Hovered() {
-			picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+		} else {
+			controlElevation(picker, c)
+			if picker.Hovered() {
+				picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			}
 		}
 	}
-	settingsGlassControl(picker, c, 34, disabled, ui.Transparent)
+	settingsGlassControl(picker, c, 32, disabled, ui.Transparent)
 	picker.Children(func() {
 		ui.Text(c, selected).FontSize(settingsFontSize(c, 13)).FontWeight(500).Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle()
 		ui.Icon(c, settingsChevronIcon).Size(15, 15).Shrink(0).TextColor(t.TextMuted)

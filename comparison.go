@@ -210,14 +210,14 @@ func (s *application) previewZoomControls(c *ui.Context) {
 		})
 		trackBg := tonalWellSurface(c)
 		if !usesGlass(c) && !t.Dark {
-			trackBg = ui.Hex("#e8ecf2")
+			trackBg = ui.Hex("#e6eaf1")
 		}
 		trackRadius, segRadius := innerRadius(c), float32(7)
 		if usesGlass(c) {
 			trackRadius, segRadius = 15, 14
 		}
 		ui.Row(c).Height(30).Padding(1).Gap(2).Radius(trackRadius).
-			Background(trackBg).Border(1, tonalWellBorder(c)).AlignItems(ui.Stretch).Children(func() {
+			Background(trackBg).Border(1, segmentedTrackBorder(c)).AlignItems(ui.Stretch).Children(func() {
 			scaleOption := func(key, label, tooltip string, keyCode ui.Key, active bool, action func()) {
 				btn := ui.Button(c.Key(key), label).Height(28).Padding(0, 9).Radius(segRadius).
 					FontSize(12).FontFeatures("tnum").
@@ -551,15 +551,20 @@ func (s *application) previewCanvas(c *ui.Context) {
 			p.Line(centerX, bounds.Y, centerX, bounds.Y+bounds.H, 1.5, lineColor)
 			handleX := min(bounds.X+bounds.W-16, max(bounds.X+16, centerX))
 			handle := ui.Rect{X: handleX - 16, Y: centerY - 16, W: 32, H: 32}
-			p.Shadow(handle, 16, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.22))
+			p.Shadow(handle, 16, 0, 2, 10, 0, ui.RGBA(0, 0, 0, 0.28))
+			handleFill := ui.RGBA(255, 255, 255, 0.94)
+			if t.Dark {
+				handleFill = ui.RGBA(28, 33, 44, 0.92)
+			}
 			if reduceGlass {
 				p.Fill(handle, panelSurface(c), 16)
 			} else {
 				glass.Paint(p, handle, 16, glass.Glass{})
+				p.Fill(handle, handleFill, 16)
 			}
-			handleBorder := ui.RGBA(255, 255, 255, 0.72)
+			handleBorder := ui.RGBA(17, 20, 26, 0.16)
 			if t.Dark {
-				handleBorder = ui.RGBA(255, 255, 255, 0.30)
+				handleBorder = ui.RGBA(255, 255, 255, 0.28)
 			}
 			chevronColor := t.Text
 			if dividerHovered {

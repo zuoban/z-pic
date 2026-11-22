@@ -741,6 +741,16 @@ func segmentedThumbBorder(c *ui.Context) ui.Color {
 	return c.Theme().Text.Alpha(0.10)
 }
 
+func segmentedTrackBorder(c *ui.Context) ui.Color {
+	if c.Preferences().HighContrast {
+		return c.Theme().Border
+	}
+	if c.Theme().Dark {
+		return ui.RGBA(255, 255, 255, 0.08)
+	}
+	return c.Theme().Text.Alpha(0.06)
+}
+
 func segmentedControl(c *ui.Context, key, label string, selected *int, height float32, disabled bool, options ...string) ui.Element {
 	t := c.Theme()
 	parts := ui.SegmentedBase(c.Key(key), selected, len(options))
@@ -750,11 +760,11 @@ func segmentedControl(c *ui.Context, key, label string, selected *int, height fl
 	}
 	trackBg := tonalWellSurface(c)
 	if !usesGlass(c) && !t.Dark {
-		trackBg = ui.Hex("#e8ecf2")
+		trackBg = ui.Hex("#e6eaf1")
 	}
 	parts.Track.Label(label).Height(height).Padding(2).Gap(2).
 		AlignItems(ui.Stretch).Radius(trackRadius).
-		Background(trackBg).Border(1, tonalWellBorder(c)).
+		Background(trackBg).Border(1, segmentedTrackBorder(c)).
 		Disabled(disabled).Children(func() {
 		for index, option := range options {
 			active := *selected == index

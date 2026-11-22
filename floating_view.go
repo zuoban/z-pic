@@ -521,15 +521,21 @@ func (s *application) floatingStack(c *ui.Context) {
 					rect.X, rect.Y = centerX-rect.W/2, centerY-rect.H/2
 				}
 				p.Transform(ui.Rotation(angle), centerX, centerY, func() {
-					p.Shadow(rect, 8, 0, 2, 6, 0, ui.Hex("#000000").Alpha(0.12))
-					p.Fill(rect, panelSurface(c), 8)
+					shadowAlpha := float32(0.14)
+					strokeColor := controlBorder(c)
+					if theme.Dark {
+						shadowAlpha = 0.34
+						strokeColor = ui.RGBA(255, 255, 255, 0.16)
+					}
+					p.Shadow(rect, 8, 0, 2, 7, 0, ui.Hex("#000000").Alpha(shadowAlpha))
+					p.Fill(rect, cardSurface(c), 8)
 					if bitmap != nil {
 						p.Clip(rect, 8, func() { p.Image(bitmap, rect, ui.Contain) })
 					} else {
 						drawFloatingIcon(p, ui.Rect{X: centerX - 12, Y: centerY - 12, W: 24, H: 24},
 							"photo", theme.TextMuted)
 					}
-					p.Stroke(rect, glassBorder(c), 8, 1)
+					p.Stroke(rect, strokeColor, 8, 1)
 				})
 			}
 		})
@@ -584,9 +590,9 @@ func (s *application) floatingHeader(c *ui.Context) {
 		ui.Box(c).Size(1, 16).Background(hairlineDivider(c))
 		trackBg := tonalWellSurface(c)
 		if !usesGlass(c) && !c.Theme().Dark {
-			trackBg = ui.Hex("#e8ecf2")
+			trackBg = ui.Hex("#e6eaf1")
 		}
-		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(trackBg).Border(1, tonalWellBorder(c)).Children(func() {
+		ui.Row(c).Gap(2).Padding(2).Radius(innerRadius(c)).Background(trackBg).Border(1, segmentedTrackBorder(c)).Children(func() {
 			for _, mode := range []struct {
 				list bool
 				name string
@@ -597,6 +603,9 @@ func (s *application) floatingHeader(c *ui.Context) {
 				button.Radius(6).Selected(s.floating.listView == mode.list)
 				if s.floating.listView == mode.list {
 					button.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c))
+					if !c.Theme().Dark && !c.Preferences().HighContrast {
+						button.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.08))
+					}
 				} else if button.Hovered() {
 					button.Background(glassControlHover(c)).Border(1, ui.Transparent)
 				} else {
@@ -957,9 +966,8 @@ func drawFloatingIcon(p *ui.Painter, bounds ui.Rect, icon string, color ui.Color
 			line([2]float32{16, 4}, [2]float32{16, 20})
 			line([2]float32{11, 15}, [2]float32{16, 20}, [2]float32{21, 15})
 		case "reveal":
-			rect(2, 2, 20, 20, 10)
-			line([2]float32{7, 16}, [2]float32{16, 7})
-			line([2]float32{9, 7}, [2]float32{16, 7}, [2]float32{16, 14})
+			rect(3.5, 3.5, 13, 13, 6.5)
+			line([2]float32{14.8, 14.8}, [2]float32{20.5, 20.5})
 		default:
 			rect(2, 4, 20, 16, 3)
 			line([2]float32{4, 17}, [2]float32{9, 11}, [2]float32{13, 15}, [2]float32{16, 12}, [2]float32{20, 17})

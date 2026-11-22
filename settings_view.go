@@ -197,10 +197,12 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 					downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
 					downloadColor = t.TextMuted
 				}
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 38)).Padding(6, 0, 2, 0).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).Shrink(0)
-					ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
-						Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 42)).Padding(6, 0, 2, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Column(c).Width(0).Grow(1).MinWidth(0).Gap(2).Children(func() {
+						ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).SingleLine()
+						ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
+							FillWidth().SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
+					})
 					settingsButton(c, "settings-download-dir", "选择…", 28, locked).
 						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
 						Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
@@ -244,17 +246,21 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			if twoColShortcuts {
 				ui.Column(c).FillWidth().Children(func() {
 					for row := 0; row < len(shortcuts); row += 2 {
-						shortcutGap := float32(28)
+						shortcutGap := float32(14)
 						if narrow {
-							shortcutGap = 14
+							shortcutGap = 8
 						}
-						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Stretch).Children(func() {
 							ui.Column(c).Width(0).Grow(1).Children(func() {
 								if row > 0 {
 									ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 								}
 								renderRow(shortcuts[row].label, shortcuts[row].key)
 							})
+							centerDivider := ui.Box(c).Width(1).Shrink(0)
+							if row+1 < len(shortcuts) {
+								centerDivider.Background(subtleRowDivider(c))
+							}
 							if row+1 < len(shortcuts) {
 								ui.Column(c).Width(0).Grow(1).Children(func() {
 									if row > 0 {
@@ -431,6 +437,9 @@ func (s *application) settingsFooter(c *ui.Context) {
 					deleteButton.Tooltip("至少保留一个预设")
 				}
 				s.focusSettingsField(deleteButton, "delete-preset")
+				if !statusAbove && message != "" {
+					ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
+				}
 			}
 			if !statusAbove && message != "" {
 				ui.Text(c, message).FontSize(settingsFontSize(c, 12)).TextColor(color).Role(role).

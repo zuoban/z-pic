@@ -195,7 +195,8 @@ func (s *application) batchListPanel(c *ui.Context) {
 				list = ui.List(c, &s.batch.list, len(visible)).
 					Label("批量图片列表").Fill().Padding(6, pad-4).Gap(2)
 				list.Rows(func(r ui.ListRow) {
-					s.batchListRow(r, visible[r.Index], baseTheme)
+					showDivider := r.Index < len(visible)-1 && visible[r.Index+1] != s.batch.selected
+					s.batchListRow(r, visible[r.Index], showDivider, baseTheme)
 				})
 			})
 			if s.batch.listSelected >= 0 && s.batch.listSelected < len(visible) {
@@ -316,7 +317,7 @@ func (s *application) emptyBatchFilterMessage() string {
 	}
 }
 
-func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Theme) {
+func (s *application) batchListRow(r ui.ListRow, itemIndex int, showDivider bool, baseTheme *ui.Theme) {
 	c := r.Context
 	item := s.batch.items[itemIndex]
 	ui.Themed(c, baseTheme).FillWidth().Background(ui.Transparent).Children(func() {
@@ -337,7 +338,7 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, baseTheme *ui.Th
 		}
 		rowCard := ui.Row(c).FillWidth().Padding(8, 10).Gap(10).AlignItems(ui.Center).
 			Radius(10).Background(background).Border(borderWidth, border)
-		if !r.Selected() && !r.Hovered() && !r.Pressed() {
+		if showDivider && !r.Selected() && !r.Hovered() && !r.Pressed() {
 			divider := subtleRowDivider(c)
 			rowCard.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
 				p.Line(bounds.X+80, bounds.Y+bounds.H-0.5, bounds.X+bounds.W-10, bounds.Y+bounds.H-0.5, 1, divider)
@@ -790,8 +791,9 @@ func (s *application) batchControls(c *ui.Context, showOutput, mobile bool) {
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			if showOutput {
-				primaryAction(c, "batch-open-output", "打开输出文件夹", s.modalOpen()).Height(36).
-					FillWidth().OnClick(s.openOutputDir)
+				iconLabelButton(c, primaryAction(c, "batch-open-output", "", s.modalOpen()).Height(36).FillWidth(),
+					"打开输出文件夹", actionFolderIcon, 13, 500).
+					OnClick(s.openOutputDir)
 			}
 			if len(donePaths) > 0 {
 				label := fmt.Sprintf("拖出已完成（%d 张）", len(donePaths))

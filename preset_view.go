@@ -727,17 +727,19 @@ func (s *application) presetSaveCard(c *ui.Context, preset *compressionPreset) {
 	t := c.Theme()
 	options := &preset.output
 	locked := s.settingsDraftLocked()
+	replaces := options.replacesOriginal()
+	inlineReplaceBadge := replaces && preset.outputFormat == compress.OutputFormatKeep
 	settingsPanel(c, "settings-output-panel").Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, presetSaveIcon).Size(15, 15).TextColor(metadataColor(c))
-			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
-		})
-		if options.replacesOriginal() {
-			warning := presetSaveDescription(*options)
-			if preset.outputFormat != compress.OutputFormatKeep {
-				format := strings.TrimPrefix(presetOutputFormatLabel(preset.outputFormat), "转为 ")
-				warning = fmt.Sprintf("同格式 %s 文件缩小后将被替换；其他格式另存为 %s", format, outputExtensionForFormat(string(preset.outputFormat)))
+			ui.Text(c, "保存到").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
+			if inlineReplaceBadge {
+				statusCapsule(c, presetSaveDescription(*options), t.Danger).FontSize(settingsFontSize(c, 12))
 			}
+		})
+		if replaces && !inlineReplaceBadge {
+			format := strings.TrimPrefix(presetOutputFormatLabel(preset.outputFormat), "转为 ")
+			warning := fmt.Sprintf("同格式 %s 文件缩小后将被替换；其他格式另存为 %s", format, outputExtensionForFormat(string(preset.outputFormat)))
 			ui.Row(c).FillWidth().Padding(7, 10).Radius(innerRadius(c)).
 				Background(statusTintSurface(c, t.Danger)).Border(1, statusTintBorder(c, t.Danger)).Children(func() {
 				ui.Text(c, warning).FontSize(settingsFontSize(c, 12)).FontWeight(500).
