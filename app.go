@@ -61,6 +61,20 @@ type application struct {
 	tray                     *appTray
 	onTrayRefresh            func()
 	cliInstallEnv            cliInstallEnv
+	quickActionEnv           quickActionEnv
+	updateChecker            updateCheckerConfig
+	updateState              updateCheckState
+	updateResult             updateCheckResult
+	updateMessage            string
+	updateMessageFailed      bool
+	updateGen                int
+	updateCancel             context.CancelFunc
+	openExternalURL          func(string) error
+	openAtLoginState         func() bool
+	setOpenAtLogin           func(bool) error
+	openAtLoginSupported     func() bool
+	setWindowProgress        func(mygo.ProgressBar)
+	lastWindowProgress       mygo.ProgressBar
 	sendNotification         func(title, body string)
 	output                   presetSaveOptions
 	settingsOpen             bool
@@ -73,6 +87,7 @@ type application struct {
 	preview                  *ui.Bitmap
 	comparison               comparisonView
 	busy                     bool
+	compressingSingle        bool
 	phase                    string
 	message                  string
 	failed                   bool
@@ -144,6 +159,52 @@ func (s *application) dialogOpen() bool {
 	return s.settingsOpen || s.confirmOverwrite || s.confirmBatchOverwrite
 }
 
+func (s *application) desiredWindowProgress() mygo.ProgressBar {
+	if s.closed || !s.busy {
+		return mygo.ProgressBar{}
+	}
+	if s.batch != nil && s.batch.running && s.batch.total > 0 {
+		if s.batch.done <= 0 {
+			return mygo.ProgressBar{State: mygo.ProgressIndeterminate}
+		}
+		ratio := float64(s.batch.done) / float64(s.batch.total)
+		if ratio > 1 {
+			ratio = 1
+		}
+		return mygo.ProgressBar{State: mygo.ProgressNormal, Value: ratio}
+	}
+	if s.batch == nil && s.compressingSingle {
+		return mygo.ProgressBar{State: mygo.ProgressIndeterminate}
+	}
+	return mygo.ProgressBar{}
+}
+
+func (s *application) applyWindowProgress(bar mygo.ProgressBar) {
+	s.lastWindowProgress = bar
+	if s.setWindowProgress != nil {
+		s.setWindowProgress(bar)
+		return
+	}
+	if s.window != nil {
+		s.window.SetProgressBar(bar)
+	}
+}
+
+func (s *application) syncWindowProgressIfChanged() {
+	want := s.desiredWindowProgress()
+	if want == s.lastWindowProgress {
+		return
+	}
+	s.applyWindowProgress(want)
+}
+
+func (s *application) clearWindowProgress() {
+	if s.lastWindowProgress == (mygo.ProgressBar{}) {
+		return
+	}
+	s.applyWindowProgress(mygo.ProgressBar{})
+}
+
 func (s *application) modalOpen() bool {
 	return s.busy || s.dialogOpen()
 }
@@ -162,6 +223,7 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 		if invalidateFloating {
 			s.invalidateFloatingWindow()
 		}
+		s.syncWindowProgressIfChanged()
 		s.syncTrayMenuIfChanged()
 	}
 	if s.dispatchUpdate != nil {
@@ -482,11 +544,12 @@ func (s *application) startCompression() {
 	}
 	file, options := *s.file, s.compressionOptions()
 	ctx, cancel := context.WithCancel(context.Background())
-	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
+	s.busy, s.compressingSingle, s.phase, s.cancel = true, true, "正在压缩图片", cancel
 	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
 	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
+	s.syncWindowProgressIfChanged()
 	go func() {
 		release, err := s.acquireImageMemory(ctx, compress.ImageInfo{
 			Path: file.path, Format: file.format, Width: file.width, Height: file.height, Size: file.size,
@@ -521,7 +584,7 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 	if canceled := ctx.Err(); canceled != nil {
 		err = canceled
 	}
-	s.busy, s.phase, s.cancel, s.canceling = false, "", nil, false
+	s.busy, s.compressingSingle, s.phase, s.cancel, s.canceling = false, false, "", nil, false
 	if err != nil {
 		s.reportError(err, "压缩失败")
 		return

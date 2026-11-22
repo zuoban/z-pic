@@ -204,6 +204,14 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 						FontSize(settingsFontSize(c, 13)).Disabled(locked).
 						Tooltip("关闭主窗口后保持菜单栏常驻，后台文件夹监听将继续运行；可通过菜单栏或 Dock 重新打开窗口")
 				})
+				if s.editor.openAtLoginSupported {
+					ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+					ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, checkRowH)).Padding(checkPadV, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Checkbox(c.Key("settings-open-at-login"), &s.editor.openAtLogin, "登录系统时自动启动").
+							FontSize(settingsFontSize(c, 13)).Disabled(locked).
+							Tooltip("登录系统时自动启动 Z Pic；同时开启菜单栏常驻时将在后台静默启动")
+					})
+				}
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				downloadPath := s.editor.downloadDir
 				downloadTooltip := downloadPath
@@ -302,6 +310,8 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 			}
 		})
 		s.cliInstallSettingsPanel(c, compactHeight)
+		s.quickActionSettingsPanel(c, compactHeight)
+		s.aboutAndUpdateSettingsPanel(c, compactHeight)
 	})
 }
 
@@ -381,6 +391,144 @@ func (s *application) cliInstallSettingsPanel(c *ui.Context, compactHeight bool)
 			}
 			ui.Text(c, editor.cliMessage).FontSize(settingsFontSize(c, 12)).TextColor(msgColor).MaxLines(2)
 		}
+	})
+}
+
+func (s *application) quickActionSettingsPanel(c *ui.Context, compactHeight bool) {
+	t := c.Theme()
+	editor := s.editor
+	locked := s.settingsDraftLocked()
+	status := editor.quickActionStatus
+	panel := settingsPanel(c, "settings-quick-action-panel")
+	if compactHeight {
+		panel.Padding(12, 16).Gap(8)
+	}
+	panel.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "访达右键快捷操作").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
+			badgeText, badgeColor := "未安装", t.TextMuted
+			switch {
+			case !status.Supported:
+				badgeText = "仅 macOS"
+			case status.State == quickActionInstalled:
+				badgeText, badgeColor = "已安装", t.Success
+			case status.State == quickActionNeedsUpdate:
+				badgeText, badgeColor = "需要更新", t.Warning
+			case status.State == quickActionConflict:
+				badgeText, badgeColor = "存在冲突", t.Danger
+			}
+			statusCapsule(c, badgeText, badgeColor).FontSize(settingsFontSize(c, 11))
+		})
+		detail := "在访达中右键图片或文件夹 → 快速操作 →「使用 Z Pic 压缩」，按当前预设生成压缩副本"
+		detailColor := metadataColor(c)
+		switch status.State {
+		case quickActionInstalled:
+			detail = status.BundlePath
+			detailColor = t.TextMuted
+		case quickActionNeedsUpdate:
+			detail = fmt.Sprintf("%s 指向旧版路径，点击更新为当前应用", status.BundlePath)
+		case quickActionConflict:
+			detail = fmt.Sprintf("%s 已被其他快捷操作占用，未自动覆盖", status.BundlePath)
+			detailColor = t.Danger
+		}
+		if !status.Supported {
+			detail = "访达右键快捷操作仅在 macOS 上可用"
+		}
+		qaLocked := locked || editor.quickActionBusy
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, detail).FontSize(settingsFontSize(c, 12)).TextColor(detailColor).
+				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(detail)
+			if status.Supported {
+				switch status.State {
+				case quickActionInstalled:
+					settingsButton(c, "settings-qa-uninstall", "卸载", 28, qaLocked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("移除访达右键快捷操作").OnClick(s.runUninstallQuickAction)
+				case quickActionNeedsUpdate:
+					settingsButton(c, "settings-qa-update", "更新快捷操作", 28, qaLocked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("更新访达快捷操作指向当前应用").OnClick(s.runInstallQuickAction)
+					settingsButton(c, "settings-qa-uninstall", "卸载", 28, qaLocked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).OnClick(s.runUninstallQuickAction)
+				case quickActionConflict:
+					settingsButton(c, "settings-qa-refresh", "重新检测", 28, qaLocked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Tooltip("重新检测访达快捷操作状态").OnClick(s.refreshQuickActionStatus)
+				default:
+					settingsButton(c, "settings-qa-install", "安装快捷操作", 28, qaLocked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 12).
+						Tooltip("安装访达右键快速操作「使用 Z Pic 压缩」").OnClick(s.runInstallQuickAction)
+				}
+			}
+		})
+		if editor.quickActionMessage != "" {
+			msgColor := t.Success
+			if editor.quickActionFailed {
+				msgColor = t.Danger
+			} else if editor.quickActionBusy {
+				msgColor = t.TextMuted
+			}
+			ui.Text(c, editor.quickActionMessage).FontSize(settingsFontSize(c, 12)).TextColor(msgColor).MaxLines(2)
+		}
+	})
+}
+
+func (s *application) aboutAndUpdateSettingsPanel(c *ui.Context, compactHeight bool) {
+	t := c.Theme()
+	locked := s.settingsDraftLocked()
+	checking := s.updateState == updateChecking
+	panel := settingsPanel(c, "settings-about-panel")
+	if compactHeight {
+		panel.Padding(12, 16).Gap(8)
+	}
+	panel.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "关于与更新").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2).Grow(1)
+			statusCapsule(c, "v"+normalizeVersionLabel(appVersion), t.TextMuted).FontSize(settingsFontSize(c, 11))
+			switch s.updateState {
+			case updateChecking:
+				statusCapsule(c, "检查中…", t.Accent).FontSize(settingsFontSize(c, 11))
+			case updateUpToDate:
+				statusCapsule(c, "已是最新", t.Success).FontSize(settingsFontSize(c, 11))
+			case updateAvailable:
+				statusCapsule(c, "新版本 v"+s.updateResult.LatestVersion, t.Warning).FontSize(settingsFontSize(c, 11))
+			case updateFailed:
+				statusCapsule(c, "检查失败", t.Danger).FontSize(settingsFontSize(c, 11))
+			}
+		})
+		detail := "从 GitHub Releases 检查 Z Pic 最新正式版本"
+		detailColor := metadataColor(c)
+		if s.updateMessage != "" {
+			detail = s.updateMessage
+			switch {
+			case s.updateMessageFailed || s.updateState == updateFailed:
+				detailColor = t.Danger
+			case s.updateState == updateAvailable:
+				detailColor = t.Text
+			case s.updateState == updateUpToDate:
+				detailColor = t.Success
+			}
+		}
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, detail).FontSize(settingsFontSize(c, 12)).TextColor(detailColor).
+				Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(detail)
+			if s.updateState == updateAvailable {
+				h := settingsControlHeight(c, 28)
+				downloadBtn := primaryAction(c, "settings-update-download", "前往下载", locked).
+					FontSize(settingsFontSize(c, 12)).Height(h).Radius(pillRadius(h, c)).Padding(0, 12).
+					Tooltip("在浏览器中打开发布页面").OnClick(s.openReleaseDownloadPage)
+				if usesGlass(c) && !locked {
+					settingsGlassControl(downloadBtn, c, 28, false, t.AccentHover).TextColor(t.AccentText)
+				}
+			}
+			checkLabel := "检查更新"
+			if checking {
+				checkLabel = "检查中…"
+			}
+			settingsButton(c, "settings-check-update", checkLabel, 28, locked || checking).
+				FontSize(settingsFontSize(c, 12)).Padding(0, 12).
+				Tooltip("检查 GitHub Releases 是否有新版本").OnClick(s.checkAppUpdates)
+		})
 	})
 }
 

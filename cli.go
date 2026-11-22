@@ -525,6 +525,7 @@ func printCompressCLIHelp(w io.Writer) {
 
 选项:
   -p, --preset <name>      使用已保存预设作为基础参数
+      --active-preset      使用桌面端当前选中的预设作为基础参数
       --settings <path>    指定设置 JSON 文件路径
   -q, --quality <1-100>    %s 质量并联动调整 PNG 量化参数
       --lossless           无损模式（转为 JPEG 时使用有损编码）
@@ -692,6 +693,7 @@ func expectedExtMatchesFormat(ext, format string) bool {
 
 type cliCompressionFlags struct {
 	presetName      string
+	activePreset    bool
 	settingsPath    string
 	quality         int
 	lossless        bool
@@ -709,6 +711,7 @@ type cliCompressionFlags struct {
 func (f *cliCompressionFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&f.presetName, "preset", "", "preset name")
 	fs.StringVar(&f.presetName, "p", "", "preset name")
+	fs.BoolVar(&f.activePreset, "active-preset", false, "use the currently active preset from settings")
 	fs.StringVar(&f.settingsPath, "settings", "", "settings file path")
 	fs.IntVar(&f.quality, "quality", 80, "quality 1-100")
 	fs.IntVar(&f.quality, "q", 80, "quality 1-100")
@@ -725,7 +728,7 @@ func (f *cliCompressionFlags) bind(fs *flag.FlagSet) {
 }
 
 func (f cliCompressionFlags) loadSettings(setFlags map[string]bool) (appSettings, error) {
-	if f.presetName == "" && !setFlags["settings"] {
+	if f.presetName == "" && !f.activePreset && !setFlags["settings"] {
 		return appSettings{}, nil
 	}
 	cfg, _, err := loadCLISettings(f.settingsPath)
@@ -737,6 +740,9 @@ func (f cliCompressionFlags) loadSettings(setFlags map[string]bool) (appSettings
 
 func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) (compress.Options, *compressionPreset, error) {
 	opts := compress.Options{Quality: 80, PNG: compress.DefaultPNGOptions()}
+	if f.presetName != "" && f.activePreset {
+		return opts, nil, errors.New("参数冲突：--preset 与 --active-preset 不能同时使用。")
+	}
 	var basePreset *compressionPreset
 	if f.presetName != "" {
 		for i := range cfg.presets {
@@ -749,6 +755,19 @@ func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) 
 			return opts, nil, fmt.Errorf("找不到预设 %q；运行 \"z-pic presets\" 查看可用预设。", f.presetName)
 		}
 		opts = basePreset.compressionOptions()
+	} else if f.activePreset {
+		for i := range cfg.presets {
+			if cfg.presets[i].name == cfg.selected {
+				basePreset = &cfg.presets[i]
+				break
+			}
+		}
+		if basePreset == nil && len(cfg.presets) > 0 {
+			basePreset = &cfg.presets[0]
+		}
+		if basePreset != nil {
+			opts = basePreset.compressionOptions()
+		}
 	}
 
 	if setFlags["quality"] || setFlags["q"] {
@@ -927,9 +946,13 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	resolvedPresetName := compressionFlags.presetName
+	if basePreset != nil {
+		resolvedPresetName = basePreset.name
+	}
 
 	if stdinInput {
-		return runCLICompressStdin(ctx, opts, compressionFlags.presetName, outputPath, stdoutOutput, dryRun, metricsOut, jsonOut, quiet, stdin, stdout, stderr)
+		return runCLICompressStdin(ctx, opts, resolvedPresetName, outputPath, stdoutOutput, dryRun, metricsOut, jsonOut, quiet, stdin, stdout, stderr)
 	}
 
 	scan, err := scanBatchPathsWithOptions(ctx, inputs, nil, nil, 0, !noRecursive)
@@ -1126,7 +1149,7 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 	report := cliCompressReport{
 		DryRun:          dryRun,
 		InPlace:         inPlace,
-		Preset:          compressionFlags.presetName,
+		Preset:          resolvedPresetName,
 		Total:           len(files),
 		TargetSizeBytes: opts.TargetSizeBytes,
 		Truncated:       scan.truncated,

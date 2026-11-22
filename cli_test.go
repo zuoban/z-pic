@@ -794,3 +794,44 @@ func TestCLICompressStdinEdgeCases(t *testing.T) {
 	}
 }
 
+func TestCLICompressActivePreset(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := writeCLITestPNG(t, dir, "hero.png", 64, 48)
+	settingsPath := filepath.Join(dir, "settings.json")
+	custom := compressionPreset{
+		name:         "访达专用 WebP",
+		quality:      72,
+		png:          compress.DefaultPNGOptions(),
+		outputFormat: compress.OutputFormatWebP,
+		metadata:     compress.MetadataStrip,
+	}
+	if err := saveFullSettings(settingsPath, appSettings{
+		presets:  append(defaultPresets(), custom),
+		selected: custom.name,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. --active-preset loads the active desktop preset and records its name in JSON output.
+	var out, errBuf bytes.Buffer
+	code := runCLIContext(t.Context(), []string{"compress", "--active-preset", "--settings", settingsPath, "--dry-run", "--json", srcPath}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("compress --active-preset failed: code=%d stdout=%q stderr=%q", code, out.String(), errBuf.String())
+	}
+	var report cliCompressReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
+	}
+	if report.Preset != custom.name || len(report.Files) != 1 || report.Files[0].OutputFormat != "webp" {
+		t.Fatalf("expected active preset %q with webp output, got %+v", custom.name, report)
+	}
+
+	// 2. Combining --preset and --active-preset returns parameter conflict (exit 2).
+	out.Reset()
+	errBuf.Reset()
+	code = runCLIContext(t.Context(), []string{"compress", "--preset", "均衡", "--active-preset", "--settings", settingsPath, "--dry-run", srcPath}, &out, &errBuf)
+	if code != 2 || !strings.Contains(errBuf.String(), "--active-preset") {
+		t.Fatalf("expected exit 2 conflict for --preset + --active-preset: code=%d stderr=%q", code, errBuf.String())
+	}
+}
+

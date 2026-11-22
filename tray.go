@@ -319,6 +319,20 @@ func (s *application) buildTrayMenu() *mygo.Menu {
 
 	items = append(items, mygo.Separator())
 	items = append(items, &mygo.MenuItem{
+		ID:    "tray-check-updates",
+		Label: "检查更新…",
+		Click: func(*mygo.MenuItem, *mygo.Window) {
+			s.showMainWindow()
+			s.setSettingsOpen(true)
+			if s.settingsOpen && s.editor != nil {
+				s.editor.confirmDelete = false
+				s.editor.section = settingsGeneral
+				s.checkAppUpdates()
+			}
+			s.refreshTrayMenu()
+		},
+	})
+	items = append(items, &mygo.MenuItem{
 		ID:    "tray-settings",
 		Label: "设置…",
 		Click: func(*mygo.MenuItem, *mygo.Window) {

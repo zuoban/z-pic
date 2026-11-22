@@ -626,11 +626,13 @@ func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map
 	outputDir := s.batch.outputDir
 	backup := s.overwriteBackupFunc()
 	ctx, cancel := context.WithCancel(context.Background())
+	s.batch.done = 0
 	s.batch.total = len(tasks)
 	s.batch.running = true
 	s.batch.currentName = ""
 	s.busy, s.phase, s.cancel, s.canceling = true, fmt.Sprintf("正在压缩 0 / %d", len(tasks)), cancel, false
 	s.setMessage("", false)
+	s.syncWindowProgressIfChanged()
 
 	// Register shutdown wait on the main thread so App.Run exit cannot race with Add.
 	s.saves.Add(1)

@@ -46,16 +46,22 @@ func main() {
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		app.quitting = true
+		app.cancelUpdateCheck()
+		app.clearWindowProgress()
 		app.closeFolderWatch()
 		app.closeTray()
 	})
 	mygo.App.WhenReady(func() {
+		startup := mergeStartupPaths(os.Args[1:], pendingOpenFiles)
+		pendingOpenFiles = nil
+		startHidden := shouldStartMainWindowHidden(mygo.App.WasOpenedAtLogin(), app.keepInMenuBar, len(startup))
 		app.window = mygo.NewWindow(mygo.WindowOptions{
 			Title:           "Z Pic · 图片压缩",
 			Width:           980,
 			Height:          720,
 			MinWidth:        760,
 			MinHeight:       660,
+			Hidden:          startHidden,
 			TitleBarStyle:   mygo.TitleBarHiddenInset,
 			TitleBarHeight:  mainTitleBarHeight,
 			Vibrancy:        mygo.VibrancyGlass,
@@ -77,6 +83,8 @@ func main() {
 			app.closed = true
 			app.stopFolderWatch()
 			app.cancelComparisonDiff()
+			app.cancelUpdateCheck()
+			app.clearWindowProgress()
 			if app.cancel != nil {
 				app.cancel()
 			}
@@ -94,9 +102,10 @@ func main() {
 			app.dropFiles(e.Paths)
 		})
 		app.setupTray()
+		if startHidden && app.tray == nil {
+			app.window.Show()
+		}
 		app.startAutoFolderWatches()
-		startup := mergeStartupPaths(os.Args[1:], pendingOpenFiles)
-		pendingOpenFiles = nil
 		if len(startup) > 0 {
 			app.loadStartupPaths(startup)
 		}
@@ -130,4 +139,8 @@ func mergeStartupPaths(args, opened []string) []string {
 		}
 	}
 	return merged
+}
+
+func shouldStartMainWindowHidden(openedAtLogin, keepInMenuBar bool, startupPathCount int) bool {
+	return openedAtLogin && keepInMenuBar && startupPathCount == 0
 }

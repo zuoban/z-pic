@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/egoist/mygo/transfer"
@@ -172,4 +174,62 @@ func TestMainViewShowsWatchStatusBarForExtraRuleOnly(t *testing.T) {
 	if !tester.HasText("停止监听") {
 		t.Fatal("expected stop watch button to be visible when only an extra watch rule is running")
 	}
+}
+
+func TestTrayCheckUpdatesGuardsBusyAndConfirmDelete(t *testing.T) {
+	t.Run("busy main window skips background update check when settings cannot open", func(t *testing.T) {
+		app := newApplication()
+		app.busy = true
+		menu := app.buildTrayMenu()
+		item := menu.ItemByID("tray-check-updates")
+		if item == nil || item.Click == nil {
+			t.Fatal("expected tray-check-updates item with click handler")
+		}
+		item.Click(item, nil)
+		if app.settingsOpen || app.editor != nil {
+			t.Fatal("settings must remain closed while app is busy")
+		}
+		if app.updateState != updateIdle {
+			t.Fatalf("expected updateState to stay updateIdle when settings cannot open, got %v", app.updateState)
+		}
+	})
+
+	t.Run("switching from preset delete confirmation clears confirmDelete", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		app := testSelectedApplication()
+		app.updateChecker = updateCheckerConfig{
+			endpoint:       srv.URL,
+			currentVersion: "0.1.0",
+			client:         srv.Client(),
+		}
+		app.dispatchUpdate = func(fn func()) {}
+		app.setSettingsOpen(true)
+		app.editor.section = settingsPresets
+		app.editor.confirmDelete = true
+
+		menu := app.buildTrayMenu()
+		item := menu.ItemByID("tray-check-updates")
+		if item == nil || item.Click == nil {
+			t.Fatal("expected tray-check-updates item with click handler")
+		}
+		item.Click(item, nil)
+		defer app.cancelUpdateCheck()
+
+		if app.editor.section != settingsGeneral {
+			t.Fatalf("expected section=settingsGeneral, got %v", app.editor.section)
+		}
+		if app.editor.confirmDelete {
+			t.Fatal("confirmDelete must be cleared when switching to general section from tray")
+		}
+		if app.settingsDraftLocked() {
+			t.Fatal("general settings must not remain locked after tray check-updates")
+		}
+		if app.updateState != updateChecking {
+			t.Fatalf("expected updateState=updateChecking, got %v", app.updateState)
+		}
+	})
 }

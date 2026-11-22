@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -173,27 +175,34 @@ const (
 )
 
 type settingsEditor struct {
-	section       settingsSection
-	theme         themeMode
-	autoCompress  bool
-	backupToTrash bool
-	keepInMenuBar bool
-	downloadDir   string
-	watch         folderWatchSettings
-	watchRules    []folderWatchRule
-	watchMessage  string
-	cliStatus     cliInstallStatus
-	cliMessage    string
-	cliFailed     bool
-	presets       []compressionPreset
-	targets       []*presetTargetDraft
-	selected      int
-	active        int
-	message       string
-	notice        string
-	confirmDelete bool
-	focusField    string
-	selectName    bool
+	section              settingsSection
+	theme                themeMode
+	autoCompress         bool
+	backupToTrash        bool
+	keepInMenuBar        bool
+	openAtLogin          bool
+	openAtLoginInitial   bool
+	openAtLoginSupported bool
+	downloadDir          string
+	watch                folderWatchSettings
+	watchRules           []folderWatchRule
+	watchMessage         string
+	cliStatus            cliInstallStatus
+	cliMessage           string
+	cliFailed            bool
+	quickActionStatus    quickActionStatus
+	quickActionMessage   string
+	quickActionFailed    bool
+	quickActionBusy      bool
+	presets              []compressionPreset
+	targets              []*presetTargetDraft
+	selected             int
+	active               int
+	message              string
+	notice               string
+	confirmDelete        bool
+	focusField           string
+	selectName           bool
 }
 
 func defaultPresets() []compressionPreset {
@@ -328,6 +337,7 @@ func (s *application) settingsHaveChanges() bool {
 		e.autoCompress != s.autoCompress ||
 		e.backupToTrash != s.backupToTrash ||
 		e.keepInMenuBar != s.keepInMenuBar ||
+		(e.openAtLoginSupported && e.openAtLogin != e.openAtLoginInitial) ||
 		normalizeDownloadDir(e.downloadDir) != normalizeDownloadDir(s.downloadDir) ||
 		e.watch != s.watch.settings ||
 		!slices.Equal(e.watchRules, s.watch.extraRules) ||
@@ -416,20 +426,29 @@ func (s *application) setSettingsOpen(open bool) {
 			watchRules[i] = session.rule
 		}
 	}
+	openAtLoginSupported := s.effectiveOpenAtLoginSupported()
+	openAtLogin := false
+	if openAtLoginSupported {
+		openAtLogin = s.effectiveOpenAtLogin()
+	}
 	s.editor = &settingsEditor{
-		theme:         s.effectiveThemeMode(),
-		autoCompress:  s.autoCompress,
-		backupToTrash: s.backupToTrash,
-		keepInMenuBar: s.keepInMenuBar,
-		downloadDir:   s.downloadDir,
-		watch:         watch,
-		watchRules:    watchRules,
-		cliStatus:     inspectCLIInstall(s.effectiveCLIInstallEnv()),
-		presets:       slices.Clone(s.presets),
-		targets:       targets,
-		selected:      active,
-		active:        active,
-		message:       s.settingsError,
+		theme:                s.effectiveThemeMode(),
+		autoCompress:         s.autoCompress,
+		backupToTrash:        s.backupToTrash,
+		keepInMenuBar:        s.keepInMenuBar,
+		openAtLogin:          openAtLogin,
+		openAtLoginInitial:   openAtLogin,
+		openAtLoginSupported: openAtLoginSupported,
+		downloadDir:          s.downloadDir,
+		watch:                watch,
+		watchRules:           watchRules,
+		cliStatus:            inspectCLIInstall(s.effectiveCLIInstallEnv()),
+		quickActionStatus:    inspectQuickAction(s.effectiveQuickActionEnv()),
+		presets:              slices.Clone(s.presets),
+		targets:              targets,
+		selected:             active,
+		active:               active,
+		message:              s.settingsError,
 	}
 	if s.window == nil {
 		return
@@ -864,6 +883,14 @@ func (s *application) saveSettingsEdits() {
 	s.applyScheme(selected)
 	s.syncTheme(s.editor.theme)
 	s.refreshTrayMenu()
+	if s.editor.openAtLoginSupported && s.editor.openAtLogin != s.editor.openAtLoginInitial {
+		if err := s.applyOpenAtLogin(s.editor.openAtLogin); err != nil {
+			s.editor.message = "设置已保存，但更新开机启动失败：" + err.Error()
+			s.editor.notice = ""
+			return
+		}
+		s.editor.openAtLoginInitial = s.editor.openAtLogin
+	}
 	s.setSettingsOpen(false)
 }
 
@@ -943,6 +970,210 @@ func (s *application) runUninstallCLI() {
 	editor.cliStatus = inspectCLIInstall(env)
 	editor.cliMessage = "已卸载命令行工具链接"
 	editor.cliFailed = false
+}
+
+func (s *application) effectiveOpenAtLoginSupported() bool {
+	if s.openAtLoginSupported != nil {
+		return s.openAtLoginSupported()
+	}
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+}
+
+func (s *application) effectiveOpenAtLogin() bool {
+	if s.openAtLoginState != nil {
+		return s.openAtLoginState()
+	}
+	if !mygo.App.IsReady() {
+		return false
+	}
+	return mygo.App.OpenAtLogin()
+}
+
+func (s *application) applyOpenAtLogin(enabled bool) error {
+	if s.setOpenAtLogin != nil {
+		return s.setOpenAtLogin(enabled)
+	}
+	if !mygo.App.IsReady() {
+		return errors.New("当前运行环境暂不支持修改登录启动项")
+	}
+	return mygo.App.SetOpenAtLogin(enabled)
+}
+
+func (s *application) effectiveQuickActionEnv() quickActionEnv {
+	env := s.quickActionEnv
+	if env.executable == nil && env.servicesDir == nil && env.refreshServices == nil && env.goos == "" {
+		return defaultQuickActionEnv()
+	}
+	return env
+}
+
+func (s *application) runInstallQuickAction() {
+	if s.settingsDraftLocked() || s.editor.quickActionBusy {
+		return
+	}
+	editor := s.editor
+	env := s.effectiveQuickActionEnv()
+	editor.quickActionBusy = true
+	editor.quickActionFailed = false
+	editor.quickActionMessage = "正在安装访达快捷操作…"
+	if s.settingsWindow != nil {
+		s.settingsWindow.Invalidate()
+	}
+	go func() {
+		status, err := installQuickAction(env)
+		s.updateWithInvalidate(false, func() {
+			if s.editor != editor {
+				return
+			}
+			editor.quickActionBusy = false
+			editor.quickActionStatus = status
+			if err != nil {
+				editor.quickActionMessage = err.Error()
+				editor.quickActionFailed = true
+			} else {
+				editor.quickActionFailed = false
+				editor.quickActionMessage = "已安装访达右键快捷操作，选中图片或文件夹右键「快速操作」即可使用"
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *application) refreshQuickActionStatus() {
+	if s.settingsDraftLocked() || s.editor.quickActionBusy {
+		return
+	}
+	editor := s.editor
+	editor.quickActionStatus = inspectQuickAction(s.effectiveQuickActionEnv())
+	editor.quickActionMessage = ""
+	editor.quickActionFailed = false
+}
+
+func (s *application) runUninstallQuickAction() {
+	if s.settingsDraftLocked() || s.editor.quickActionBusy {
+		return
+	}
+	editor := s.editor
+	env := s.effectiveQuickActionEnv()
+	editor.quickActionBusy = true
+	editor.quickActionFailed = false
+	editor.quickActionMessage = "正在卸载访达快捷操作…"
+	if s.settingsWindow != nil {
+		s.settingsWindow.Invalidate()
+	}
+	go func() {
+		err := uninstallQuickAction(env)
+		status := inspectQuickAction(env)
+		s.updateWithInvalidate(false, func() {
+			if s.editor != editor {
+				return
+			}
+			editor.quickActionBusy = false
+			editor.quickActionStatus = status
+			if err != nil {
+				editor.quickActionMessage = err.Error()
+				editor.quickActionFailed = true
+			} else {
+				editor.quickActionFailed = false
+				editor.quickActionMessage = "已卸载访达右键快捷操作"
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *application) cancelUpdateCheck() {
+	s.updateGen++
+	if s.updateCancel != nil {
+		s.updateCancel()
+		s.updateCancel = nil
+	}
+	if s.updateState == updateChecking {
+		s.updateState = updateIdle
+		s.updateMessage = ""
+		s.updateMessageFailed = false
+	}
+}
+
+func (s *application) checkAppUpdates() {
+	if s.closed {
+		return
+	}
+	if s.updateCancel != nil {
+		s.updateCancel()
+		s.updateCancel = nil
+	}
+	s.updateGen++
+	gen := s.updateGen
+	ctx, cancel := context.WithCancel(context.Background())
+	s.updateCancel = cancel
+	s.updateState = updateChecking
+	s.updateMessage = "正在检查最新版本…"
+	s.updateMessageFailed = false
+	cfg := s.updateChecker
+	if s.settingsWindow != nil {
+		s.settingsWindow.Invalidate()
+	}
+	go func() {
+		defer cancel()
+		res, err := checkForUpdates(ctx, cfg)
+		s.updateWithInvalidate(false, func() {
+			if s.updateGen != gen {
+				return
+			}
+			s.updateCancel = nil
+			s.updateMessageFailed = false
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				s.updateState = updateFailed
+				s.updateMessage = err.Error()
+			} else if res.HasUpdate {
+				s.updateState = updateAvailable
+				s.updateResult = res
+				s.updateMessage = fmt.Sprintf("发现新版本 v%s（当前 v%s）", res.LatestVersion, res.CurrentVersion)
+			} else if res.NoReleaseYet {
+				s.updateState = updateUpToDate
+				s.updateResult = res
+				s.updateMessage = fmt.Sprintf("当前 v%s 已是最新（暂无已发布版本）", res.CurrentVersion)
+			} else {
+				s.updateState = updateUpToDate
+				s.updateResult = res
+				s.updateMessage = fmt.Sprintf("当前 v%s 已是最新版本", res.CurrentVersion)
+			}
+			if s.settingsWindow != nil {
+				s.settingsWindow.Invalidate()
+			}
+		})
+	}()
+}
+
+func (s *application) openReleaseDownloadPage() {
+	target := sanitizeReleaseURL(s.updateResult.ReleaseURL)
+	openFn := s.openExternalURL
+	if openFn == nil {
+		openFn = mygo.Shell.OpenExternal
+	}
+	if err := openFn(target); err != nil {
+		s.updateMessage = "无法打开下载页面：" + err.Error()
+		s.updateMessageFailed = true
+		if s.settingsWindow != nil {
+			s.settingsWindow.Invalidate()
+		}
+		return
+	}
+	if s.updateMessageFailed && s.updateState == updateAvailable && s.updateResult.LatestVersion != "" {
+		s.updateMessageFailed = false
+		s.updateMessage = fmt.Sprintf("发现新版本 v%s（当前 v%s）", s.updateResult.LatestVersion, s.updateResult.CurrentVersion)
+		if s.settingsWindow != nil {
+			s.settingsWindow.Invalidate()
+		}
+	}
 }
 
 func (s *application) exportPresetsToDialog() {

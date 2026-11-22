@@ -27,6 +27,7 @@ func printWatchCLIHelp(w io.Writer) {
 
 压缩选项（与 compress 相同）:
   -p, --preset <名称>          使用已保存的压缩预设
+      --active-preset         使用桌面端当前选中的预设
       --settings <路径>        指定设置 JSON 文件路径
   -q, --quality <1-100>        压缩质量
       --lossless              无损模式
