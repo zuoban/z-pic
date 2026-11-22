@@ -112,3 +112,42 @@ func TestSelectionReuseHonorsCancellation(t *testing.T) {
 		t.Fatalf("canceled selection returned %v", err)
 	}
 }
+
+func TestBatchPreviewUnchangedInPlacePopulatesDiffData(t *testing.T) {
+	pixels := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			pixels.SetRGBA(x, y, color.RGBA{R: uint8(x * 16), G: uint8(y * 16), B: 120, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, pixels, &jpeg.Options{Quality: 85}); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "unchanged.jpg")
+	if err := os.WriteFile(sourcePath, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newApplication()
+	app.batch = newBatchState([]batchItem{{
+		path: sourcePath, format: "jpeg", status: batchDone,
+		originalSize: int64(buf.Len()), outputSize: int64(buf.Len()),
+		width: 16, height: 16, unchanged: true,
+	}})
+	updates := make(chan func(), 4)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.openBatchPreview(0)
+	awaitBatchUpdate(t, updates)()
+
+	if app.result == nil || !bytes.Equal(app.result.Data, buf.Bytes()) {
+		t.Fatalf("unchanged in-place batch preview must populate result.Data for diff heatmap")
+	}
+	app.comparison.mode = previewDiff
+	app.ensureComparisonDiff()
+	awaitBatchUpdate(t, updates)()
+	if !app.comparison.diffReady || app.comparison.diffBitmap == nil || !app.comparison.diffMetrics.Identical {
+		t.Fatalf("expected identical diff heatmap for unchanged in-place batch preview: ready=%v bitmap=%v metrics=%+v err=%q",
+			app.comparison.diffReady, app.comparison.diffBitmap != nil, app.comparison.diffMetrics, app.comparison.diffError)
+	}
+}

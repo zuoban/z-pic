@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"image"
 	"image/color"
 	"image/draw"
+	"image/jpeg"
+	"image/png"
 	"math"
 	"testing"
 	"time"
@@ -109,6 +112,7 @@ func TestComparisonModesPreserveExportAndCamera(t *testing.T) {
 	}{
 		{"原图", previewOriginal, "原图预览"},
 		{"结果", previewResult, "压缩后预览"},
+		{"差异", previewDiff, "像素差异热力图"},
 		{"对比", previewCompare, ""},
 	} {
 		if err := tester.Click(mode.label); err != nil {
@@ -618,3 +622,186 @@ func TestSupportsAlphaFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestComparisonDiffHeatmapAndMetrics(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 64, 48))
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 64; x++ {
+			src.SetNRGBA(x, y, color.NRGBA{
+				R: uint8(x * 4),
+				G: uint8(y * 5),
+				B: uint8((x*7 + y*11) % 256),
+				A: 255,
+			})
+		}
+	}
+	var origBuf, compBuf bytes.Buffer
+	if err := png.Encode(&origBuf, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&compBuf, src, &jpeg.Options{Quality: 30}); err != nil {
+		t.Fatal(err)
+	}
+	origBitmap, err := ui.DecodeBitmap(origBuf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	compBitmap, err := ui.DecodeBitmap(compBuf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newApplication()
+	updates := make(chan func(), 4)
+	s.dispatchUpdate = func(fn func()) { updates <- fn }
+	s.file = &selectedImage{
+		path:    "/tmp/sample.png",
+		format:  "png",
+		width:   64,
+		height:  48,
+		size:    int64(origBuf.Len()),
+		data:    origBuf.Bytes(),
+		preview: origBitmap,
+	}
+	s.completeCompression(context.Background(), &compress.Result{
+		Format:       "jpeg",
+		Width:        64,
+		Height:       48,
+		OriginalSize: int64(origBuf.Len()),
+		OutputSize:   int64(compBuf.Len()),
+		Data:         compBuf.Bytes(),
+	}, compBitmap, nil)
+
+	tester := ui.NewTester(s.view, 760, 660)
+	// Confirm all 4 mode buttons fit cleanly in a single row even at minimum 760px width.
+	var firstY float32
+	for i, label := range []string{"对比", "原图", "结果", "差异"} {
+		info, ok := tester.Access(label)
+		if !ok || info.Offscreen {
+			t.Fatalf("preview mode %q must be visible at 760px: %+v", label, info)
+		}
+		if i == 0 {
+			firstY = info.Bounds.Y
+		} else if math.Abs(float64(info.Bounds.Y-firstY)) > 1 {
+			t.Fatalf("preview mode %q wrapped onto another line: %v vs %v", label, info.Bounds.Y, firstY)
+		}
+	}
+
+	if err := tester.Click("差异"); err != nil {
+		t.Fatal(err)
+	}
+	if s.comparison.mode != previewDiff {
+		t.Fatalf("expected previewDiff mode, got %d", s.comparison.mode)
+	}
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for async diff analysis")
+	}
+	tester.Frame()
+
+	if !s.comparison.diffReady || s.comparison.diffBitmap == nil {
+		t.Fatalf("expected diff heatmap ready, got ready=%v bitmap=%v err=%q",
+			s.comparison.diffReady, s.comparison.diffBitmap != nil, s.comparison.diffError)
+	}
+	if s.comparison.diffMetrics.Identical || s.comparison.diffMetrics.SSIM <= 0 || s.comparison.diffMetrics.PSNR <= 0 {
+		t.Fatalf("expected finite lossy quality metrics, got %+v", s.comparison.diffMetrics)
+	}
+	if !tester.HasText("差异热力图") {
+		t.Fatal("diff view must display heatmap badge")
+	}
+	if !tester.HasText(formatQualityMetricsSummary(s.comparison.diffMetrics)) {
+		t.Fatalf("diff view must display metrics summary %q", formatQualityMetricsSummary(s.comparison.diffMetrics))
+	}
+
+	// Resetting comparison clears cached diff state and bumps generation.
+	prevGen := s.comparison.diffGen
+	s.invalidateResult()
+	if s.comparison.diffReady || s.comparison.diffBitmap != nil || s.comparison.diffGen <= prevGen {
+		t.Fatalf("invalidateResult must reset diff cache and bump generation: %+v", s.comparison)
+	}
+}
+
+func TestComparisonDiffUnchangedOverwriteAndRetry(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 48, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 48; x++ {
+			src.SetNRGBA(x, y, color.NRGBA{R: uint8(x * 5), G: uint8(y * 7), B: 180, A: 255})
+		}
+	}
+	var origBuf bytes.Buffer
+	if err := png.Encode(&origBuf, src); err != nil {
+		t.Fatal(err)
+	}
+	origBitmap, err := ui.DecodeBitmap(origBuf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newApplication()
+	updates := make(chan func(), 4)
+	s.dispatchUpdate = func(fn func()) { updates <- fn }
+	s.file = &selectedImage{
+		path:    "/tmp/unchanged.png",
+		format:  "png",
+		width:   48,
+		height:  32,
+		size:    int64(origBuf.Len()),
+		data:    origBuf.Bytes(),
+		preview: origBitmap,
+	}
+	// Simulate an unchanged batch in-place item whose result.Data was not populated.
+	s.result = &compress.Result{
+		Format:       "png",
+		Width:        48,
+		Height:       32,
+		OriginalSize: int64(origBuf.Len()),
+		OutputSize:   int64(origBuf.Len()),
+		Unchanged:    true,
+	}
+	s.preview = origBitmap
+
+	tester := ui.NewTester(s.view, 760, 660)
+	if err := tester.Click("差异"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for unchanged diff heatmap")
+	}
+	tester.Frame()
+	if !s.comparison.diffReady || s.comparison.diffBitmap == nil || !s.comparison.diffMetrics.Identical {
+		t.Fatalf("unchanged item should still build zero-diff heatmap bitmap: ready=%v bitmap=%v metrics=%+v err=%q",
+			s.comparison.diffReady, s.comparison.diffBitmap != nil, s.comparison.diffMetrics, s.comparison.diffError)
+	}
+
+	// Simulate an error state and verify clicking the retry button recovers.
+	s.comparison.diffReady = false
+	s.comparison.diffBitmap = nil
+	s.comparison.diffError = "模拟计算失败"
+	tester.Frame()
+	if err := tester.Click("重试"); err != nil {
+		t.Fatalf("expected clickable retry button on diff error: %v", err)
+	}
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retried diff analysis")
+	}
+	if !s.comparison.diffReady || s.comparison.diffBitmap == nil || s.comparison.diffError != "" {
+		t.Fatalf("retry should recover diff state: ready=%v bitmap=%v err=%q",
+			s.comparison.diffReady, s.comparison.diffBitmap != nil, s.comparison.diffError)
+	}
+
+	// Overwriting the original must cancel/clear diff state and bump generation.
+	genBeforeOverwrite := s.comparison.diffGen
+	s.completeOverwriteWithBackup(s.result, false, nil)
+	if s.comparison.diffReady || s.comparison.diffBitmap != nil || s.comparison.diffLoading || s.comparison.diffGen <= genBeforeOverwrite {
+		t.Fatalf("completeOverwriteWithBackup must clear diff state and bump diffGen: %+v", s.comparison)
+	}
+}
+

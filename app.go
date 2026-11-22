@@ -324,7 +324,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 	s.prepareThumbnailCache()
 	s.file, s.preview, s.result = selected, selected.preview, nil
 	s.lastSavedPath = ""
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 	if s.autoCompress && !s.closed {
@@ -338,7 +338,7 @@ func (s *application) clearSingleImage() {
 	}
 	s.file, s.preview, s.result = nil, nil, nil
 	s.lastSavedPath = ""
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 }
@@ -451,7 +451,7 @@ func decodePreviewBitmap(ctx context.Context, data []byte, format string) (*ui.B
 func (s *application) invalidateResult() {
 	s.result = nil
 	s.lastSavedPath = ""
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	s.confirmOverwrite, s.confirmBatchOverwrite, s.overwritten = false, false, false
 	s.clearPendingBatchConfirmation()
 	if s.batch != nil {
@@ -484,7 +484,7 @@ func (s *application) startCompression() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.phase, s.cancel = true, "正在压缩图片", cancel
 	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 	go func() {
@@ -527,7 +527,7 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 		return
 	}
 	s.result, s.preview = result, preview
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
 }
@@ -683,6 +683,7 @@ func (s *application) completeOverwriteWithBackup(result *compress.Result, backe
 	}
 	s.overwritten = true
 	s.lastSavedPath = s.file.path
+	s.clearComparisonDiff()
 	s.comparison.mode = previewResult
 	if backedUp {
 		s.setMessage("已覆盖原图（原件已移入废纸篓）："+s.file.path, false)

@@ -104,7 +104,7 @@ func (s *application) completeBatchScan(ctx context.Context, scan batchScanResul
 	} else {
 		s.file, s.result, s.preview = nil, nil, nil
 		s.lastSavedPath = ""
-		s.comparison = comparisonView{split: 50}
+		s.resetComparison()
 		s.confirmOverwrite, s.overwritten = false, false
 		s.batch = newBatchState(scan.items)
 		s.configureBatchPresetOutput()

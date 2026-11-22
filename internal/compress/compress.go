@@ -151,6 +151,24 @@ func Bytes(ctx context.Context, data []byte, sourcePath string, options Options)
 	return compressData(ctx, data, sourcePath, absolutePath, options, nil)
 }
 
+// BytesWithoutSource compresses an in-memory image snapshot (such as stdin)
+// that has no backing source file path. The resulting Result can be saved to
+// any new path via Save without colliding with a synthetic source path, and
+// cannot overwrite in place.
+func BytesWithoutSource(ctx context.Context, data []byte, options Options) (*Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("压缩已取消：%w", err)
+	}
+	if options.Quality < 1 || options.Quality > 100 {
+		return nil, fmt.Errorf("压缩质量必须在 1 到 100 之间")
+	}
+	if err := validateOptions(options); err != nil {
+		return nil, err
+	}
+	options.SkipOverwriteSnapshot = true
+	return compressData(ctx, data, "", "", options, nil)
+}
+
 func validateRequest(ctx context.Context, path string, options Options) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("压缩已取消：%w", err)

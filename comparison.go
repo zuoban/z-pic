@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"math"
 
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+
+	"zpic/internal/compress"
 )
 
 const (
 	previewCompare = iota
 	previewOriginal
 	previewResult
+	previewDiff
 )
 
 const comparisonDividerHitHalfWidth = 20
@@ -30,6 +35,148 @@ type comparisonView struct {
 	pendingDoubleClick bool
 	doubleClickOrigin  ui.Point
 	panPointer         ui.Point
+
+	diffBitmap  *ui.Bitmap
+	diffMetrics compress.QualityMetrics
+	diffReady   bool
+	diffLoading bool
+	diffError   string
+	diffGen     uint64
+	diffCancel  context.CancelFunc
+}
+
+func (s *application) cancelComparisonDiff() {
+	if s.comparison.diffCancel != nil {
+		s.comparison.diffCancel()
+		s.comparison.diffCancel = nil
+	}
+	s.comparison.diffLoading = false
+}
+
+func (s *application) clearComparisonDiff() {
+	s.cancelComparisonDiff()
+	s.comparison.diffGen++
+	s.comparison.diffBitmap = nil
+	s.comparison.diffMetrics = compress.QualityMetrics{}
+	s.comparison.diffReady = false
+	s.comparison.diffError = ""
+}
+
+func (s *application) retryComparisonDiff() {
+	if s.comparison.diffLoading {
+		return
+	}
+	s.clearComparisonDiff()
+	s.ensureComparisonDiff()
+}
+
+func (s *application) resetComparison() {
+	s.cancelComparisonDiff()
+	nextGen := s.comparison.diffGen + 1
+	s.comparison = comparisonView{split: 50, diffGen: nextGen}
+}
+
+func (s *application) ensureComparisonDiff() {
+	if s.file == nil || s.result == nil || s.overwritten ||
+		s.comparison.diffReady || s.comparison.diffLoading || s.comparison.diffError != "" {
+		return
+	}
+	origData := s.file.data
+	compData := s.result.Data
+	if len(compData) == 0 && s.result.Unchanged {
+		compData = origData
+	}
+	if len(origData) == 0 || len(compData) == 0 {
+		if s.result.Unchanged {
+			s.comparison.diffMetrics = compress.QualityMetrics{
+				PSNR:      math.Inf(1),
+				SSIM:      1,
+				Identical: true,
+			}
+			s.comparison.diffReady = true
+		}
+		return
+	}
+	s.comparison.diffGen++
+	gen := s.comparison.diffGen
+	ctx, cancel := context.WithCancel(context.Background())
+	s.comparison.diffCancel = cancel
+	s.comparison.diffLoading = true
+	info := compress.ImageInfo{
+		Path:   s.file.path,
+		Format: s.file.format,
+		Width:  s.file.width,
+		Height: s.file.height,
+		Size:   s.file.size,
+	}
+	go func() {
+		defer cancel()
+		release, memErr := s.acquirePreviewMemory(ctx, info)
+		var (
+			metrics compress.QualityMetrics
+			bitmap  *ui.Bitmap
+			err     error
+		)
+		if memErr != nil {
+			err = memErr
+		} else {
+			m, heatmap, analyzeErr := compress.AnalyzeVisualDiffBytes(ctx, origData, compData)
+			metrics, err = m, analyzeErr
+			if err == nil && heatmap != nil && ctx.Err() == nil {
+				bitmap = ui.NewBitmap(heatmap)
+			}
+			release()
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		s.updateWithInvalidate(false, func() {
+			if s.comparison.diffGen != gen {
+				return
+			}
+			s.comparison.diffLoading = false
+			s.comparison.diffCancel = nil
+			if err != nil {
+				if ctx.Err() == nil {
+					s.comparison.diffError = err.Error()
+				}
+				return
+			}
+			s.comparison.diffMetrics = metrics
+			s.comparison.diffBitmap = bitmap
+			s.comparison.diffReady = true
+		})
+	}()
+}
+
+func formatQualityMetricsSummary(m compress.QualityMetrics) string {
+	if m.Identical {
+		return "无损一致 · SSIM 1.000 · PSNR ∞"
+	}
+	psnr := "∞"
+	if !math.IsInf(m.PSNR, 0) && !math.IsNaN(m.PSNR) {
+		psnr = fmt.Sprintf("%.1f dB", m.PSNR)
+	}
+	if m.Resized {
+		return fmt.Sprintf("已缩放 · SSIM %.3f · PSNR %s", m.SSIM, psnr)
+	}
+	return fmt.Sprintf("SSIM %.3f · PSNR %s · 变化 %.1f%%", m.SSIM, psnr, m.ChangedPercent)
+}
+
+func formatQualityMetricsTooltip(m compress.QualityMetrics) string {
+	if m.Identical {
+		return "所有像素与原图完全一致（SSIM 1.000，PSNR ∞）"
+	}
+	psnr := "∞"
+	if !math.IsInf(m.PSNR, 0) && !math.IsNaN(m.PSNR) {
+		psnr = fmt.Sprintf("%.2f dB", m.PSNR)
+	}
+	prefix := ""
+	if m.Resized {
+		prefix = "已按输出尺寸对齐原图 · "
+	}
+	return fmt.Sprintf("%sSSIM %.4f · PSNR %s · 变化像素 %.1f%% · 最大通道差 ±%d",
+		prefix, m.SSIM, psnr, m.ChangedPercent, m.MaxChannelDiff)
 }
 
 func (s *application) previewLocked() bool {
@@ -152,8 +299,11 @@ func (s *application) previewModeControl(c *ui.Context) {
 	if s.result == nil || s.overwritten {
 		return
 	}
-	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 30, s.previewLocked(), "对比", "原图", "结果").
-		FillEqually().Width(156)
+	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 30, s.previewLocked(), "对比", "原图", "结果", "差异").
+		FillEqually().Width(196)
+	if s.comparison.mode == previewDiff {
+		s.ensureComparisonDiff()
+	}
 }
 
 func (s *application) previewZoomToolbar(c *ui.Context) {
@@ -319,8 +469,14 @@ func (s *application) previewCanvas(c *ui.Context) {
 		}
 		canvas.Cursor(cursor)
 	} else {
+		diffMode := s.result != nil && !s.overwritten && s.comparison.mode == previewDiff
+		if diffMode {
+			s.ensureComparisonDiff()
+		}
 		label := "原图预览"
-		if s.result != nil && (s.overwritten || s.comparison.mode != previewOriginal) {
+		if diffMode {
+			label = "像素差异热力图"
+		} else if s.result != nil && (s.overwritten || s.comparison.mode != previewOriginal) {
 			label = "压缩后预览"
 		}
 		singleCursor := ui.CursorDefault
@@ -449,9 +605,13 @@ func (s *application) previewCanvas(c *ui.Context) {
 			resultFormat = s.result.Format
 		}
 		if !comparing {
+			diffMode := s.result != nil && !s.overwritten && s.comparison.mode == previewDiff
 			bitmap := s.preview
 			displayFormat := resultFormat
-			if s.result == nil || s.overwritten || s.comparison.mode == previewOriginal {
+			if diffMode && s.comparison.diffBitmap != nil {
+				bitmap = s.comparison.diffBitmap
+				displayFormat = ""
+			} else if s.result == nil || s.overwritten || s.comparison.mode == previewOriginal {
 				displayFormat = sourceFormat
 			}
 			if s.result != nil && !s.overwritten && s.comparison.mode == previewOriginal {
@@ -511,6 +671,54 @@ func (s *application) previewCanvas(c *ui.Context) {
 			return el
 		}
 		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).Children(func() {
+			if s.comparison.mode == previewDiff {
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).Children(func() {
+					ui.Row(c).AlignItems(ui.Center).Gap(2).Children(func() {
+						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#2084ec"))
+						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#22d3ee"))
+						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#facc15"))
+						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#f43f5e"))
+					})
+					ui.Text(c, "差异热力图").FontSize(11).FontWeight(500).TextColor(t.Text).SingleLine()
+				})
+				ui.Box(c).Grow(1)
+				switch {
+				case s.comparison.diffLoading:
+					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+						ui.Text(c, "正在计算画质差异…").FontSize(11).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+					})
+				case s.comparison.diffError != "":
+					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).Tooltip(s.comparison.diffError).Children(func() {
+						ui.Box(c).Size(6, 6).Radius(3).Background(t.Danger)
+						ui.Text(c, "差异计算失败").FontSize(11).FontWeight(500).TextColor(t.Danger).SingleLine()
+						retryBtn := ui.Button(c.Key("diff-retry"), "重试").
+							Padding(1, 6).Radius(badgeRadius(16)).
+							FontSize(11).FontWeight(600).TextColor(t.Danger).
+							Background(ui.Transparent).Border(1, t.Danger.Alpha(0.35)).
+							Tooltip(s.comparison.diffError).
+							OnClick(s.retryComparisonDiff)
+						if retryBtn.Hovered() {
+							retryBtn.Background(t.Danger.Alpha(0.12))
+						}
+					})
+				case s.comparison.diffReady:
+					dotColor := t.Success
+					if !s.comparison.diffMetrics.Identical {
+						if s.comparison.diffMetrics.SSIM < 0.90 {
+							dotColor = t.Warning
+						} else if s.comparison.diffMetrics.SSIM < 0.97 {
+							dotColor = accentForeground(t)
+						}
+					}
+					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).
+						Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics)).Children(func() {
+						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
+						ui.Text(c, formatQualityMetricsSummary(s.comparison.diffMetrics)).
+							FontSize(11).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).SingleLine()
+					})
+				}
+				return
+			}
 			if comparing || s.comparison.mode == previewOriginal {
 				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
 					ui.Box(c).Size(6, 6).Radius(3).Background(metadataColor(c).Alpha(0.82))
@@ -527,7 +735,11 @@ func (s *application) previewCanvas(c *ui.Context) {
 				case s.result.OutputSize > s.result.OriginalSize:
 					dotColor = t.Warning
 				}
-				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+				badge := styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5))
+				if s.comparison.diffReady {
+					badge.Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics))
+				}
+				badge.Children(func() {
 					ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
 					ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).
 						FontFeatures("tnum").TextColor(t.Text).SingleLine()

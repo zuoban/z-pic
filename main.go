@@ -76,6 +76,7 @@ func main() {
 		app.window.OnClosed(func() {
 			app.closed = true
 			app.stopFolderWatch()
+			app.cancelComparisonDiff()
 			if app.cancel != nil {
 				app.cancel()
 			}

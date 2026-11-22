@@ -8,15 +8,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
 
 	"zpic/internal/compress"
+	"zpic/internal/contextio"
+	"zpic/internal/imageinput"
 )
 
 //go:embed mygo.json
@@ -54,6 +58,10 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 }
 
 func runCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runCLIWithIO(ctx, args, os.Stdin, stdout, stderr)
+}
+
+func runCLIWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printRootCLIHelp(stdout)
 		return 0
@@ -64,9 +72,9 @@ func runCLIContext(ctx context.Context, args []string, stdout, stderr io.Writer)
 	case "version", "-v", "--version":
 		return runCLIVersion(args[1:], stdout, stderr)
 	case "presets":
-		return runCLIPresets(args[1:], stdout, stderr)
+		return runCLIPresets(ctx, args[1:], stdin, stdout, stderr)
 	case "compress":
-		return runCLICompress(ctx, args[1:], stdout, stderr)
+		return runCLICompress(ctx, args[1:], stdin, stdout, stderr)
 	case "watch":
 		return runCLIWatch(ctx, args[1:], stdout, stderr)
 	default:
@@ -97,7 +105,8 @@ func printRootCLIHelp(w io.Writer) {
   z-pic compress -o ./dist --format webp --max-dim 1920 ./photos
   z-pic compress --max-size 300KB hero.jpg
   z-pic compress --preset 均衡 --in-place ./images
-  z-pic compress --dry-run --json ./photos
+  z-pic compress --dry-run --metrics --json ./photos
+  cat hero.png | z-pic compress --format webp - > hero.webp
   z-pic watch --output-dir ./dist --max-size '500 KiB' ./inbox
 
 运行 "z-pic help <命令>" 查看具体选项。
@@ -168,7 +177,7 @@ func printPresetsCLIHelp(w io.Writer) {
 	fmt.Fprintln(w, `用法:
   z-pic presets [选项]                                列出当前配置文件中的压缩预设
   z-pic presets export [选项] [预设名称 ...]          导出预设为 JSON（默认输出到标准输出）
-  z-pic presets import [选项] <预设 JSON 文件>        从预设 JSON 或 settings.json 导入预设
+  z-pic presets import [选项] <预设 JSON 文件 | ->    从预设 JSON 文件或标准输入导入预设
 
 通用选项:
   --settings <path>   指定设置 JSON 文件路径（默认使用应用设置目录）
@@ -266,13 +275,13 @@ func cliFormatName(format compress.OutputFormat) string {
 	}
 }
 
-func runCLIPresets(args []string, stdout, stderr io.Writer) int {
+func runCLIPresets(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case "export":
 			return runCLIPresetsExport(args[1:], stdout, stderr)
 		case "import":
-			return runCLIPresetsImport(args[1:], stdout, stderr)
+			return runCLIPresetsImport(ctx, args[1:], stdin, stdout, stderr)
 		}
 	}
 	fs := flag.NewFlagSet("presets", flag.ContinueOnError)
@@ -436,7 +445,7 @@ type cliPresetImportReport struct {
 	Total        int    `json:"total"`
 }
 
-func runCLIPresetsImport(args []string, stdout, stderr io.Writer) int {
+func runCLIPresetsImport(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("presets import", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	settingsPath := fs.String("settings", "", "settings file path")
@@ -451,10 +460,31 @@ func runCLIPresetsImport(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() != 1 || fs.Arg(0) == "" {
-		fmt.Fprintln(stderr, "请提供一个要导入的预设 JSON 文件路径。\n运行 \"z-pic help presets\" 查看用法。")
+		fmt.Fprintln(stderr, "请提供一个要导入的预设 JSON 文件路径（或使用 - 从标准输入读取）。\n运行 \"z-pic help presets\" 查看用法。")
 		return 2
 	}
-	imported, err := readPresetBundleFile(fs.Arg(0))
+	var (
+		imported []compressionPreset
+		err      error
+	)
+	if fs.Arg(0) == "-" {
+		if stdin == nil {
+			fmt.Fprintln(stderr, "读取预设失败：无法读取标准输入")
+			return 1
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(contextio.NewReader(ctx, stdin), maxSettingsBytes+1))
+		if readErr != nil {
+			fmt.Fprintf(stderr, "读取标准输入失败：%v\n", readErr)
+			return 1
+		}
+		if len(raw) == 0 {
+			fmt.Fprintln(stderr, "读取预设失败：标准输入为空")
+			return 1
+		}
+		imported, err = unmarshalPresetBundle(raw)
+	} else {
+		imported, err = readPresetBundleFile(fs.Arg(0))
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "读取预设文件失败：%v\n", err)
 		return 1
@@ -509,40 +539,71 @@ func printCompressCLIHelp(w io.Writer) {
       --max-size <size>    尝试将每张图片压到目标体积以内，如 300KB 或 1MiB（0 表示关闭）
       --target-resize-min <px>  超标时自动缩小，指定长边下限（0 表示关闭，范围 %d–%d；无损模式下停用）
       --metadata <policy>  元数据策略：keep-all | keep-icc | strip
-  -o, --output <path>      输出文件路径（单图）或输出目录（批量/多图）
+  -o, --output <path>      输出文件路径（单图）、输出目录（批量/多图）或 -（单图写入标准输出）
       --in-place           仅在体积减小时覆盖同格式原图（格式转换时在原目录另存副本）
       --trash              覆盖前将原图移入系统废纸篓（仅与 --in-place 一起使用）
       --suffix <text>      副本文件名后缀（默认 -zpic）
       --no-recursive       只扫描指定目录的顶层
       --dry-run            仅在内存中试算压缩结果，不写入磁盘
+      --metrics            计算并输出客观画质指标（SSIM / PSNR / 像素变化占比）
   -j, --jobs <N>           并发任务数（0 表示自动）
       --json               以 JSON 格式输出完整报告
       --quiet              静默模式（仅输出错误）
+
+管道用法:
+  输入路径填 - 表示从标准输入读取单张图片；未指定 -o/--dry-run/--json 时默认将压缩结果写入标准输出。
+  例: cat hero.png | z-pic compress --format webp -q 80 - > hero.webp
 `, formats, lossyQualityFormats(), cliOutputFormats, compress.MinResizeDimension, compress.MaxResizeDimension,
 		compress.MinResizeDimension, compress.MaxResizeDimension)
 }
 
+type cliQualityMetrics struct {
+	PSNRDB         *float64 `json:"psnr_db,omitempty"`
+	SSIM           float64  `json:"ssim"`
+	ChangedPercent float64  `json:"changed_percent"`
+	MaxChannelDiff uint8    `json:"max_channel_diff"`
+	Identical      bool     `json:"identical"`
+	Resized        bool     `json:"resized,omitempty"`
+}
+
+func makeCLIQualityMetrics(m compress.QualityMetrics) *cliQualityMetrics {
+	out := &cliQualityMetrics{
+		SSIM:           math.Round(m.SSIM*10000) / 10000,
+		ChangedPercent: math.Round(m.ChangedPercent*100) / 100,
+		MaxChannelDiff: m.MaxChannelDiff,
+		Identical:      m.Identical,
+		Resized:        m.Resized,
+	}
+	if !m.Identical && !math.IsInf(m.PSNR, 0) && !math.IsNaN(m.PSNR) {
+		v := math.Round(m.PSNR*100) / 100
+		out.PSNRDB = &v
+	}
+	return out
+}
+
 type cliFileReport struct {
-	Input            string  `json:"input"`
-	Output           string  `json:"output,omitempty"`
-	Status           string  `json:"status"`
-	SourceFormat     string  `json:"source_format,omitempty"`
-	OutputFormat     string  `json:"output_format,omitempty"`
-	Width            int     `json:"width,omitempty"`
-	Height           int     `json:"height,omitempty"`
-	OriginalBytes    int64   `json:"original_bytes"`
-	OutputBytes      int64   `json:"output_bytes"`
-	SavedBytes       int64   `json:"saved_bytes"`
-	SavedPercent     float64 `json:"saved_percent"`
-	AppliedQuality   int     `json:"applied_quality,omitempty"`
-	TargetSizeMissed bool    `json:"target_size_missed,omitempty"`
-	TargetResized    bool    `json:"target_resized,omitempty"`
-	OriginalWidth    int     `json:"original_width,omitempty"`
-	OriginalHeight   int     `json:"original_height,omitempty"`
-	Unchanged        bool    `json:"unchanged,omitempty"`
-	Overwritten      bool    `json:"overwritten,omitempty"`
-	BackedUp         bool    `json:"backed_up,omitempty"`
-	Error            string  `json:"error,omitempty"`
+	Input            string             `json:"input"`
+	Output           string             `json:"output,omitempty"`
+	Status           string             `json:"status"`
+	SourceFormat     string             `json:"source_format,omitempty"`
+	OutputFormat     string             `json:"output_format,omitempty"`
+	Width            int                `json:"width,omitempty"`
+	Height           int                `json:"height,omitempty"`
+	OriginalBytes    int64              `json:"original_bytes"`
+	OutputBytes      int64              `json:"output_bytes"`
+	SavedBytes       int64              `json:"saved_bytes"`
+	SavedPercent     float64            `json:"saved_percent"`
+	AppliedQuality   int                `json:"applied_quality,omitempty"`
+	TargetSizeMissed bool               `json:"target_size_missed,omitempty"`
+	TargetResized    bool               `json:"target_resized,omitempty"`
+	OriginalWidth    int                `json:"original_width,omitempty"`
+	OriginalHeight   int                `json:"original_height,omitempty"`
+	Unchanged        bool               `json:"unchanged,omitempty"`
+	Overwritten      bool               `json:"overwritten,omitempty"`
+	BackedUp         bool               `json:"backed_up,omitempty"`
+	Metrics          *cliQualityMetrics `json:"metrics,omitempty"`
+	MetricsError     string             `json:"metrics_error,omitempty"`
+	Error            string             `json:"error,omitempty"`
 }
 
 type cliCompressReport struct {
@@ -752,7 +813,7 @@ func (f cliCompressionFlags) options(cfg appSettings, setFlags map[string]bool) 
 	return opts, basePreset, nil
 }
 
-func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("compress", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -765,17 +826,19 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		suffix      string
 		noRecursive bool
 		dryRun      bool
+		metricsOut  bool
 		jobs        int
 		jsonOut     bool
 		quiet       bool
 	)
-	fs.StringVar(&outputPath, "output", "", "output file or directory")
-	fs.StringVar(&outputPath, "o", "", "output file or directory")
+	fs.StringVar(&outputPath, "output", "", "output file, directory, or - for stdout")
+	fs.StringVar(&outputPath, "o", "", "output file, directory, or - for stdout")
 	fs.BoolVar(&inPlace, "in-place", false, "overwrite source files in place when smaller")
 	fs.BoolVar(&useTrash, "trash", false, "move source files to the Trash before overwriting")
 	fs.StringVar(&suffix, "suffix", "", "copy filename suffix")
 	fs.BoolVar(&noRecursive, "no-recursive", false, "scan only the top level of input directories")
 	fs.BoolVar(&dryRun, "dry-run", false, "estimate compression without writing files")
+	fs.BoolVar(&metricsOut, "metrics", false, "compute PSNR/SSIM quality metrics")
 	fs.IntVar(&jobs, "jobs", 0, "worker concurrency")
 	fs.IntVar(&jobs, "j", 0, "worker concurrency")
 	fs.BoolVar(&jsonOut, "json", false, "JSON report")
@@ -796,7 +859,41 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	inputs := fs.Args()
 	if len(inputs) == 0 {
-		fmt.Fprintln(stderr, "请提供至少一个图片文件或文件夹。\n运行 \"z-pic help compress\" 查看用法。")
+		fmt.Fprintln(stderr, "请提供至少一个图片文件或文件夹（或使用 - 从标准输入读取）。\n运行 \"z-pic help compress\" 查看用法。")
+		return 2
+	}
+
+	stdinInput := slices.Contains(inputs, "-")
+	stdoutOutput := outputPath == "-"
+	if stdinInput && !setFlags["output"] && !setFlags["o"] && !dryRun && !jsonOut {
+		stdoutOutput = true
+	}
+	if stdinInput && len(inputs) > 1 {
+		fmt.Fprintln(stderr, "参数冲突：标准输入（-）一次只能处理单张图片，不能与其他路径混用。")
+		return 2
+	}
+	if stdinInput && (inPlace || useTrash) {
+		fmt.Fprintln(stderr, "参数冲突：标准输入（-）不支持 --in-place 或 --trash。")
+		return 2
+	}
+	if stdinInput && setFlags["suffix"] {
+		fmt.Fprintln(stderr, "参数冲突：标准输入（-）不支持 --suffix，请使用 -o 指定输出文件或标准输出（-）。")
+		return 2
+	}
+	if stdoutOutput && (inPlace || dryRun || jsonOut) {
+		fmt.Fprintln(stderr, "参数冲突：输出到标准输出（-o -）不能与 --in-place、--dry-run 或 --json 同时使用。")
+		return 2
+	}
+	if stdoutOutput && len(inputs) > 1 {
+		fmt.Fprintln(stderr, "参数冲突：输出到标准输出（-o -）仅支持单张图片输入。")
+		return 2
+	}
+	if stdinInput && !stdoutOutput && !dryRun && outputPath == "" {
+		if setFlags["output"] || setFlags["o"] {
+			fmt.Fprintln(stderr, "参数错误：--output / -o 不能为空，请指定输出文件路径或使用 - 输出到标准输出。")
+		} else {
+			fmt.Fprintln(stderr, "参数错误：从标准输入读取图片并输出 --json 时，请搭配 --dry-run 或 -o <输出文件路径>。")
+		}
 		return 2
 	}
 
@@ -831,6 +928,10 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 2
 	}
 
+	if stdinInput {
+		return runCLICompressStdin(ctx, opts, compressionFlags.presetName, outputPath, stdoutOutput, dryRun, metricsOut, jsonOut, quiet, stdin, stdout, stderr)
+	}
+
 	scan, err := scanBatchPathsWithOptions(ctx, inputs, nil, nil, 0, !noRecursive)
 	if err != nil {
 		fmt.Fprintf(stderr, "扫描输入失败：%v\n", err)
@@ -839,6 +940,36 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	if len(scan.items) == 0 {
 		fmt.Fprintln(stderr, noSupportedImagesMessage())
 		return 2
+	}
+	if stdoutOutput {
+		if len(scan.items) != 1 || scan.items[0].sourceDir != "" {
+			fmt.Fprintln(stderr, "参数冲突：输出到标准输出（-o -）仅支持单个图片文件输入。")
+			return 2
+		}
+		item := scan.items[0]
+		if item.invalidInput {
+			fmt.Fprintf(stderr, "FAIL  %s  %s\n", item.path, item.errMsg)
+			return 1
+		}
+		opts.SkipOverwriteSnapshot = true
+		res, err := compress.File(ctx, item.path, opts)
+		if err != nil {
+			fmt.Fprintf(stderr, "FAIL  %s  %v\n", item.path, err)
+			return 1
+		}
+		if _, err := stdout.Write(res.Data); err != nil {
+			fmt.Fprintf(stderr, "写入标准输出失败：%v\n", err)
+			return 1
+		}
+		if metricsOut && !quiet {
+			origBytes, readErr := imageinput.Read(ctx, item.path)
+			if readErr != nil {
+				fmt.Fprintf(stderr, "WARN  %s  无法计算画质指标：%v\n", item.path, readErr)
+			} else {
+				printCLIPipeMetrics(ctx, stderr, origBytes, res)
+			}
+		}
+		return 0
 	}
 
 	// Determine output strategy.
@@ -958,6 +1089,8 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	budget := newImageMemoryBudget(imageMemoryLimit)
+	metricsByIndex := make([]*cliQualityMetrics, len(scan.items))
+	metricsErrByIndex := make([]string, len(scan.items))
 	process := func(ctx context.Context, task batchTask) batchCompressionOutcome {
 		if err, failed := planErrors[task.index]; failed {
 			return batchCompressionOutcome{err: err}
@@ -972,6 +1105,21 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			},
 			func() { started = true },
 		)
+		if err == nil && result != nil && metricsOut {
+			if result.Unchanged {
+				metricsByIndex[task.index] = makeCLIQualityMetrics(compress.QualityMetrics{
+					PSNR:      math.Inf(1),
+					SSIM:      1,
+					Identical: true,
+				})
+			} else if origBytes, readErr := imageinput.Read(ctx, task.path); readErr != nil {
+				metricsErrByIndex[task.index] = readErr.Error()
+			} else if m, mErr := compress.MeasureQualityMetricsBytes(ctx, origBytes, result.Data); mErr != nil {
+				metricsErrByIndex[task.index] = mErr.Error()
+			} else {
+				metricsByIndex[task.index] = makeCLIQualityMetrics(m)
+			}
+		}
 		return batchCompressionOutcome{result: result, err: err, started: started, release: release}
 	}
 
@@ -1068,6 +1216,18 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 			}
 			entry.TargetSizeMissed = res.TargetSizeMissed
 		}
+		if metricsOut {
+			if entry.Unchanged {
+				entry.Metrics = makeCLIQualityMetrics(compress.QualityMetrics{
+					PSNR:      math.Inf(1),
+					SSIM:      1,
+					Identical: true,
+				})
+			} else {
+				entry.Metrics = metricsByIndex[task.index]
+				entry.MetricsError = metricsErrByIndex[task.index]
+			}
+		}
 		files[task.index] = entry
 	}
 
@@ -1121,6 +1281,9 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 				continue
 			}
 			printCLIFileResult(stdout, f)
+			if f.MetricsError != "" {
+				fmt.Fprintf(stderr, "WARN  %s  无法计算画质指标：%s\n", f.Input, f.MetricsError)
+			}
 		}
 		if !quiet {
 			prefix := "完成"
@@ -1147,6 +1310,188 @@ func runCLICompress(ctx context.Context, args []string, stdout, stderr io.Writer
 	return 0
 }
 
+func runCLICompressStdin(
+	ctx context.Context,
+	opts compress.Options,
+	presetName string,
+	outputPath string,
+	stdoutOutput bool,
+	dryRun bool,
+	metricsOut bool,
+	jsonOut bool,
+	quiet bool,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) int {
+	fail := func(msg string, entry cliFileReport) int {
+		entry.Input = "-"
+		entry.Status = "failed"
+		entry.Error = msg
+		if jsonOut {
+			report := cliCompressReport{
+				DryRun:          dryRun,
+				Preset:          presetName,
+				Total:           1,
+				Failed:          1,
+				TargetSizeBytes: opts.TargetSizeBytes,
+				Files:           []cliFileReport{entry},
+			}
+			if code := writeCLIJSON(stdout, stderr, report); code != 0 {
+				return code
+			}
+			return 1
+		}
+		fmt.Fprintf(stderr, "FAIL  -  %s\n", msg)
+		return 1
+	}
+
+	if stdin == nil {
+		return fail("读取标准输入失败：输入流不可用", cliFileReport{})
+	}
+	raw, err := io.ReadAll(io.LimitReader(contextio.NewReader(ctx, stdin), int64(imageinput.MaxSize)+1))
+	if err != nil {
+		return fail(fmt.Sprintf("读取标准输入失败：%v", err), cliFileReport{})
+	}
+	if len(raw) == 0 {
+		return fail("读取标准输入失败：输入为空", cliFileReport{})
+	}
+	if len(raw) > imageinput.MaxSize {
+		return fail("输入图片超过 64 MiB 限制", cliFileReport{OriginalBytes: int64(len(raw))})
+	}
+	info, err := compress.InspectBytes(ctx, raw)
+	if err != nil {
+		return fail(fmt.Sprintf("无法识别标准输入图片：%v", err), cliFileReport{OriginalBytes: int64(len(raw))})
+	}
+
+	if !dryRun && !stdoutOutput && outputPath != "" {
+		if stat, statErr := os.Stat(outputPath); statErr == nil && stat.IsDir() {
+			fmt.Fprintf(stderr, "参数错误：从标准输入读取图片时，-o 需指定具体输出文件路径而非目录：%s\n", outputPath)
+			return 2
+		}
+		effectiveFmt := compress.ResolveOutputFormat(info.Format, opts.OutputFormat, opts.Lossless)
+		if !expectedExtMatchesFormat(filepath.Ext(outputPath), effectiveFmt) {
+			fmt.Fprintf(stderr, "参数错误：输出文件扩展名 %q 与目标格式 %s 不匹配。\n", filepath.Ext(outputPath), strings.ToUpper(effectiveFmt))
+			return 2
+		}
+	}
+
+	res, err := compress.BytesWithoutSource(ctx, raw, opts)
+	if err != nil {
+		return fail(err.Error(), cliFileReport{
+			SourceFormat:  info.Format,
+			OriginalBytes: int64(len(raw)),
+		})
+	}
+
+	if stdoutOutput {
+		if _, err := stdout.Write(res.Data); err != nil {
+			fmt.Fprintf(stderr, "写入标准输出失败：%v\n", err)
+			return 1
+		}
+		if metricsOut && !quiet {
+			printCLIPipeMetrics(ctx, stderr, raw, res)
+		}
+		return 0
+	}
+
+	entry := cliFileReport{
+		Input:         "-",
+		SourceFormat:  info.Format,
+		OutputFormat:  res.Format,
+		Width:         res.Width,
+		Height:        res.Height,
+		OriginalBytes: res.OriginalSize,
+		OutputBytes:   res.OutputSize,
+		SavedBytes:    res.OriginalSize - res.OutputSize,
+		Unchanged:     res.Unchanged,
+	}
+	if entry.OriginalBytes > 0 {
+		entry.SavedPercent = float64(entry.SavedBytes) / float64(entry.OriginalBytes) * 100
+	}
+	if !dryRun && outputPath != "" {
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			return fail(err.Error(), entry)
+		}
+		if err := res.Save(outputPath); err != nil {
+			return fail(err.Error(), entry)
+		}
+		entry.Output = outputPath
+	}
+	if entry.Unchanged {
+		entry.Status = "unchanged"
+		entry.TargetSizeMissed = res.TargetSizeBytes > 0 && entry.OutputBytes > res.TargetSizeBytes
+	} else {
+		entry.Status = "ok"
+		entry.AppliedQuality = res.AppliedQuality
+		entry.TargetResized = res.TargetResized
+		if entry.TargetResized {
+			entry.OriginalWidth, entry.OriginalHeight = info.Width, info.Height
+		}
+		entry.TargetSizeMissed = res.TargetSizeMissed
+	}
+	if metricsOut {
+		if entry.Unchanged {
+			entry.Metrics = makeCLIQualityMetrics(compress.QualityMetrics{
+				PSNR:      math.Inf(1),
+				SSIM:      1,
+				Identical: true,
+			})
+		} else if m, mErr := compress.MeasureQualityMetricsBytes(ctx, raw, res.Data); mErr != nil {
+			entry.MetricsError = mErr.Error()
+		} else {
+			entry.Metrics = makeCLIQualityMetrics(m)
+		}
+	}
+
+	report := cliCompressReport{
+		DryRun:          dryRun,
+		Preset:          presetName,
+		Total:           1,
+		Succeeded:       1,
+		TargetSizeBytes: opts.TargetSizeBytes,
+		OriginalBytes:   entry.OriginalBytes,
+		OutputBytes:     entry.OutputBytes,
+		SavedBytes:      entry.SavedBytes,
+		SavedPercent:    entry.SavedPercent,
+		Files:           []cliFileReport{entry},
+	}
+	if entry.Unchanged {
+		report.Unchanged = 1
+	}
+	if entry.TargetSizeMissed {
+		report.TargetSizeMissed = 1
+	}
+	if jsonOut {
+		return writeCLIJSON(stdout, stderr, report)
+	}
+	if !quiet {
+		printCLIFileResult(stdout, entry)
+		if entry.MetricsError != "" {
+			fmt.Fprintf(stderr, "WARN  -  无法计算画质指标：%s\n", entry.MetricsError)
+		}
+	}
+	return 0
+}
+
+func printCLIPipeMetrics(ctx context.Context, w io.Writer, origBytes []byte, res *compress.Result) {
+	if res == nil {
+		return
+	}
+	var m compress.QualityMetrics
+	if res.Unchanged {
+		m = compress.QualityMetrics{PSNR: math.Inf(1), SSIM: 1, Identical: true}
+	} else {
+		measured, err := compress.MeasureQualityMetricsBytes(ctx, origBytes, res.Data)
+		if err != nil {
+			fmt.Fprintf(w, "WARN  无法计算画质指标：%v\n", err)
+			return
+		}
+		m = measured
+	}
+	fmt.Fprintf(w, "METRICS  %s -> %s · %s\n",
+		formatSize(res.OriginalSize), formatSize(res.OutputSize), formatQualityMetricsSummary(m))
+}
+
 func printCLIFileResult(w io.Writer, f cliFileReport) {
 	tag := "OK       "
 	if f.Status == "unchanged" {
@@ -1162,6 +1507,15 @@ func printCLIFileResult(w io.Writer, f cliFileReport) {
 	}
 	if f.TargetSizeMissed {
 		notes += " [未达目标]"
+	}
+	if f.Metrics != nil {
+		if f.Metrics.Identical {
+			notes += " [无损一致 · SSIM 1.000]"
+		} else if f.Metrics.PSNRDB != nil {
+			notes += fmt.Sprintf(" [SSIM %.3f · PSNR %.1f dB]", f.Metrics.SSIM, *f.Metrics.PSNRDB)
+		} else {
+			notes += fmt.Sprintf(" [SSIM %.3f]", f.Metrics.SSIM)
+		}
 	}
 	fmt.Fprintf(w, "%s  %s  %s -> %s (%+.1f%%)%s%s\n",
 		tag, f.Input, formatSize(f.OriginalBytes), formatSize(f.OutputBytes), -f.SavedPercent, arrow, notes)

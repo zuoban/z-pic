@@ -251,6 +251,9 @@ func (s *application) openBatchPreview(index int) {
 					outputPreview = saved.preview
 					result.Data = saved.data
 				}
+			} else if item.unchanged {
+				outputPreview = selected.preview
+				result.Data = selected.data
 			}
 		}
 		s.update(func() {
@@ -290,7 +293,7 @@ func (s *application) completeBatchPreview(
 		s.preview = outputPreview
 	}
 	s.overwritten = item.overwritten
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 	if item.overwritten {
 		s.comparison.mode = previewResult
 	}
@@ -337,5 +340,5 @@ func (s *application) closeBatchPreview() {
 	s.result = nil
 	s.preview = nil
 	s.overwritten = false
-	s.comparison = comparisonView{split: 50}
+	s.resetComparison()
 }

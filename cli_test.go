@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
 	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -550,3 +553,244 @@ func TestCLIResizeModes(t *testing.T) {
 		t.Fatalf("resize mode missing from presets JSON: %v\n%s", err, stdout.String())
 	}
 }
+
+func writeCLITestPNG(t *testing.T, dir, name string, w, h int) string {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{
+				R: uint8((x * 255) / max(1, w-1)),
+				G: uint8((y * 255) / max(1, h-1)),
+				B: uint8((x*7 + y*13) % 256),
+				A: 255,
+			})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCLICompressPipeAndMetrics(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := writeCLITestPNG(t, dir, "sample.png", 96, 64)
+	srcBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. stdin -> stdout (implicit stdout when input is "-" and no -o/--dry-run/--json).
+	var stdout, stderr bytes.Buffer
+	code := runCLIWithIO(t.Context(), []string{"compress", "--format", "jpeg", "-q", "75", "-"}, bytes.NewReader(srcBytes), &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("stdin->stdout failed: code=%d stderr=%q", code, stderr.String())
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(stdout.Bytes()))
+	if err != nil || cfg.Width != 96 || cfg.Height != 64 {
+		t.Fatalf("stdin->stdout did not emit valid 96x64 JPEG: cfg=%+v err=%v", cfg, err)
+	}
+
+	// 2. file -> stdout (-o -) with --metrics writes JPEG to stdout and metrics to stderr.
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLIWithIO(t.Context(), []string{"compress", srcPath, "--format", "jpeg", "-q", "65", "--metrics", "-o", "-"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stderr.String(), "METRICS") || !strings.Contains(stderr.String(), "SSIM ") {
+		t.Fatalf("file->stdout with --metrics failed: code=%d stderr=%q", code, stderr.String())
+	}
+	cfg, err = jpeg.DecodeConfig(bytes.NewReader(stdout.Bytes()))
+	if err != nil || cfg.Width != 96 || cfg.Height != 64 {
+		t.Fatalf("file->stdout did not emit valid JPEG: cfg=%+v err=%v", cfg, err)
+	}
+
+	// 3. stdin -> file with --metrics --json.
+	outPath := filepath.Join(dir, "from-stdin.jpg")
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLIWithIO(t.Context(), []string{"compress", "-", "-o", outPath, "--format", "jpeg", "-q", "70", "--metrics", "--json"}, bytes.NewReader(srcBytes), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("stdin->file failed: code=%d stderr=%q", code, stderr.String())
+	}
+	var report cliCompressReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("invalid JSON from stdin->file: %v\n%s", err, stdout.String())
+	}
+	if report.Total != 1 || report.Succeeded != 1 || len(report.Files) != 1 || report.Files[0].Output != outPath {
+		t.Fatalf("unexpected stdin->file report: %+v", report)
+	}
+	if m := report.Files[0].Metrics; m == nil || m.SSIM <= 0 || m.SSIM > 1 || m.PSNRDB == nil || *m.PSNRDB <= 0 {
+		t.Fatalf("expected valid quality metrics in JSON report, got %+v", m)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("expected output file %s to exist: %v", outPath, err)
+	}
+
+	// 4. stdin -> --dry-run --metrics --json.
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLIWithIO(t.Context(), []string{"compress", "-", "--dry-run", "--format", "jpeg", "-q", "60", "--metrics", "--json"}, bytes.NewReader(srcBytes), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("stdin dry-run failed: code=%d stderr=%q", code, stderr.String())
+	}
+	var dryReport cliCompressReport
+	if err := json.Unmarshal(stdout.Bytes(), &dryReport); err != nil || !dryReport.DryRun || dryReport.Files[0].Metrics == nil {
+		t.Fatalf("expected dry-run JSON with metrics: err=%v report=%+v", err, dryReport)
+	}
+
+	// 5. File batch mode --metrics text output contains SSIM and PSNR.
+	stdout.Reset()
+	stderr.Reset()
+	code = runCLIWithIO(t.Context(), []string{"compress", srcPath, "--format", "jpeg", "-q", "65", "--dry-run", "--metrics"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("file --metrics failed: code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "SSIM ") || !strings.Contains(stdout.String(), "PSNR ") {
+		t.Fatalf("expected SSIM/PSNR in text output, got:\n%s", stdout.String())
+	}
+
+	// 6. Conflict & error cases.
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   []byte
+		want int
+	}{
+		{"stdin with extra file", []string{"compress", "-", srcPath}, srcBytes, 2},
+		{"stdin with in-place", []string{"compress", "--in-place", "-"}, srcBytes, 2},
+		{"stdout with json", []string{"compress", srcPath, "-o", "-", "--json"}, nil, 2},
+		{"stdout with dry-run", []string{"compress", srcPath, "-o", "-", "--dry-run"}, nil, 2},
+		{"stdout with directory", []string{"compress", dir, "-o", "-"}, nil, 2},
+		{"stdin json without dry-run or output", []string{"compress", "-", "--json"}, srcBytes, 2},
+		{"empty stdin", []string{"compress", "-"}, nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errBuf bytes.Buffer
+			got := runCLIWithIO(t.Context(), tc.args, bytes.NewReader(tc.in), &out, &errBuf)
+			if got != tc.want || errBuf.Len() == 0 {
+				t.Fatalf("%s: exit=%d want=%d stderr=%q", tc.name, got, tc.want, errBuf.String())
+			}
+		})
+	}
+}
+
+func TestCLIPresetsExportPipeToImportStdin(t *testing.T) {
+	dir := t.TempDir()
+	srcSettings := filepath.Join(dir, "src.json")
+	dstSettings := filepath.Join(dir, "dst.json")
+
+	custom := defaultPresets()[0]
+	custom.name = "管道预设"
+	custom.quality = 66
+	if err := saveFullSettings(srcSettings, appSettings{
+		presets:  []compressionPreset{custom},
+		selected: custom.name,
+		theme:    themeSystem,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveFullSettings(dstSettings, appSettings{
+		presets:  defaultPresets(),
+		selected: defaultPresets()[0].name,
+		theme:    themeSystem,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var exported, errBuf bytes.Buffer
+	if code := runCLIWithIO(t.Context(), []string{"presets", "export", "--settings", srcSettings}, nil, &exported, &errBuf); code != 0 {
+		t.Fatalf("presets export failed: code=%d stderr=%q", code, errBuf.String())
+	}
+
+	var importOut bytes.Buffer
+	errBuf.Reset()
+	if code := runCLIWithIO(t.Context(), []string{"presets", "import", "--settings", dstSettings, "--json", "-"}, bytes.NewReader(exported.Bytes()), &importOut, &errBuf); code != 0 {
+		t.Fatalf("presets import from stdin failed: code=%d stderr=%q", code, errBuf.String())
+	}
+	var report cliPresetImportReport
+	if err := json.Unmarshal(importOut.Bytes(), &report); err != nil || report.Added != 1 {
+		t.Fatalf("unexpected import report: err=%v report=%+v", err, report)
+	}
+	loaded, err := loadFullSettings(dstSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range loaded.presets {
+		if p.name == "管道预设" && p.quality == 66 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("imported preset not found in %s", dstSettings)
+	}
+
+	// Canceled context must abort stdin preset import promptly.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var cancelOut, cancelErr bytes.Buffer
+	if code := runCLIWithIO(canceledCtx, []string{"presets", "import", "--settings", dstSettings, "-"}, bytes.NewReader(exported.Bytes()), &cancelOut, &cancelErr); code != 1 || cancelErr.Len() == 0 {
+		t.Fatalf("canceled presets import should fail with exit 1: code=%d stderr=%q", code, cancelErr.String())
+	}
+}
+
+func TestCLICompressStdinEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := writeCLITestPNG(t, dir, "sample.png", 64, 48)
+	srcBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Stdin runtime errors with --json must still emit a valid JSON report with status=failed.
+	for _, tc := range []struct {
+		name string
+		args []string
+		in   []byte
+	}{
+		{"empty stdin json", []string{"compress", "-", "--dry-run", "--json"}, nil},
+		{"corrupt stdin json", []string{"compress", "-", "--dry-run", "--json"}, []byte("not-an-image")},
+		{"existing output json", []string{"compress", "-", "-o", srcPath, "--json"}, srcBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errBuf bytes.Buffer
+			code := runCLIWithIO(t.Context(), tc.args, bytes.NewReader(tc.in), &out, &errBuf)
+			if code != 1 {
+				t.Fatalf("expected exit 1, got %d (stdout=%q stderr=%q)", code, out.String(), errBuf.String())
+			}
+			var report cliCompressReport
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("expected valid JSON error report, got err=%v stdout=%q stderr=%q", err, out.String(), errBuf.String())
+			}
+			if report.Total != 1 || report.Failed != 1 || len(report.Files) != 1 || report.Files[0].Status != "failed" || report.Files[0].Error == "" {
+				t.Fatalf("unexpected failed JSON report: %+v", report)
+			}
+		})
+	}
+
+	// 2. Empty -o "" with stdin must report an --output error, not a --json error.
+	var out, errBuf bytes.Buffer
+	code := runCLIWithIO(t.Context(), []string{"compress", "-o", "", "-"}, bytes.NewReader(srcBytes), &out, &errBuf)
+	if code != 2 || strings.Contains(errBuf.String(), "--json") || !strings.Contains(errBuf.String(), "-o") {
+		t.Fatalf("unexpected error for -o \"\" -: code=%d stderr=%q", code, errBuf.String())
+	}
+
+	// 3. Saving stdin to a file literally named "stdin.png" must not collide with any synthetic source path.
+	t.Chdir(dir)
+	out.Reset()
+	errBuf.Reset()
+	code = runCLIWithIO(t.Context(), []string{"compress", "-", "-o", "stdin.png", "--json"}, bytes.NewReader(srcBytes), &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("compressing stdin to stdin.png failed: code=%d stdout=%q stderr=%q", code, out.String(), errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stdin.png")); err != nil {
+		t.Fatalf("expected stdin.png to be created: %v", err)
+	}
+}
+
