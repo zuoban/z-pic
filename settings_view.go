@@ -48,7 +48,7 @@ func (s *application) settingsView(c *ui.Context) {
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 42)).Padding(0, settingsPagePadding(c)).Gap(10).Background(sidebarSurface(c)).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 38)).Padding(0, settingsPagePadding(c)).Gap(10).Background(sidebarSurface(c)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
@@ -69,17 +69,20 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 				stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
 			},
 		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
-			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 30)).Padding(0, 10).Gap(8).
+			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 28)).Padding(0, 10).Gap(8).
 			AlignItems(ui.Center).Radius(innerRadius(c)).
 			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
 		if !disabled {
 			if picker.Pressed() {
 				picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-			} else if picker.Hovered() {
-				picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			} else {
+				controlElevation(picker, c)
+				if picker.Hovered() {
+					picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+				}
 			}
 		}
-		settingsGlassControl(picker, c, 30, disabled, ui.Transparent)
+		settingsGlassControl(picker, c, 28, disabled, ui.Transparent)
 		picker.Children(func() {
 			ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
 				Width(0).Grow(1).MinWidth(0)
@@ -87,7 +90,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 		})
 		ui.Box(c).Grow(1).MinWidth(0)
 		if editor.section == settingsGeneral {
-			settingsButton(c, "manage-presets", "管理预设", 30, s.settingsDraftLocked()).Padding(0, 12).OnClick(func() {
+			settingsButton(c, "manage-presets", "管理预设", 28, s.settingsDraftLocked()).Padding(0, 12).OnClick(func() {
 				editor.selected = editor.active
 				editor.section = settingsPresets
 			})
@@ -96,7 +99,7 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 }
 
 func (s *application) settingsNavigation(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 50)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 46)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
 		section := int(s.editor.section)
 		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设", "文件夹监听").
@@ -129,8 +132,11 @@ func settingsSegmentsWithSelection(c *ui.Context, key, label string, selected *i
 			if *selected == index {
 				selection = segment
 				segment.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c)).TextColor(t.Text)
+				if !t.Dark && !c.Preferences().HighContrast {
+					segment.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.08))
+				}
 				settingsGlassControl(segment, c, 30, disabled, ui.Transparent)
-				weight = 500
+				weight = 600
 			} else if !disabled {
 				if segment.Pressed() {
 					segment.Background(glassControlPressed(c))
@@ -149,7 +155,6 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 	width, height := c.Size()
 	narrow := width < 560
 	compactHeight := height > 0 && height <= 620
-	sideBySideWorkflow := !narrow && c.Preferences().TextScale <= 1.1
 	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
 	scrollPadV, scrollGap := float32(12), float32(10)
 	if narrow || compactHeight {
@@ -171,53 +176,46 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 		workflowPanel.Children(func() {
 			ui.Text(c, "工作流").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
 			locked := s.settingsDraftLocked()
-			autoCheck := func() {
-				ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
-					FontSize(settingsFontSize(c, 13)).Disabled(locked).
-					Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
-			}
-			trashCheck := func() {
-				ui.Checkbox(c.Key("settings-backup-to-trash"), &s.editor.backupToTrash, "覆盖原图前移入废纸篓").
-					FontSize(settingsFontSize(c, 13)).Disabled(locked).
-					Tooltip("覆盖单图或批量原图前先将原文件移至系统废纸篓（回收站）")
-			}
-			if sideBySideWorkflow {
-				ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Width(0).Grow(1).Children(autoCheck)
-					ui.Box(c).Width(0).Grow(1).Children(trashCheck)
+			ui.Column(c).FillWidth().Gap(0).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Padding(3, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Checkbox(c.Key("settings-auto-compress"), &s.editor.autoCompress, "导入图片或切换预设后自动压缩").
+						FontSize(settingsFontSize(c, 13)).Disabled(locked).
+						Tooltip("单图导入、主窗切预设或非覆盖/非询问目录的批量导入将自动开始压缩")
 				})
-			} else {
-				autoCheck()
-				trashCheck()
-			}
-			downloadPath := s.editor.downloadDir
-			downloadTooltip := downloadPath
-			downloadColor := t.Text
-			if downloadPath == "" {
-				downloadPath = "默认（下载/Z Pic）"
-				downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
-				downloadColor = t.TextMuted
-			}
-			ui.Row(c).FillWidth().Gap(8).Padding(6, 10).Radius(innerRadius(c)).
-				Background(tonalWellSurface(c)).Border(1, tonalWellBorder(c)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
-				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
-				ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
-					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
-				settingsButton(c, "settings-download-dir", "选择…", 28, locked).
-					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
-					Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
-					OnClick(s.chooseDownloadDirectory)
-				if s.editor.downloadDir != "" {
-					settingsButton(c, "settings-download-reset", "默认", 28, locked).
-						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
-						Label("恢复默认下载目录").Tooltip("恢复为系统下载目录下的 Z Pic 文件夹").
-						OnClick(s.resetDownloadDirectory)
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 32)).Padding(3, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Checkbox(c.Key("settings-backup-to-trash"), &s.editor.backupToTrash, "覆盖原图前移入废纸篓").
+						FontSize(settingsFontSize(c, 13)).Disabled(locked).
+						Tooltip("覆盖单图或批量原图前先将原文件移至系统废纸篓（回收站）")
+				})
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+				downloadPath := s.editor.downloadDir
+				downloadTooltip := downloadPath
+				downloadColor := t.Text
+				if downloadPath == "" {
+					downloadPath = "默认（下载/Z Pic）"
+					downloadTooltip = "系统下载目录下的 Z Pic 文件夹"
+					downloadColor = t.TextMuted
 				}
-				settingsButton(c, "settings-download-clean", "清理", 28, locked).
-					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
-					Label("清理下载目录").Tooltip("将下载目录中未在队列里的图片移入废纸篓").
-					OnClick(s.cleanupDownloadedImages)
+				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 38)).Padding(6, 0, 2, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "下载目录").FontSize(settingsFontSize(c, 13)).FontWeight(500).TextColor(t.Text).Shrink(0)
+					ui.Text(c, downloadPath).FontSize(settingsFontSize(c, 12)).TextColor(downloadColor).
+						Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(downloadTooltip)
+					settingsButton(c, "settings-download-dir", "选择…", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Label("选择下载目录").Tooltip("选择网页图片与剪贴板图片保存目录").
+						OnClick(s.chooseDownloadDirectory)
+					if s.editor.downloadDir != "" {
+						settingsButton(c, "settings-download-reset", "默认", 28, locked).
+							FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+							Label("恢复默认下载目录").Tooltip("恢复为系统下载目录下的 Z Pic 文件夹").
+							OnClick(s.resetDownloadDirectory)
+					}
+					settingsButton(c, "settings-download-clean", "清理", 28, locked).
+						FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+						Label("清理下载目录").Tooltip("将下载目录中未在队列里的图片移入废纸篓").
+						OnClick(s.cleanupDownloadedImages)
+				})
 			})
 		})
 		shortcutsPanel := settingsPanel(c, "settings-shortcuts-panel")

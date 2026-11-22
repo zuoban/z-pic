@@ -170,8 +170,10 @@ func (s *application) previewZoomControls(c *ui.Context) {
 	scale := s.previewScale(bounds)
 	ui.Row(c).MinHeight(30).Gap(6).Wrap().AlignItems(ui.Center).
 		Role(ui.RoleToolbar).Label("图片缩放").Children(func() {
-		ui.Row(c).Height(30).Gap(0).Radius(pillRadius(30, c)).
-			Background(glassControlSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center).Children(func() {
+		zoomGroup := ui.Row(c).Height(30).Gap(0).Radius(pillRadius(30, c)).
+			Background(glassControlSurface(c)).Border(1, controlBorder(c)).AlignItems(ui.Center)
+		controlElevation(zoomGroup, c)
+		zoomGroup.Children(func() {
 			zoomBtn := func(key, label string, keyCode ui.Key, hintKey string, factor float64) {
 				disabled := locked || (factor < 1 && scale <= 0.01) || (factor > 1 && scale >= 16)
 				strokeColor := t.Text
@@ -222,8 +224,11 @@ func (s *application) previewZoomControls(c *ui.Context) {
 					KeyShortcuts(ui.Cmd, keyCode).Tooltip(tooltip).
 					Disabled(locked).Selected(active).OnClick(action)
 				if active {
-					btn.FontWeight(500).Background(segmentedThumbSurface(c)).
+					btn.FontWeight(600).Background(segmentedThumbSurface(c)).
 						Border(1, segmentedThumbBorder(c)).TextColor(t.Text)
+					if !t.Dark && !c.Preferences().HighContrast {
+						btn.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.08))
+					}
 				} else {
 					btn.FontWeight(400).Background(ui.Transparent).
 						Border(1, ui.Transparent).TextColor(t.TextMuted)

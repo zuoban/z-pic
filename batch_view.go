@@ -44,15 +44,17 @@ func (s *application) batchListPanel(c *ui.Context) {
 				}
 				ui.Text(c, headerText).
 					FontSize(14).FontWeight(600).FontFeatures("tnum").
-					SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(120).Tooltip(headerText)
-				quietButton(c, "batch-add-files", "添加图片", 30, s.modalOpen()).FontSize(12).FontWeight(500).Padding(0, 10).
+					SingleLine().TruncateMiddle().Width(0).Grow(1).MinWidth(110).Tooltip(headerText)
+				iconLabelButton(c, quietButton(c, "batch-add-files", "", 30, s.modalOpen()).Padding(0, 9),
+					"添加图片", actionImageIcon, 12, 500).
 					KeyShortcuts(ui.Cmd, ui.KeyO).
 					Tooltip("添加更多图片 · " + shortcutLabel("O")).
 					OnClick(s.chooseFile)
-				quietButton(c, "batch-add-folder", "添加文件夹", 30, s.modalOpen()).FontSize(12).FontWeight(500).Padding(0, 10).
+				iconLabelButton(c, quietButton(c, "batch-add-folder", "", 30, s.modalOpen()).Padding(0, 9),
+					"添加文件夹", actionFolderIcon, 12, 500).
 					Tooltip("从文件夹添加图片").
 					OnClick(s.chooseFolder)
-				ghostDestructiveButton(c, "batch-clear", "清空", 30, s.modalOpen()).FontSize(12).Padding(0, 9).
+				ghostDestructiveButton(c, "batch-clear", "清空", 30, s.modalOpen()).FontSize(12).Padding(0, 8).
 					Tooltip("清空当前批量队列").
 					OnClick(s.clearBatch)
 			})
@@ -280,8 +282,11 @@ func (s *application) batchSortControl(c *ui.Context) bool {
 		Tooltip("排序方式：" + current.menuLabel)
 	if picker.Pressed() {
 		picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-	} else if picker.Hovered() {
-		picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+	} else {
+		controlElevation(picker, c)
+		if picker.Hovered() {
+			picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+		}
 	}
 	picker.Children(func() {
 		ui.Text(c, current.label).FontSize(12).FontWeight(500).SingleLine().NoWrap()
@@ -551,22 +556,24 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 		})
 		actions := func() {
 			if item.status == batchPending && !item.invalidInput {
-				quietButton(c, "batch-compress-item", "压缩此张", 30, s.modalOpen()).
-					FontWeight(500).Padding(0, 10).
+				iconLabelButton(c, quietButton(c, "batch-compress-item", "", 30, s.modalOpen()).Padding(0, 10),
+					"压缩此张", toolbarCompressIcon, 12, 500).
 					Tooltip("仅压缩此张图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if item.status == batchFailed && !item.invalidInput {
-				quietButton(c, "batch-retry-item", "重试", 30, s.modalOpen()).
-					FontWeight(500).Padding(0, 10).
+				iconLabelButton(c, quietButton(c, "batch-retry-item", "", 30, s.modalOpen()).Padding(0, 10),
+					"重试", toolbarRestartIcon, 12, 500).
 					Tooltip("重新压缩此失败图片").
 					OnClick(func() { s.compressBatchItem(selected) })
 			}
 			if outPath := batchItemOutputPath(item); outPath != "" {
-				ghostButton(c, "batch-reveal-item", "定位文件", 30, s.modalOpen()).FontSize(12).Padding(0, 7).
+				iconLabelButton(c, ghostButton(c, "batch-reveal-item", "", 30, s.modalOpen()).Padding(0, 8),
+					"定位文件", actionRevealIcon, 12, 500).
 					Tooltip("在文件夹中显示输出文件").
 					OnClick(func() { s.revealFileInFolder(outPath) })
-				ghostButton(c, "batch-copy-item", "复制", 30, !s.canCopyBatchItem(item)).FontSize(12).Padding(0, 7).
+				iconLabelButton(c, ghostButton(c, "batch-copy-item", "", 30, !s.canCopyBatchItem(item)).Padding(0, 8),
+					"复制", actionCopyIcon, 12, 500).
 					Label("复制图片").Tooltip("将压缩结果复制到剪贴板").
 					OnClick(func() { s.copyBatchItem(selected) })
 				idx := selected
@@ -575,8 +582,8 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 					30, 12, 500, s.modalOpen(),
 					func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 			}
-			ghostButton(c, "batch-preview", "预览", 30, s.modalOpen() || item.invalidInput).
-				FontSize(12).FontWeight(500).Padding(0, 7).
+			iconLabelButton(c, ghostButton(c, "batch-preview", "", 30, s.modalOpen() || item.invalidInput).Padding(0, 8),
+				"预览", actionPreviewIcon, 12, 500).
 				Tooltip("查看或对比选中图片").
 				OnClick(func() { s.openBatchPreview(selected) })
 			if compact {
@@ -584,7 +591,8 @@ func (s *application) batchSelectedBar(c *ui.Context) {
 			} else {
 				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 			}
-			ghostDestructiveButton(c, "batch-remove", "移除", 30, s.modalOpen()).FontSize(12).Padding(0, 7).
+			iconLabelButton(c, ghostDestructiveButton(c, "batch-remove", "", 30, s.modalOpen()).Padding(0, 8),
+				"移除", actionTrashIcon, 12, 500).
 				Tooltip("从批量队列移除此图片 · Delete / Backspace").
 				OnClick(s.removeSelectedBatchItem)
 		}
@@ -617,47 +625,56 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 	if mobile {
 		minW = 0
 	}
-	panel := ui.Column(c).Grow(1).MinWidth(minW).Padding(pad).Gap(10)
+	panel := ui.Column(c).Grow(1).MinWidth(minW)
 	if mobile {
 		panel.FillWidth().MinHeight(380)
 	}
 	panel.Children(func() {
-		inlinePreviewMode := width >= 960 && s.result != nil && !s.overwritten
-		ui.Row(c).MinHeight(30).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			quietButton(c, "batch-back", "返回列表", 30, s.modalOpen()).Padding(0, 10).
-				KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
-				OnClick(s.closeBatchPreview)
-			visible := s.filteredBatchIndices()
-			posCurrent, posTotal := s.batch.previewIndex+1, len(s.batch.items)
-			if pos := slices.Index(visible, s.batch.previewIndex); pos >= 0 {
-				posCurrent, posTotal = pos+1, len(visible)
-			}
-			ui.Textf(c, "%d / %d", posCurrent, posTotal).
-				FontSize(12).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Grow(1)
-			if inlinePreviewMode {
-				s.previewModeControl(c)
-			}
-			quietButton(c, "batch-prev", "上一张", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).Padding(0, 10).
-				KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
-				Tooltip("上一张 · " + shortcutLabel("[")).
-				OnClick(func() { s.stepBatchPreview(-1) })
-			quietButton(c, "batch-next", "下一张", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(1)).Padding(0, 10).
-				KeyShortcuts(ui.Cmd, ui.KeyBracketRight).
-				Tooltip("下一张 · " + shortcutLabel("]")).
-				OnClick(func() { s.stepBatchPreview(1) })
-		})
-		if s.preview != nil {
-			if inlinePreviewMode {
-				s.previewZoomToolbar(c)
-			} else {
-				s.previewToolbar(c)
-			}
-		}
-		ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
-			Background(canvasWellBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
+		ui.Column(c).Grow(1).FillWidth().Padding(pad, pad, 12, pad).Gap(10).Children(func() {
+			inlinePreviewMode := width >= 960 && s.result != nil && !s.overwritten
+			ui.Row(c).MinHeight(30).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+				iconLabelButton(c, quietButton(c, "batch-back", "", 30, s.modalOpen()).Padding(0, 10),
+					"返回列表", actionBackIcon, 12, 500).
+					KeyShortcuts(0, ui.KeyEscape).Tooltip("返回批量列表 · Esc").
+					OnClick(s.closeBatchPreview)
+				visible := s.filteredBatchIndices()
+				posCurrent, posTotal := s.batch.previewIndex+1, len(s.batch.items)
+				if pos := slices.Index(visible, s.batch.previewIndex); pos >= 0 {
+					posCurrent, posTotal = pos+1, len(visible)
+				}
+				ui.Textf(c, "%d / %d", posCurrent, posTotal).
+					FontSize(12).FontWeight(500).FontFeatures("tnum").TextColor(metadataColor(c)).SingleLine().Grow(1)
+				if inlinePreviewMode {
+					s.previewModeControl(c)
+				}
+				iconLabelButton(c, quietButton(c, "batch-prev", "", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(-1)).Padding(0, 9),
+					"上一张", actionBackIcon, 12, 500).
+					KeyShortcuts(ui.Cmd, ui.KeyBracketLeft).
+					Tooltip("上一张 · " + shortcutLabel("[")).
+					OnClick(func() { s.stepBatchPreview(-1) })
+				nextBtn := quietButton(c, "batch-next", "", 30, s.modalOpen() || !s.hasAdjacentBatchPreview(1)).Padding(0, 9).
+					Label("下一张").Gap(4).
+					KeyShortcuts(ui.Cmd, ui.KeyBracketRight).
+					Tooltip("下一张 · " + shortcutLabel("]")).
+					OnClick(func() { s.stepBatchPreview(1) })
+				nextBtn.Children(func() {
+					ui.Text(c, "下一张").FontSize(12).FontWeight(500).SingleLine()
+					ui.Icon(c, actionNextIcon).Size(14, 14).Shrink(0)
+				})
+			})
 			if s.preview != nil {
-				s.previewCanvas(c)
+				if inlinePreviewMode {
+					s.previewZoomToolbar(c)
+				} else {
+					s.previewToolbar(c)
+				}
 			}
+			ui.Box(c).Grow(1).FillWidth().MinHeight(220).Radius(innerRadius(c)).
+				Background(canvasWellBackground(c)).Border(1, glassBorder(c)).Clip().Children(func() {
+				if s.preview != nil {
+					s.previewCanvas(c)
+				}
+			})
 		})
 		if s.file != nil {
 			meta := fmt.Sprintf("%s · %d × %d · %s",
@@ -681,18 +698,20 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				metaColor = t.Danger
 				metaTooltip = previewItem.errMsg
 			}
-			footerRow := ui.Row(c).Gap(8).AlignItems(ui.Center)
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+			footerRow := ui.Row(c).FillWidth().MinHeight(50).Padding(9, pad).Gap(8).
+				Background(sidebarSurface(c)).AlignItems(ui.Center)
 			compactFooter := width < 1100
 			if compactFooter {
 				footerRow.Column().AlignItems(ui.Stretch)
 			}
 			footerRow.Children(func() {
-				details := ui.Column(c).Width(0).Grow(1).MinWidth(140).Gap(4)
+				details := ui.Column(c).Width(0).Grow(1).MinWidth(140).Gap(2)
 				if compactFooter {
 					details.FillWidth().Grow(0).MinWidth(0)
 				}
 				details.Children(func() {
-					ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(500).
+					ui.Text(c, filepath.Base(s.file.path)).FontSize(13).FontWeight(600).
 						SingleLine().TruncateMiddle().Tooltip(s.file.path)
 					detail := ui.Text(c, meta).FontSize(12).FontFeatures("tnum").TextColor(metaColor).
 						FillWidth().Tooltip(metaTooltip)
@@ -705,16 +724,18 @@ func (s *application) batchPreviewPanel(c *ui.Context) {
 				if previewItem != nil {
 					actions := func() {
 						if outPath := batchItemOutputPath(*previewItem); outPath != "" {
-							quietButton(c, "batch-preview-reveal", "定位文件", 32, s.modalOpen()).
+							iconLabelButton(c, quietButton(c, "batch-preview-reveal", "", 30, s.modalOpen()).Padding(0, 10),
+								"定位文件", actionRevealIcon, 12, 500).
 								Tooltip("在文件夹中显示输出文件").
 								OnClick(func() { s.revealFileInFolder(outPath) })
 							idx := previewIdx
 							dragExportControl(c, "batch-preview-drag", "拖出图片", "拖出",
 								"按住将此压缩输出文件拖到 Finder 或其他应用",
-								32, 13, 400, s.modalOpen(),
+								30, 12, 500, s.modalOpen(),
 								func() transfer.Data { return s.batchItemDragExportData(idx) }, s.dragExportOptions())
 						}
-						ghostDestructiveButton(c, "batch-preview-remove", "移除", 32, s.modalOpen()).Padding(0, 10).
+						iconLabelButton(c, ghostDestructiveButton(c, "batch-preview-remove", "", 30, s.modalOpen()).Padding(0, 8),
+							"移除", actionTrashIcon, 12, 500).
 							Tooltip("从批量队列移除此图片").
 							OnClick(func() { s.removeBatchItem(previewIdx) })
 					}

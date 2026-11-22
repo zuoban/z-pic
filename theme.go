@@ -480,24 +480,61 @@ func statusTintBorder(c *ui.Context, semantic ui.Color) ui.Color {
 }
 
 func statusCapsule(c *ui.Context, text string, semantic ui.Color) ui.Element {
-	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
-		TextColor(semantic).Padding(2, 8).Radius(badgeRadius(20)).
-		Background(statusTintSurface(c, semantic)).Border(1, statusTintBorder(c, semantic)).
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = semantic
+	}
+	return ui.Text(c, text).FontSize(11).FontWeight(600).FontFeatures("tnum").
+		TextColor(semantic).Padding(3, 8).Radius(badgeRadius(20)).
+		Background(statusTintSurface(c, semantic)).Border(1, border).
 		Shrink(0)
 }
 
 func neutralCapsule(c *ui.Context, text string) ui.Element {
-	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
-		TextColor(metadataColor(c)).Padding(2, 8).Radius(badgeRadius(20)).
-		Background(keycapSurface(c)).Border(1, controlBorder(c)).
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = controlBorder(c)
+	}
+	return ui.Text(c, text).FontSize(11).FontWeight(500).FontFeatures("tnum").
+		TextColor(metadataColor(c)).Padding(3, 8).Radius(badgeRadius(20)).
+		Background(keycapSurface(c)).Border(1, border).
 		SingleLine().Shrink(0)
 }
 
 func accentCapsule(c *ui.Context, text string) ui.Element {
-	return ui.Text(c, text).FontSize(12).FontWeight(500).FontFeatures("tnum").
-		TextColor(accentForeground(c.Theme())).Padding(2, 8).Radius(badgeRadius(20)).
-		Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = selectionBorder(c)
+	}
+	return ui.Text(c, text).FontSize(11).FontWeight(600).FontFeatures("tnum").
+		TextColor(accentForeground(c.Theme())).Padding(3, 8).Radius(badgeRadius(20)).
+		Background(glassSelectionBackground(c)).Border(1, border).
 		SingleLine().Shrink(0)
+}
+
+func cardElevation(el ui.Element, c *ui.Context) ui.Element {
+	if c.Theme().Dark || c.Preferences().HighContrast || usesGlass(c) {
+		return el
+	}
+	return el.Shadow(0, 1, 3, 0, ui.RGBA(17, 20, 26, 0.05))
+}
+
+func controlElevation(el ui.Element, c *ui.Context) ui.Element {
+	if c.Theme().Dark || c.Preferences().HighContrast {
+		return el
+	}
+	return el.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.045))
+}
+
+func iconLabelButton(c *ui.Context, button ui.Element, label string, icon *ui.SVG, fontSize float32, weight int) ui.Element {
+	iconSize := float32(14)
+	if fontSize >= 13 {
+		iconSize = 15
+	}
+	return button.Label(label).Gap(5).Children(func() {
+		ui.Icon(c, icon).Size(iconSize, iconSize).Shrink(0)
+		ui.Text(c, label).FontSize(fontSize).FontWeight(weight).SingleLine()
+	})
 }
 
 func stylePopoverPanel(panel ui.Element, c *ui.Context) ui.Element {
@@ -725,8 +762,11 @@ func segmentedControl(c *ui.Context, key, label string, selected *int, height fl
 				Center().Border(1, ui.Transparent)
 			textColor, weight := t.TextMuted, 400
 			if active {
-				textColor, weight = t.Text, 500
+				textColor, weight = t.Text, 600
 				segment.Background(segmentedThumbSurface(c)).Border(1, segmentedThumbBorder(c))
+				if !t.Dark && !c.Preferences().HighContrast {
+					segment.Shadow(0, 1, 2, 0, ui.RGBA(17, 20, 26, 0.08))
+				}
 			} else if !disabled {
 				if segment.Pressed() {
 					textColor = t.Text
@@ -755,8 +795,11 @@ func quietButton(c *ui.Context, key, label string, height float32, disabled bool
 	if !disabled {
 		if btn.Pressed() {
 			btn.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-		} else if btn.Hovered() {
-			btn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+		} else {
+			controlElevation(btn, c)
+			if btn.Hovered() {
+				btn.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+			}
 		}
 	}
 	return btn

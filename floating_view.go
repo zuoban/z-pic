@@ -475,6 +475,7 @@ func (s *application) floatingView(c *ui.Context) {
 				Radius(badgeRadius(28)).Background(glassControlSurface(c)).Border(1, controlBorder(c)).Label(label).
 				Tooltip("展开图片 · 支持本地 " + strings.Join(supportedImageFormats(), " / ") + " 或网页图片").
 				OnClick(func() { s.setFloatingExpanded(true) })
+			controlElevation(countBtn, c)
 			if over {
 				countBtn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c))
 			} else if countBtn.Hovered() {
@@ -726,6 +727,9 @@ func (s *application) floatingGalleryItem(c *ui.Context, indices []int, position
 		}
 		tile := ui.Column(c).Fill().Padding(9, 8, 7, 8).Gap(5).Radius(innerRadius(c)).Background(background).
 			Border(borderWidth, border).Tooltip(item.path)
+		if !selected {
+			cardElevation(tile, c)
+		}
 		if tile.Hovered() && !selected {
 			tile.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
 		}

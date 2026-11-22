@@ -75,6 +75,8 @@ func settingsPanel(c *ui.Context, key string) ui.Element {
 		}
 		panel.Background(ui.Transparent).Border(0, ui.Transparent).
 			Material(settingsPanelGlass{material: glass.Glass{Native: true, Tint: tint}})
+	} else {
+		cardElevation(panel, c)
 	}
 	return panel
 }
