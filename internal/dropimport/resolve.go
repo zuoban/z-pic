@@ -206,8 +206,22 @@ func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string)
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("无法解析域名：%s", host)
 	}
+	allowFakeIP := isFakeIPCandidateHost(trimmed)
+	hasFakeIPv4 := false
+	if allowFakeIP {
+		for _, ip := range ips {
+			if isFakeIPv4(ip) {
+				hasFakeIPv4 = true
+				break
+			}
+		}
+	}
 	allowed := make([]netip.Addr, 0, len(ips))
 	for _, ip := range ips {
+		if allowFakeIP && (isFakeIPv4(ip) || (hasFakeIPv4 && isFakeIPv6(ip))) {
+			allowed = append(allowed, ip.Unmap())
+			continue
+		}
 		if isDisallowedIP(ip) {
 			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
 		}
@@ -631,6 +645,39 @@ var disallowedIPPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("ff00::/8"),
+}
+
+var (
+	// Standard Fake-IP pools used by local TUN proxies (Clash/Mihomo, Surge,
+	// Sing-box, Stash, etc.) when intercepting DNS lookups for public domains.
+	fakeIPv4Prefix = netip.MustParsePrefix("198.18.0.0/15")
+	fakeIPv6Prefix = netip.MustParsePrefix("fc00::/18")
+)
+
+func isFakeIPv4(addr netip.Addr) bool {
+	if !addr.IsValid() || addr.Zone() != "" {
+		return false
+	}
+	unmapped := addr.Unmap()
+	return unmapped.Is4() && fakeIPv4Prefix.Contains(unmapped)
+}
+
+func isFakeIPv6(addr netip.Addr) bool {
+	if !addr.IsValid() || addr.Zone() != "" {
+		return false
+	}
+	unmapped := addr.Unmap()
+	return unmapped.Is6() && fakeIPv6Prefix.Contains(unmapped)
+}
+
+func isFakeIPCandidateHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "" || isLocalHostName(lower) || !strings.Contains(lower, ".") {
+		return false
+	}
+	return !strings.HasSuffix(lower, ".local") &&
+		!strings.HasSuffix(lower, ".home.arpa") &&
+		!strings.HasSuffix(lower, ".internal")
 }
 
 func isLocalHostName(host string) bool {

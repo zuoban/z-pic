@@ -712,3 +712,92 @@ func TestResolveBlocksSSRFViaProxyAndDirectProxyAddressBypass(t *testing.T) {
 		t.Fatalf("standalone direct request bypassed dial filter: dialed=%v", dialed[beforeDials:])
 	}
 }
+
+func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
+	payload := imageBytes(t, "png")
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect-literal-fakeip" {
+			http.Redirect(w, r, "http://198.18.1.212/secret.png", http.StatusFound)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer origin.Close()
+	originAddr := origin.Listener.Addr().String()
+
+	lookup := func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		switch host {
+		case "img.example.com":
+			return []netip.Addr{netip.MustParseAddr("198.18.1.212")}, nil
+		case "dualstack.example.com":
+			return []netip.Addr{netip.MustParseAddr("fc00::1234"), netip.MustParseAddr("198.18.1.213")}, nil
+		case "mixed-loopback.example.com":
+			return []netip.Addr{netip.MustParseAddr("198.18.1.214"), netip.MustParseAddr("127.0.0.1")}, nil
+		case "mixed-ula.example.com":
+			return []netip.Addr{netip.MustParseAddr("198.18.1.215"), netip.MustParseAddr("fd00::1")}, nil
+		case "only-fc00.example.com":
+			return []netip.Addr{netip.MustParseAddr("fc00::1")}, nil
+		case "printer.local", "router.home.arpa", "service.internal", "intranet":
+			return []netip.Addr{netip.MustParseAddr("198.18.1.216")}, nil
+		default:
+			return nil, fmt.Errorf("unexpected host %s", host)
+		}
+	}
+
+	var dialed []string
+	baseDial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		if addr == "198.18.1.212:80" || addr == "198.18.1.213:80" {
+			return (&net.Dialer{}).DialContext(ctx, network, originAddr)
+		}
+		if addr == "[fc00::1234]:80" {
+			return nil, errors.New("ipv6 fake-ip unreachable")
+		}
+		return nil, fmt.Errorf("unexpected dial %s", addr)
+	}
+
+	transport := newTransport(lookup, baseDial)
+	defer transport.CloseIdleConnections()
+
+	// 1. Public domain resolved to 198.18.0.0/15 Fake-IP succeeds.
+	dir := t.TempDir()
+	path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://img.example.com/wallpaper.png"}, dir, transport)
+	if err != nil || !saved || path == "" {
+		t.Fatalf("public domain via IPv4 Fake-IP must succeed: path=%q saved=%v err=%v", path, saved, err)
+	}
+
+	// 2. Public domain resolved to dual-stack Fake-IP (fc00::/18 + 198.18.0.0/15) succeeds and falls back to IPv4.
+	path, saved, err = ResolveWithTransport(context.Background(), Item{URL: "http://dualstack.example.com/wallpaper.png"}, dir, transport)
+	if err != nil || !saved || path == "" {
+		t.Fatalf("public domain via dual-stack Fake-IP must succeed: path=%q saved=%v err=%v", path, saved, err)
+	}
+
+	// 3. Redirect from public domain to literal 198.18.x.x remains blocked.
+	if path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://img.example.com/redirect-literal-fakeip"}, dir, transport); err == nil || saved || path != "" || !strings.Contains(err.Error(), "重定向到本地或内网") {
+		t.Fatalf("redirect to literal Fake-IP must be blocked: path=%q saved=%v err=%v", path, saved, err)
+	}
+
+	// 4. Literal Fake-IPs, local/single-label hostnames, standalone fc00::/18, and mixed private records remain blocked.
+	beforeDials := len(dialed)
+	for _, blocked := range []string{
+		"http://198.18.1.212/secret.png",
+		"http://[::ffff:198.18.1.212]/secret.png",
+		"http://[fc00::1]/secret.png",
+		"http://printer.local/secret.png",
+		"http://router.home.arpa/secret.png",
+		"http://service.internal/secret.png",
+		"http://intranet/secret.png",
+		"http://mixed-loopback.example.com/secret.png",
+		"http://mixed-ula.example.com/secret.png",
+		"http://only-fc00.example.com/secret.png",
+	} {
+		path, saved, err := ResolveWithTransport(context.Background(), Item{URL: blocked}, dir, transport)
+		if err == nil || saved || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+			t.Fatalf("%s must be blocked: path=%q saved=%v err=%v", blocked, path, saved, err)
+		}
+	}
+	if len(dialed) != beforeDials {
+		t.Fatalf("blocked URLs still attempted dial: %v", dialed[beforeDials:])
+	}
+}
+
