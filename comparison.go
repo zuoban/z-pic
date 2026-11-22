@@ -77,7 +77,7 @@ func (s *application) resetComparison() {
 }
 
 func (s *application) ensureComparisonDiff() {
-	if s.file == nil || s.result == nil || s.overwritten ||
+	if s.closed || s.file == nil || s.result == nil || s.overwritten ||
 		s.comparison.diffReady || s.comparison.diffLoading || s.comparison.diffError != "" {
 		return
 	}
@@ -95,6 +95,9 @@ func (s *application) ensureComparisonDiff() {
 			}
 			s.comparison.diffReady = true
 		}
+		return
+	}
+	if s.window == nil && s.dispatchUpdate == nil {
 		return
 	}
 	s.comparison.diffGen++
@@ -296,13 +299,33 @@ func (s *application) previewUnifiedBar(c *ui.Context) {
 	})
 }
 
+func (s *application) setPreviewMode(mode int) {
+	if s.previewLocked() || s.result == nil || s.overwritten {
+		return
+	}
+	if mode < previewCompare || mode > previewDiff {
+		return
+	}
+	s.comparison.mode = mode
+	if mode == previewDiff || mode == previewCompare {
+		s.ensureComparisonDiff()
+	}
+}
+
 func (s *application) previewModeControl(c *ui.Context) {
 	if s.result == nil || s.overwritten {
 		return
 	}
+	if !s.previewLocked() && !c.FocusTakesText() {
+		c.OnWindowShortcut(0, ui.Key1, func() { s.setPreviewMode(previewCompare) })
+		c.OnWindowShortcut(0, ui.Key2, func() { s.setPreviewMode(previewOriginal) })
+		c.OnWindowShortcut(0, ui.Key3, func() { s.setPreviewMode(previewResult) })
+		c.OnWindowShortcut(0, ui.Key4, func() { s.setPreviewMode(previewDiff) })
+	}
 	segmentedControl(c, "preview-mode", "预览模式", &s.comparison.mode, 30, s.previewLocked(), "对比", "原图", "结果", "差异").
-		FillEqually().Width(196)
-	if s.comparison.mode == previewDiff {
+		FillEqually().Width(196).
+		Tooltip("快捷键 1-4 切换对比 / 原图 / 结果 / 差异")
+	if !s.previewLocked() && (s.comparison.mode == previewDiff || s.comparison.mode == previewCompare) {
 		s.ensureComparisonDiff()
 	}
 }
@@ -431,9 +454,35 @@ func drawAlphaCheckerboard(p *ui.Painter, bounds ui.Rect, dark bool) {
 	}
 }
 
+func heatmapLegendColor(t float32) ui.Color {
+	type stop struct {
+		pos   float32
+		color ui.Color
+	}
+	stops := [...]stop{
+		{0.00, ui.Hex("#2084ec")},
+		{0.25, ui.Hex("#22d3ee")},
+		{0.50, ui.Hex("#facc15")},
+		{0.78, ui.Hex("#f97316")},
+		{1.00, ui.Hex("#f43f5e")},
+	}
+	t = max(0, min(1, t))
+	for i := 1; i < len(stops); i++ {
+		if t <= stops[i].pos {
+			prev, next := stops[i-1], stops[i]
+			f := (t - prev.pos) / (next.pos - prev.pos)
+			return prev.color.Mix(next.color, f)
+		}
+	}
+	return stops[len(stops)-1].color
+}
+
 func (s *application) previewCanvas(c *ui.Context) {
 	t := c.Theme()
 	comparing := s.comparing()
+	if comparing && !s.previewLocked() {
+		s.ensureComparisonDiff()
+	}
 	if !comparing || s.previewLocked() {
 		s.comparison.panning, s.comparison.panSuppressSlider = false, false
 	}
@@ -471,7 +520,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 		canvas.Cursor(cursor)
 	} else {
 		diffMode := s.result != nil && !s.overwritten && s.comparison.mode == previewDiff
-		if diffMode {
+		if diffMode && !s.previewLocked() {
 			s.ensureComparisonDiff()
 		}
 		label := "原图预览"
@@ -671,17 +720,57 @@ func (s *application) previewCanvas(c *ui.Context) {
 			}
 			return el
 		}
-		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).Children(func() {
+		renderQualityBadge := func() {
+			dotColor := t.Success
+			if !s.comparison.diffMetrics.Identical {
+				if s.comparison.diffMetrics.SSIM < 0.90 {
+					dotColor = t.Warning
+				} else if s.comparison.diffMetrics.SSIM < 0.97 {
+					dotColor = accentForeground(t)
+				}
+			}
+			summary := formatQualityMetricsSummary(s.comparison.diffMetrics)
+			styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5).MinWidth(0)).
+				Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics)).Children(func() {
+				ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(dotColor)
+				ui.Text(c, summary).
+					FontSize(11).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).SingleLine().MinWidth(0)
+			})
+		}
+		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).AlignItems(ui.Center).Children(func() {
 			if s.comparison.mode == previewDiff {
-				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).Children(func() {
-					ui.Row(c).AlignItems(ui.Center).Gap(2).Children(func() {
-						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#2084ec"))
-						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#22d3ee"))
-						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#facc15"))
-						ui.Box(c).Size(6, 6).Radius(3).Background(ui.Hex("#f43f5e"))
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).
+					Tooltip("蓝：几乎无差异 · 青：轻微差异 · 黄：中等差异 · 红：明显像素差异").
+					Children(func() {
+						ui.Text(c, "差异热力图").FontSize(11).FontWeight(500).TextColor(t.Text).SingleLine()
+						ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
+							ui.Text(c, "低").FontSize(10).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+							ui.Box(c).Size(44, 6).Radius(3).Draw(func(p *ui.Painter, bounds ui.Rect) {
+								if bounds.W <= 0 || bounds.H <= 0 {
+									return
+								}
+								const steps = 24
+								p.Clip(bounds, bounds.H/2, func() {
+									segW := bounds.W / float32(steps)
+									for i := range steps {
+										ratio := (float32(i) + 0.5) / float32(steps)
+										x := bounds.X + float32(i)*segW
+										w := segW + 0.5
+										if i == steps-1 {
+											w = bounds.X + bounds.W - x
+										}
+										p.Fill(ui.Rect{X: x, Y: bounds.Y, W: w, H: bounds.H}, heatmapLegendColor(ratio), 0)
+									}
+								})
+								border := ui.RGBA(17, 20, 26, 0.12)
+								if t.Dark {
+									border = ui.RGBA(255, 255, 255, 0.18)
+								}
+								p.Stroke(bounds, border, bounds.H/2, 0.75)
+							})
+							ui.Text(c, "高").FontSize(10).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+						})
 					})
-					ui.Text(c, "差异热力图").FontSize(11).FontWeight(500).TextColor(t.Text).SingleLine()
-				})
 				ui.Box(c).Grow(1)
 				switch {
 				case s.comparison.diffLoading:
@@ -703,31 +792,22 @@ func (s *application) previewCanvas(c *ui.Context) {
 						}
 					})
 				case s.comparison.diffReady:
-					dotColor := t.Success
-					if !s.comparison.diffMetrics.Identical {
-						if s.comparison.diffMetrics.SSIM < 0.90 {
-							dotColor = t.Warning
-						} else if s.comparison.diffMetrics.SSIM < 0.97 {
-							dotColor = accentForeground(t)
-						}
-					}
-					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).
-						Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics)).Children(func() {
-						ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
-						ui.Text(c, formatQualityMetricsSummary(s.comparison.diffMetrics)).
-							FontSize(11).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).SingleLine()
-					})
+					renderQualityBadge()
 				}
 				return
 			}
 			if comparing || s.comparison.mode == previewOriginal {
-				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5).Shrink(0)).Children(func() {
 					ui.Box(c).Size(6, 6).Radius(3).Background(metadataColor(c).Alpha(0.82))
 					ui.Text(c, "原图 · "+formatSize(s.file.size)).FontSize(11).FontWeight(500).
 						FontFeatures("tnum").TextColor(t.Text).SingleLine()
 				})
 			}
 			ui.Box(c).Grow(1)
+			if comparing && s.comparison.diffReady {
+				renderQualityBadge()
+				ui.Box(c).Grow(1)
+			}
 			if comparing || s.comparison.mode == previewResult {
 				dotColor := metadataColor(c).Alpha(0.82)
 				switch {
@@ -736,7 +816,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 				case s.result.OutputSize > s.result.OriginalSize:
 					dotColor = t.Warning
 				}
-				badge := styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5))
+				badge := styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5).Shrink(0))
 				if s.comparison.diffReady {
 					badge.Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics))
 				}

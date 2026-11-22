@@ -804,3 +804,298 @@ func TestComparisonDiffUnchangedOverwriteAndRetry(t *testing.T) {
 		t.Fatalf("completeOverwriteWithBackup must clear diff state and bump diffGen: %+v", s.comparison)
 	}
 }
+
+func testLossyComparisonDiffApp(t *testing.T) (*application, chan func()) {
+	t.Helper()
+	src := image.NewNRGBA(image.Rect(0, 0, 64, 48))
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 64; x++ {
+			src.SetNRGBA(x, y, color.NRGBA{
+				R: uint8(x * 4),
+				G: uint8(y * 5),
+				B: uint8((x*7 + y*11) % 256),
+				A: 255,
+			})
+		}
+	}
+	var origBuf, compBuf bytes.Buffer
+	if err := jpeg.Encode(&origBuf, src, &jpeg.Options{Quality: 95}); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&compBuf, src, &jpeg.Options{Quality: 30}); err != nil {
+		t.Fatal(err)
+	}
+	origBitmap, err := ui.DecodeBitmap(origBuf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	compBitmap, err := ui.DecodeBitmap(compBuf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newApplication()
+	updates := make(chan func(), 4)
+	s.dispatchUpdate = func(fn func()) { updates <- fn }
+	s.file = &selectedImage{
+		path:    "/tmp/lossy.jpg",
+		format:  "jpeg",
+		width:   64,
+		height:  48,
+		size:    int64(origBuf.Len()),
+		data:    origBuf.Bytes(),
+		preview: origBitmap,
+	}
+	s.completeCompression(context.Background(), &compress.Result{
+		Format:       "jpeg",
+		Width:        64,
+		Height:       48,
+		OriginalSize: int64(origBuf.Len()),
+		OutputSize:   int64(compBuf.Len()),
+		Data:         compBuf.Bytes(),
+	}, compBitmap, nil)
+	return s, updates
+}
+
+func TestComparisonModeShortcutsAndGuards(t *testing.T) {
+	s, updates := testLossyComparisonDiffApp(t)
+	// Start in previewOriginal so we also verify key 4 starts diff analysis.
+	s.comparison.mode = previewOriginal
+	tester := ui.NewTester(s.view, 880, 660)
+
+	if modeInfo, ok := tester.Access("预览模式"); !ok || modeInfo.Description != "快捷键 1-4 切换对比 / 原图 / 结果 / 差异" {
+		t.Fatalf("mode control must expose shortcut tooltip: ok=%v info=%+v", ok, modeInfo)
+	}
+	if s.comparison.diffLoading || s.comparison.diffReady {
+		t.Fatalf("diff must not have started while initially in previewOriginal: %+v", s.comparison)
+	}
+
+	// Cmd+1 must zoom to 1:1 without changing preview mode.
+	tester.Key(ui.Cmd, ui.Key1)
+	if s.comparison.scale != 1 || s.comparison.mode != previewOriginal {
+		t.Fatalf("Cmd+1 must zoom without switching mode: scale=%.2f mode=%d", s.comparison.scale, s.comparison.mode)
+	}
+
+	// Unmodified 1~4 switch between compare, original, result, and diff.
+	for _, step := range []struct {
+		key  ui.Key
+		want int
+	}{
+		{ui.Key3, previewResult},
+		{ui.Key4, previewDiff},
+		{ui.Key1, previewCompare},
+		{ui.Key2, previewOriginal},
+	} {
+		tester.Key(0, step.key)
+		if s.comparison.mode != step.want {
+			t.Fatalf("key %v must switch mode to %d, got %d", step.key, step.want, s.comparison.mode)
+		}
+	}
+
+	// Switching to previewDiff via key 4 must have triggered async diff computation.
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("pressing 4 for previewDiff must trigger diff analysis")
+	}
+	if !s.comparison.diffReady {
+		t.Fatalf("expected diff ready after key 4 analysis: err=%q", s.comparison.diffError)
+	}
+
+	// Shortcuts must be ignored while modal/locked.
+	for _, state := range []string{"busy", "settings", "confirmation"} {
+		t.Run(state, func(t *testing.T) {
+			s.comparison.mode = previewOriginal
+			s.busy = state == "busy"
+			s.settingsOpen = state == "settings"
+			s.confirmOverwrite = state == "confirmation"
+			tester.Frame()
+			for _, key := range []ui.Key{ui.Key1, ui.Key3, ui.Key4} {
+				tester.Key(0, key)
+			}
+			if s.comparison.mode != previewOriginal {
+				t.Fatalf("mode shortcuts must be ignored during %s, got mode %d", state, s.comparison.mode)
+			}
+			s.busy, s.settingsOpen, s.confirmOverwrite = false, false, false
+		})
+	}
+
+	// Shortcuts must be ignored when a text field holds focus (FocusTakesText).
+	textValue := ""
+	textTester := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Children(func() {
+			ui.TextInput(c.Key("shortcut-guard-input"), &textValue).Label("快捷键拦截输入框").Height(28).FillWidth()
+			ui.Box(c).Grow(1).FillWidth().Children(func() {
+				s.view(c)
+			})
+		})
+	}, 880, 700)
+	s.comparison.mode = previewOriginal
+	textTester.Frame()
+	if err := textTester.Click("快捷键拦截输入框"); err != nil {
+		t.Fatal(err)
+	}
+	if field, ok := textTester.AccessByRole(ui.RoleTextField, "快捷键拦截输入框"); !ok || !field.Focused {
+		t.Fatalf("expected text input to hold focus: ok=%v info=%+v", ok, field)
+	}
+	for _, key := range []ui.Key{ui.Key1, ui.Key3, ui.Key4} {
+		textTester.Key(0, key)
+	}
+	if s.comparison.mode != previewOriginal {
+		t.Fatalf("mode shortcuts must be ignored while FocusTakesText is true, got mode %d", s.comparison.mode)
+	}
+}
+
+func TestComparisonDiffHeatmapLegendRenderingAndTooltip(t *testing.T) {
+	// Verify gradient ramp stops match the heatmap palette.
+	if got, want := heatmapLegendColor(0), ui.Hex("#2084ec"); got != want {
+		t.Fatalf("ramp(0) = %+v, want %+v", got, want)
+	}
+	if got, want := heatmapLegendColor(0.25), ui.Hex("#22d3ee"); got != want {
+		t.Fatalf("ramp(0.25) = %+v, want %+v", got, want)
+	}
+	if got, want := heatmapLegendColor(0.50), ui.Hex("#facc15"); got != want {
+		t.Fatalf("ramp(0.50) = %+v, want %+v", got, want)
+	}
+	if got, want := heatmapLegendColor(1), ui.Hex("#f43f5e"); got != want {
+		t.Fatalf("ramp(1) = %+v, want %+v", got, want)
+	}
+
+	for _, dark := range []bool{false, true} {
+		name := "light"
+		if dark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := testComparisonApplication()
+			s.comparison.mode = previewDiff
+			s.comparison.diffReady = true
+			s.comparison.diffMetrics = compress.QualityMetrics{
+				SSIM: 0.962, PSNR: 32.4, ChangedPercent: 41.2, MaxChannelDiff: 12,
+			}
+			tester := ui.NewTester(func(c *ui.Context) {
+				if dark {
+					c.SetTheme(ui.DarkTheme())
+				} else {
+					c.SetTheme(ui.LightTheme())
+				}
+				s.view(c)
+			}, 880, 660)
+
+			for _, label := range []string{"差异热力图", "低", "高"} {
+				if !tester.HasText(label) {
+					t.Fatalf("diff legend must render text %q", label)
+				}
+			}
+			legendRect, ok := tester.Find("差异热力图")
+			if !ok {
+				t.Fatal("diff legend label must have visible bounds")
+			}
+			tester.Move(legendRect.X+legendRect.W/2, legendRect.Y+legendRect.H/2)
+			tester.Advance(time.Second)
+			wantTooltip := "蓝：几乎无差异 · 青：轻微差异 · 黄：中等差异 · 红：明显像素差异"
+			if !tester.HasText(wantTooltip) {
+				t.Fatalf("hovering diff legend must display tooltip %q, got texts %v", wantTooltip, tester.Texts())
+			}
+
+			lowRect, okLow := tester.Find("低")
+			highRect, okHigh := tester.Find("高")
+			if !okLow || !okHigh || highRect.X <= lowRect.X+lowRect.W+20 {
+				t.Fatalf("expected horizontal gradient bar between 低 and 高: low=%+v high=%+v", lowRect, highRect)
+			}
+			barStartX := lowRect.X + lowRect.W + 4
+			barEndX := highRect.X - 4
+			barY := int(lowRect.Y + lowRect.H/2)
+			img := tester.Image()
+			leftPx := img.RGBAAt(int(barStartX+3), barY)
+			rightPx := img.RGBAAt(int(barEndX-3), barY)
+			if int(leftPx.B) <= int(leftPx.R)+60 {
+				t.Fatalf("left end of gradient legend must be blue-dominant, got %+v", leftPx)
+			}
+			if int(rightPx.R) <= int(rightPx.B)+60 {
+				t.Fatalf("right end of gradient legend must be red/rose-dominant, got %+v", rightPx)
+			}
+		})
+	}
+}
+
+func TestComparisonProactiveQualityMetricsInCompareMode(t *testing.T) {
+	// Locked modal state in compare mode must not eagerly start diff computation.
+	lockedApp, _ := testLossyComparisonDiffApp(t)
+	lockedApp.confirmOverwrite = true
+	ui.NewTester(lockedApp.view, 880, 660)
+	if lockedApp.comparison.diffLoading || lockedApp.comparison.diffReady {
+		t.Fatalf("locked compare view must not proactively launch diff: %+v", lockedApp.comparison)
+	}
+
+	s, updates := testLossyComparisonDiffApp(t)
+	tester := ui.NewTester(s.view, 880, 660)
+	if s.comparison.mode != previewCompare {
+		t.Fatalf("expected initial previewCompare mode, got %d", s.comparison.mode)
+	}
+	if !s.comparison.diffLoading {
+		t.Fatal("compare mode must proactively start background SSIM/PSNR analysis")
+	}
+
+	select {
+	case fn := <-updates:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for proactive compare-mode diff analysis")
+	}
+	tester.Frame()
+
+	if !s.comparison.diffReady || s.comparison.diffMetrics.SSIM <= 0 || s.comparison.diffMetrics.PSNR <= 0 {
+		t.Fatalf("expected computed quality metrics in compare mode: ready=%v metrics=%+v err=%q",
+			s.comparison.diffReady, s.comparison.diffMetrics, s.comparison.diffError)
+	}
+	summary := formatQualityMetricsSummary(s.comparison.diffMetrics)
+	tooltip := formatQualityMetricsTooltip(s.comparison.diffMetrics)
+	if !tester.HasText(summary) {
+		t.Fatalf("compare mode must render quality metrics summary %q", summary)
+	}
+	qualRect, ok := tester.Find(summary)
+	if !ok {
+		t.Fatalf("compare quality badge must have visible bounds for %q", summary)
+	}
+	tester.Move(qualRect.X+qualRect.W/2, qualRect.Y+qualRect.H/2)
+	tester.Advance(time.Second)
+	if !tester.HasText(tooltip) {
+		t.Fatalf("hovering compare quality badge must display tooltip %q, got texts %v", tooltip, tester.Texts())
+	}
+
+	// Verify balanced non-overlapping layout between 原图 (left), quality badge (center), and 压缩后 (right).
+	for _, width := range []int{880, 760} {
+		tester.SetSize(width, 660)
+		tester.Frame()
+		origRect, okOrig := tester.Find("原图 · " + formatSize(s.file.size))
+		qualRect, okQual := tester.Find(summary)
+		resRect, okRes := tester.Find("压缩后 · " + formatSize(s.result.OutputSize))
+		if !okOrig || !okQual || !okRes {
+			t.Fatalf("width %d: all three compare badges must be visible: orig=%v qual=%v res=%v",
+				width, okOrig, okQual, okRes)
+		}
+		if origRect.X+origRect.W >= qualRect.X || qualRect.X+qualRect.W >= resRect.X {
+			t.Fatalf("width %d: compare badges must not overlap: orig=%+v qual=%+v res=%+v",
+				width, origRect, qualRect, resRect)
+		}
+	}
+
+	// Original/Result single-view modes should keep overlays uncluttered (no center quality badge).
+	tester.Key(0, ui.Key2)
+	if tester.HasText(summary) {
+		t.Fatal("original-only mode must not display the centered compare quality badge")
+	}
+	tester.Key(0, ui.Key3)
+	if tester.HasText(summary) {
+		t.Fatal("result-only mode must not display the centered compare quality badge")
+	}
+	// Switching to diff mode reuses the already-computed heatmap without starting a new job.
+	genBeforeDiff := s.comparison.diffGen
+	tester.Key(0, ui.Key4)
+	if s.comparison.diffGen != genBeforeDiff || !s.comparison.diffReady || !tester.HasText(summary) {
+		t.Fatalf("switching to diff mode must reuse proactive metrics and heatmap: gen=%d->%d ready=%v",
+			genBeforeDiff, s.comparison.diffGen, s.comparison.diffReady)
+	}
+}

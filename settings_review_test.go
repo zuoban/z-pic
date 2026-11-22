@@ -40,6 +40,14 @@ func settingsReviewApplication(t *testing.T, scene string) *application {
 		}
 		return app
 	}
+	if scene == "integrations" {
+		app.editor.section = settingsIntegrations
+		return app
+	}
+	if scene == "about" {
+		app.editor.section = settingsAbout
+		return app
+	}
 	app.editor.section = settingsPresets
 	switch scene {
 	case "naming", "naming-bottom", "large-text", "large-text-bottom", "high-contrast", "reduced-transparency":
@@ -79,7 +87,7 @@ func TestSettingsReviewRenders(t *testing.T) {
 	for _, mode := range []themeMode{themeLight, themeDark} {
 		for _, size := range [][2]int{{640, 600}, {724, 700}} {
 			for _, scene := range []string{
-				"general", "presets", "folder-watch", "naming", "invalid-name", "deleting", "many-presets",
+				"general", "presets", "folder-watch", "integrations", "about", "naming", "invalid-name", "deleting", "many-presets",
 				"dirty", "error", "busy", "large-text", "general-large-text",
 				"high-contrast", "reduced-transparency", "naming-bottom", "large-text-bottom",
 			} {

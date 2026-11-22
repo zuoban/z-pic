@@ -269,3 +269,200 @@ func TestSizeGrowthWarningAndHintsSingleAndBatch(t *testing.T) {
 		t.Fatalf("batch growth summary must show growth percent, total bytes grown, and hint: %q", strings.Join(batchTester.Texts(), " | "))
 	}
 }
+
+func TestJPEGBackgroundFillTip(t *testing.T) {
+	cases := []struct {
+		bg   string
+		want string
+	}{
+		{bg: "", want: "转为 JPEG 时透明区域将自动填充白色背景"},
+		{bg: "#ffffff", want: "转为 JPEG 时透明区域将自动填充白色背景"},
+		{bg: "#FFFFFF", want: "转为 JPEG 时透明区域将自动填充白色背景"},
+		{bg: "#000000", want: "转为 JPEG 时透明区域将自动填充黑色背景"},
+		{bg: "#1a2b3c", want: "转为 JPEG 时透明区域将自动填充 #1A2B3C 背景"},
+	}
+	for _, tc := range cases {
+		if got := jpegBackgroundFillTip(tc.bg); got != tc.want {
+			t.Fatalf("jpegBackgroundFillTip(%q) = %q, want %q", tc.bg, got, tc.want)
+		}
+	}
+
+	app := testSelectedApplication()
+	app.file.format = "png"
+	app.outputFormat = compress.OutputFormatJPEG
+	app.lossless = false
+	app.jpegBackground = "#000000"
+
+	tester := ui.NewTester(app.view, 980, 720)
+	if !tester.HasText("转为 JPEG 时透明区域将自动填充黑色背景") {
+		t.Fatalf("expected black background JPEG tip in view, texts=%q", strings.Join(tester.Texts(), " | "))
+	}
+
+	app.jpegBackground = "#123456"
+	tester.Frame()
+	if !tester.HasText("转为 JPEG 时透明区域将自动填充 #123456 背景") {
+		t.Fatalf("expected custom hex JPEG tip in view, texts=%q", strings.Join(tester.Texts(), " | "))
+	}
+
+	app.jpegBackground = ""
+	tester.Frame()
+	if !tester.HasText("转为 JPEG 时透明区域将自动填充白色背景") {
+		t.Fatalf("expected default white JPEG tip in view, texts=%q", strings.Join(tester.Texts(), " | "))
+	}
+}
+
+func TestQuickQualitySliderAndAutoCompressDrag(t *testing.T) {
+	app := testSelectedApplication()
+	app.presets = defaultPresets()
+	app.setScheme("均衡")
+	originalPresets := slices.Clone(app.presets)
+	saved, ok := app.activeSavedPreset()
+	if !ok || saved.quality != 80 {
+		t.Fatalf("expected saved 均衡 preset at quality 80, got ok=%v preset=%+v", ok, saved)
+	}
+
+	tester := ui.NewTester(app.view, 980, 720)
+	slider, found := tester.AccessByRole(ui.RoleSlider, "质量微调")
+	if !found || slider.Offscreen || slider.Disabled {
+		t.Fatalf("quality slider must render and be interactive when !lossless: found=%v node=%+v", found, slider)
+	}
+
+	app.lossless = true
+	tester.Frame()
+	if _, found := tester.AccessByRole(ui.RoleSlider, "质量微调"); found {
+		t.Fatal("quality slider must hide when lossless is enabled")
+	}
+	app.lossless = false
+	tester.Frame()
+	if _, found := tester.AccessByRole(ui.RoleSlider, "质量微调"); !found {
+		t.Fatal("quality slider must re-appear when lossless is disabled")
+	}
+
+	// Tweaking quality updates quality + PNGOptions, sets override, and never mutates presets.
+	app.quickSetQualityValue(72)
+	if app.quality != 72 || app.png != pngOptionsForQuality(72) || app.lossless {
+		t.Fatalf("quickSetQualityValue(72) mismatch: q=%v png=%+v lossless=%v", app.quality, app.png, app.lossless)
+	}
+	if !app.hasQuickOverrides() {
+		t.Fatal("quickSetQualityValue(72) must mark hasQuickOverrides() == true")
+	}
+	if !reflect.DeepEqual(app.presets, originalPresets) {
+		t.Fatal("quickSetQualityValue must not mutate stored presets")
+	}
+
+	// Returning to saved preset quality restores exact saved PNGOptions and clears override.
+	app.quickSetQualityValue(80)
+	if app.quality != 80 || app.png != saved.png || app.hasQuickOverrides() {
+		t.Fatalf("returning to saved preset quality 80 must restore exact PNGOptions and clear override: q=%v png=%+v want=%+v overridden=%v",
+			app.quality, app.png, saved.png, app.hasQuickOverrides())
+	}
+
+	// Also verify custom saved PNGOptions (distinct from pngOptionsForQuality(80)) are restored verbatim.
+	customPNG := compress.PNGOptions{MinQuality: 51, MaxQuality: 89, Colors: 222, Speed: 4}
+	app.presets[0].png = customPNG
+	app.setScheme(app.presets[0].name)
+	customSnapshot := slices.Clone(app.presets)
+	app.quickSetQualityValue(72)
+	if !app.hasQuickOverrides() || app.png == customPNG {
+		t.Fatalf("expected override away from custom PNGOptions, png=%+v overridden=%v", app.png, app.hasQuickOverrides())
+	}
+	app.quickSetQualityValue(80)
+	if app.png != customPNG || app.hasQuickOverrides() || !reflect.DeepEqual(app.presets, customSnapshot) {
+		t.Fatalf("returning to 80 must restore custom saved PNGOptions without mutating presets: png=%+v overridden=%v",
+			app.png, app.hasQuickOverrides())
+	}
+
+	// Dragging quality slider defers auto-compress until release.
+	dir := t.TempDir()
+	jpgPath := filepath.Join(dir, "drag.jpg")
+	writeTestJPEG(t, jpgPath, 80, 60, 90)
+
+	updates := make(chan func(), 16)
+	dragApp := newApplication()
+	dragApp.autoCompress = true
+	dragApp.dispatchUpdate = func(fn func()) { updates <- fn }
+	dragApp.load(jpgPath)
+	(<-updates)() // load done -> starts initial auto-compress
+	(<-updates)() // initial auto-compress done
+	if dragApp.busy || dragApp.result == nil {
+		t.Fatalf("expected initial auto-compress result, busy=%v message=%q", dragApp.busy, dragApp.message)
+	}
+
+	dragApp.quickSetQualityValueWithAutoCompress(65, false)
+	if dragApp.busy {
+		t.Fatal("quickSetQualityValueWithAutoCompress(65, false) must not start compression during drag")
+	}
+	if dragApp.quality != 65 || dragApp.result != nil || !dragApp.hasQuickOverrides() {
+		t.Fatalf("expected invalidated override during drag: q=%v result=%v overridden=%v",
+			dragApp.quality, dragApp.result, dragApp.hasQuickOverrides())
+	}
+	if len(updates) != 0 {
+		t.Fatalf("expected no queued compression updates during drag, got %d", len(updates))
+	}
+
+	dragApp.finishQuickQualityDrag()
+	if !dragApp.busy || dragApp.phase != "正在压缩图片" {
+		t.Fatalf("finishQuickQualityDrag() must trigger compression on release: busy=%v phase=%q", dragApp.busy, dragApp.phase)
+	}
+	(<-updates)()
+	if dragApp.busy || dragApp.result == nil || dragApp.result.Format != "jpeg" {
+		t.Fatalf("expected completed compression after drag release: busy=%v result=%+v message=%q",
+			dragApp.busy, dragApp.result, dragApp.message)
+	}
+}
+
+func TestQuickPresetOptionsSummaryOpensPresetSettings(t *testing.T) {
+	// Default 均衡 preset has empty presetProcessingSummary -> summary button absent.
+	plainApp := testSelectedApplication()
+	plainApp.presets = defaultPresets()
+	plainApp.setScheme("均衡")
+	plainTester := ui.NewTester(plainApp.view, 980, 720)
+	if _, ok := plainTester.AccessByRole(ui.RoleButton, "编辑预设高级选项"); ok {
+		t.Fatal("options summary button must not render when presetProcessingSummary is empty")
+	}
+
+	cases := []struct {
+		name  string
+		setup func(*application)
+	}{
+		{
+			name: "keep-icc-metadata",
+			setup: func(app *application) {
+				app.metadata = compress.MetadataKeepICC
+			},
+		},
+		{
+			name: "target-size",
+			setup: func(app *application) {
+				app.targetSizeBytes = 300 << 10
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := styleReviewApplication(t, "result")
+			tc.setup(app)
+			if presetProcessingSummary(app.activePresetSnapshot()) == "" {
+				t.Fatal("expected non-empty presetProcessingSummary for test setup")
+			}
+			source, result := app.file, app.result
+
+			tester := ui.NewTester(app.view, 980, 720)
+			btn, ok := tester.AccessByRole(ui.RoleButton, "编辑预设高级选项")
+			if !ok || btn.Offscreen || btn.Disabled {
+				t.Fatalf("options summary row must render as enabled button: ok=%v btn=%+v", ok, btn)
+			}
+			if err := tester.Click("编辑预设高级选项"); err != nil {
+				t.Fatalf("click options summary row: %v", err)
+			}
+			if !app.settingsOpen || app.editor == nil || app.editor.section != settingsPresets {
+				t.Fatalf("clicking options summary row must open settings to settingsPresets: open=%v editor=%+v",
+					app.settingsOpen, app.editor)
+			}
+			if app.editor.presets[app.editor.selected].name != app.scheme || app.file != source || app.result != result {
+				t.Fatal("opening preset settings from options summary must keep active preset, source image, and result")
+			}
+		})
+	}
+}

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -218,17 +221,85 @@ func TestTrayCheckUpdatesGuardsBusyAndConfirmDelete(t *testing.T) {
 		item.Click(item, nil)
 		defer app.cancelUpdateCheck()
 
-		if app.editor.section != settingsGeneral {
-			t.Fatalf("expected section=settingsGeneral, got %v", app.editor.section)
+		if app.editor.section != settingsAbout {
+			t.Fatalf("expected section=settingsAbout, got %v", app.editor.section)
 		}
 		if app.editor.confirmDelete {
-			t.Fatal("confirmDelete must be cleared when switching to general section from tray")
+			t.Fatal("confirmDelete must be cleared when switching to about section from tray")
 		}
 		if app.settingsDraftLocked() {
-			t.Fatal("general settings must not remain locked after tray check-updates")
+			t.Fatal("about settings must not remain locked after tray check-updates")
 		}
 		if app.updateState != updateChecking {
 			t.Fatalf("expected updateState=updateChecking, got %v", app.updateState)
 		}
 	})
+}
+
+func TestTrayTemplateIconMonochromeAntialiased(t *testing.T) {
+	data := buildTrayTemplateIconPNG()
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("png.Decode(buildTrayTemplateIconPNG()): %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != 32 || bounds.Dy() != 32 {
+		t.Fatalf("expected 32x32 tray icon, got %dx%d", bounds.Dx(), bounds.Dy())
+	}
+
+	var opaqueCount, aaCount, transparentCount int
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			px := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			switch {
+			case px.A == 0:
+				transparentCount++
+			case px.A == 255:
+				opaqueCount++
+			default:
+				aaCount++
+			}
+			if px.A > 0 && (px.R != 0 || px.G != 0 || px.B != 0) {
+				t.Fatalf("non-transparent pixel (%d,%d) must be pure black monochrome, got rgba(%d,%d,%d,%d)",
+					x, y, px.R, px.G, px.B, px.A)
+			}
+		}
+	}
+
+	if opaqueCount < 80 {
+		t.Fatalf("expected crisp opaque icon strokes, got only %d opaque pixels", opaqueCount)
+	}
+	if aaCount < 40 {
+		t.Fatalf("expected smooth anti-aliased edge pixels (0 < A < 255), got only %d", aaCount)
+	}
+	if transparentCount < 400 {
+		t.Fatalf("expected transparent background/interior negative space, got only %d transparent pixels", transparentCount)
+	}
+
+	// Outer corners and perimeter inset must remain fully transparent.
+	for _, pt := range [][2]int{
+		{0, 0}, {1, 0}, {0, 1}, {1, 1},
+		{31, 0}, {30, 0}, {31, 1}, {30, 1},
+		{0, 31}, {1, 31}, {0, 30}, {1, 30},
+		{31, 31}, {30, 31}, {31, 30}, {30, 30},
+		{16, 0}, {16, 31}, {0, 16}, {31, 16},
+	} {
+		px := color.NRGBAModel.Convert(img.At(pt[0], pt[1])).(color.NRGBA)
+		if px.A != 0 {
+			t.Fatalf("outer background/corner pixel (%d,%d) must be transparent, got A=%d", pt[0], pt[1], px.A)
+		}
+	}
+
+	// Interior breathing space between frame and brackets should stay clear,
+	// while the center compression accent is solid.
+	for _, pt := range [][2]int{{7, 7}, {24, 24}, {24, 7}, {7, 24}} {
+		px := color.NRGBAModel.Convert(img.At(pt[0], pt[1])).(color.NRGBA)
+		if px.A != 0 {
+			t.Fatalf("interior negative space (%d,%d) should be transparent, got A=%d", pt[0], pt[1], px.A)
+		}
+	}
+	center := color.NRGBAModel.Convert(img.At(16, 16)).(color.NRGBA)
+	if center.A != 255 {
+		t.Fatalf("expected solid center compression accent at (16,16), got A=%d", center.A)
+	}
 }

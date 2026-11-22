@@ -254,3 +254,68 @@ func TestFloatingBoundsRemainOnTheirDisplay(t *testing.T) {
 		}
 	}
 }
+
+func TestFloatingExpandedFooterIconButtonsAndBreathingRoom(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "photo-1.png")
+	output := filepath.Join(root, "photo-1-compressed.png")
+	writeTestPNG(t, source, 40, 20, true)
+	writeTestPNG(t, output, 40, 20, true)
+
+	app := floatingTestApplication()
+	app.batch.items[0].path = source
+	app.batch.items[0].absPath = source
+	app.batch.items[0].relPath = "photo-1.png"
+	app.batch.items[0].savedPath = output
+	app.batch.items[0].status = batchDone
+	app.batch.items[0].outputSize = 512
+	app.floating.expanded = true
+
+	tester := ui.NewTester(app.floatingView, floatingExpandedWidth, floatingExpandedHeight)
+
+	// Main navigation buttons stay legible and accessible.
+	for _, label := range []string{"继续压缩", "查看队列", "预览选中"} {
+		btn, ok := tester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.Offscreen || btn.Bounds.X < 0 || btn.Bounds.X+btn.Bounds.W > floatingExpandedWidth {
+			t.Fatalf("footer main button %q must be visible inside 480px: %+v", label, btn)
+		}
+	}
+
+	// Utility actions render as compact 28x28 icon-only controls with full accessible labels.
+	for _, label := range []string{"复制图片", "下载位置"} {
+		btn, ok := tester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.Offscreen {
+			t.Fatalf("footer icon button %q must be accessible as RoleButton: %+v", label, btn)
+		}
+		if btn.Bounds.W != 28 || btn.Bounds.H != 28 {
+			t.Fatalf("footer icon button %q must be 28x28, got %.0fx%.0f", label, btn.Bounds.W, btn.Bounds.H)
+		}
+		if btn.Bounds.X < 0 || btn.Bounds.X+btn.Bounds.W > floatingExpandedWidth {
+			t.Fatalf("footer icon button %q overflowed 480px footer: %+v", label, btn)
+		}
+	}
+
+	drag, ok := tester.Access("拖出图片")
+	if !ok || drag.Offscreen {
+		t.Fatalf("footer drag icon must be accessible: %+v", drag)
+	}
+	if drag.Bounds.W != 28 || drag.Bounds.H != 28 {
+		t.Fatalf("footer drag icon must be 28x28, got %.0fx%.0f", drag.Bounds.W, drag.Bounds.H)
+	}
+	if drag.Bounds.X < 0 || drag.Bounds.X+drag.Bounds.W > floatingExpandedWidth {
+		t.Fatalf("footer drag icon overflowed 480px footer: %+v", drag)
+	}
+
+	// Verify strict left-to-right ordering, no overlaps, and breathing room between
+	// main navigation controls and the icon utility cluster.
+	preview, _ := tester.AccessByRole(ui.RoleButton, "预览选中")
+	copyBtn, _ := tester.AccessByRole(ui.RoleButton, "复制图片")
+	downloads, _ := tester.AccessByRole(ui.RoleButton, "下载位置")
+	if gap := copyBtn.Bounds.X - (preview.Bounds.X + preview.Bounds.W); gap < 24 {
+		t.Fatalf("expected generous breathing room between navigation and icon group, got %.1fpx", gap)
+	}
+	if copyBtn.Bounds.X+copyBtn.Bounds.W > drag.Bounds.X || drag.Bounds.X+drag.Bounds.W > downloads.Bounds.X {
+		t.Fatalf("footer utility icons must not overlap: copy=%+v drag=%+v downloads=%+v",
+			copyBtn.Bounds, drag.Bounds, downloads.Bounds)
+	}
+}

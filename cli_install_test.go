@@ -566,6 +566,9 @@ func TestSettingsCLIConflictShowsRefreshButtonAndClearsMessage(t *testing.T) {
 	app.editor.cliFailed = true
 
 	tester := ui.NewTester(app.settingsView, 724, 960)
+	if err := tester.Click("系统集成"); err != nil {
+		t.Fatalf("switching to integrations tab failed: %v", err)
+	}
 	if !tester.HasText("重新检测") {
 		t.Fatal("expected 重新检测 button for cliConflict state")
 	}

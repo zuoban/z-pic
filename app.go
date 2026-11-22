@@ -9,10 +9,12 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"image"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,8 @@ const (
 	openFileCoalesceDelay = 60 * time.Millisecond
 	// A save dialog suggestion is advisory; actual saving uses O_EXCL.
 	maxSuggestedPathChecks = 1000
+	quickQualityMin        = 10
+	quickQualityMax        = 100
 )
 
 type openFileCoalescer struct {
@@ -402,6 +406,133 @@ func fileDropData(paths []string) (transfer.Data, bool) {
 	}
 	data, err := transfer.FileData(cleaned...)
 	return data, err == nil
+}
+
+func pngOptionsForQuality(q int) compress.PNGOptions {
+	q = max(1, min(100, q))
+	for _, level := range imageQualityLevels {
+		if int(level.quality) == q {
+			return level.png
+		}
+	}
+	lowest := imageQualityLevels[0]
+	if float64(q) < lowest.quality {
+		colors := max(16, int(math.Round(float64(lowest.png.Colors)*float64(q)/lowest.quality)))
+		minQ := max(0, q-20)
+		return compress.PNGOptions{
+			MinQuality: minQ,
+			MaxQuality: max(1, q),
+			Colors:     min(256, colors),
+			Speed:      lowest.png.Speed,
+		}
+	}
+	for i := 0; i < len(imageQualityLevels)-1; i++ {
+		lo, hi := imageQualityLevels[i], imageQualityLevels[i+1]
+		if float64(q) > hi.quality {
+			continue
+		}
+		t := (float64(q) - lo.quality) / (hi.quality - lo.quality)
+		minQ := int(math.Round(float64(lo.png.MinQuality) + t*float64(hi.png.MinQuality-lo.png.MinQuality)))
+		maxQ := int(math.Round(float64(lo.png.MaxQuality) + t*float64(hi.png.MaxQuality-lo.png.MaxQuality)))
+		colors := int(math.Round(float64(lo.png.Colors) + t*float64(hi.png.Colors-lo.png.Colors)))
+		speed := int(math.Round(float64(lo.png.Speed) + t*float64(hi.png.Speed-lo.png.Speed)))
+		minQ = max(0, min(100, minQ))
+		maxQ = max(max(1, minQ), min(100, maxQ))
+		return compress.PNGOptions{
+			MinQuality: minQ,
+			MaxQuality: maxQ,
+			Colors:     max(2, min(256, colors)),
+			Speed:      max(1, min(11, speed)),
+		}
+	}
+	return imageQualityLevels[len(imageQualityLevels)-1].png
+}
+
+func (s *application) quickSetQualityValue(q int) {
+	s.quickSetQualityValueWithAutoCompress(q, true)
+}
+
+func (s *application) quickSetQualityValueWithAutoCompress(q int, triggerAutoCompress bool) {
+	if s.modalOpen() {
+		return
+	}
+	q = max(quickQualityMin, min(quickQualityMax, q))
+	targetQuality := float64(q)
+	targetPNG := pngOptionsForQuality(q)
+	if saved, ok := s.activeSavedPreset(); ok && !saved.lossless && saved.quality == targetQuality {
+		targetPNG = saved.png
+	}
+	if !s.lossless && s.quality == targetQuality && s.png == targetPNG {
+		return
+	}
+	wasLossless := s.lossless
+	s.lossless = false
+	s.quality, s.png = targetQuality, targetPNG
+	if triggerAutoCompress {
+		s.applyQuickAdjustment(wasLossless)
+		return
+	}
+	s.invalidateResult()
+	if wasLossless {
+		s.configureBatchPresetOutput()
+	}
+}
+
+func (s *application) finishQuickQualityDrag() {
+	if s.autoCompress && s.batch == nil && s.file != nil && !s.modalOpen() {
+		s.startCompression()
+	}
+}
+
+func localFileDropPaths(data transfer.Data) ([]string, bool) {
+	items := data.Items()
+	if len(items) == 0 {
+		return nil, false
+	}
+	for _, item := range items {
+		if !slices.Contains(item.Formats(), transfer.FileList) {
+			return nil, false
+		}
+	}
+	paths, err := data.Files()
+	if err != nil || len(paths) == 0 {
+		return nil, false
+	}
+	return paths, true
+}
+
+func (s *application) receiveMainWindowDrop(data transfer.Data) {
+	if s.closed || s.dialogOpen() || s.draggingOut {
+		return
+	}
+	if paths, ok := localFileDropPaths(data); ok {
+		filtered := make([]string, 0, len(paths))
+		for _, path := range paths {
+			if s.isDragStagedPath(path) {
+				continue
+			}
+			filtered = append(filtered, path)
+		}
+		if len(filtered) == 0 {
+			return
+		}
+		if s.busy || len(s.dropQueue) > 0 {
+			if queued, ok := fileDropData(filtered); ok {
+				s.receiveDrop(queued)
+			}
+			return
+		}
+		if s.batch == nil && s.file != nil {
+			combined := make([]string, 0, len(filtered)+1)
+			combined = append(combined, s.file.path)
+			combined = append(combined, filtered...)
+			s.loadBatch(combined, false)
+			return
+		}
+		s.openPaths(filtered)
+		return
+	}
+	s.receiveDrop(data)
 }
 
 func (s *application) dropFiles(paths []string) {
@@ -902,6 +1033,13 @@ func (s *application) previewInQuickLook(path string) {
 }
 func (s *application) revealFileInFolder(path string) {
 	if path == "" || s.modalOpen() {
+		return
+	}
+	s.revealFileInFolderDirect(path)
+}
+
+func (s *application) revealFileInFolderDirect(path string) {
+	if path == "" {
 		return
 	}
 	if _, err := os.Lstat(path); err != nil {

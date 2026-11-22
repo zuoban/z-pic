@@ -89,6 +89,9 @@ func TestSettingsPresetSelectionDraftLifecycle(t *testing.T) {
 func TestSettingsPresetSelectionTracksMaintenance(t *testing.T) {
 	app := testSelectedApplication()
 	tester := openTestSettings(t, app)
+	if _, ok := tester.AccessByRole(ui.RoleMenuButton, "选择预设"); ok {
+		t.Fatal("preset management section must not render the redundant top preset picker")
+	}
 	if err := tester.Click("新增预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +102,9 @@ func TestSettingsPresetSelectionTracksMaintenance(t *testing.T) {
 	if app.editor.active != app.editor.selected || app.scheme != "均衡" {
 		t.Fatal("the visible activation action must select the edited draft without publishing")
 	}
+	if err := tester.Click("通用"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tester.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,11 +112,14 @@ func TestSettingsPresetSelectionTracksMaintenance(t *testing.T) {
 		t.Fatal("the picker must include renamed drafts and mark the pending active preset")
 	}
 	tester.Key(0, ui.KeyEscape)
+	if err := tester.Click("预设"); err != nil {
+		t.Fatal(err)
+	}
 	if err := tester.Click("删除预设"); err != nil {
 		t.Fatal(err)
 	}
-	if picker, ok := tester.AccessByRole(ui.RoleMenuButton, "选择预设"); !ok || !picker.Disabled {
-		t.Fatal("pending deletion must disable preset selection")
+	if navTab, ok := tester.AccessByRole(ui.RoleTab, "通用"); !ok || !navTab.Disabled {
+		t.Fatal("pending deletion must disable section navigation")
 	}
 	app.selectSettingsPreset(0)
 	if app.editor.active != 3 {
@@ -121,6 +130,9 @@ func TestSettingsPresetSelectionTracksMaintenance(t *testing.T) {
 	}
 	if app.editor.active >= len(app.editor.presets) {
 		t.Fatal("deleting the active draft must choose a valid fallback")
+	}
+	if err := tester.Click("通用"); err != nil {
+		t.Fatal(err)
 	}
 	if err := tester.Click("选择预设"); err != nil {
 		t.Fatal(err)
@@ -140,19 +152,23 @@ func TestSettingsPresetSelectionFitsLongNames(t *testing.T) {
 			app.setSettingsOpen(true)
 			app.editor.section = section
 			tester := ui.NewTester(app.settingsView, width, 600)
-			picker, ok := tester.AccessByRole(ui.RoleMenuButton, "选择预设")
-			if !ok || picker.Offscreen || picker.Bounds.X < 0 ||
-				picker.Bounds.X+picker.Bounds.W > float32(width) {
-				t.Fatalf("long names must fit at width %d: %+v", width, picker)
-			}
-			if err := tester.Click("选择预设"); err != nil {
-				t.Fatal(err)
-			}
-			if item, ok := tester.AccessByRole(ui.RoleMenuItemRadio, name); !ok || !item.Checked {
-				t.Fatal("long names must keep their complete accessible labels")
-			}
-			tester.Key(0, ui.KeyEscape)
-			if section == settingsPresets {
+			if section == settingsGeneral {
+				picker, ok := tester.AccessByRole(ui.RoleMenuButton, "选择预设")
+				if !ok || picker.Offscreen || picker.Bounds.X < 0 ||
+					picker.Bounds.X+picker.Bounds.W > float32(width) {
+					t.Fatalf("long names must fit at width %d: %+v", width, picker)
+				}
+				if err := tester.Click("选择预设"); err != nil {
+					t.Fatal(err)
+				}
+				if item, ok := tester.AccessByRole(ui.RoleMenuItemRadio, name); !ok || !item.Checked {
+					t.Fatal("long names must keep their complete accessible labels")
+				}
+				tester.Key(0, ui.KeyEscape)
+			} else {
+				if _, ok := tester.AccessByRole(ui.RoleMenuButton, "选择预设"); ok {
+					t.Fatalf("preset section must not render redundant picker at width %d", width)
+				}
 				if err := tester.Click("编辑预设：体积优先"); err != nil {
 					t.Fatal(err)
 				}

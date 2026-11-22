@@ -118,18 +118,26 @@ func TestStyleFloatingExpandedFooterFitsWithoutTruncation(t *testing.T) {
 
 func TestStyleGeneralShortcutsOddRowAlignsToLeftColumn(t *testing.T) {
 	app := newApplication()
-	if !app.clipboardPNGCompressionAvailable() {
-		t.Skip("7th clipboard compression shortcut is platform-specific")
-	}
 	app.setSettingsOpen(true)
+	app.editor.section = settingsAbout
 	tester := ui.NewTester(app.settingsView, 724, 700)
 	firstKey, ok1 := tester.Access(shortcutLabel("O"))
-	oddKey, ok2 := tester.Access(shortcutLabel("⇧V"))
+	previewKey, ok2 := tester.Access("1 ~ 4")
 	if !ok1 || !ok2 {
-		t.Fatalf("expected first and odd-row shortcut keycaps: ok1=%v ok2=%v", ok1, ok2)
+		t.Fatalf("expected first and preview-mode shortcut keycaps: ok1=%v ok2=%v", ok1, ok2)
 	}
-	if math.Abs(float64((oddKey.Bounds.X+oddKey.Bounds.W)-(firstKey.Bounds.X+firstKey.Bounds.W))) > 0.5 {
-		t.Fatalf("odd shortcut row must stay aligned in the left column: first=%v odd=%v", firstKey.Bounds, oddKey.Bounds)
+	if math.Abs(float64((previewKey.Bounds.X+previewKey.Bounds.W)-(firstKey.Bounds.X+firstKey.Bounds.W))) > 0.5 {
+		t.Fatalf("left-column shortcut row must stay aligned in the left column: first=%v preview=%v", firstKey.Bounds, previewKey.Bounds)
+	}
+	if app.clipboardPNGCompressionAvailable() {
+		secondKey, ok3 := tester.Access(shortcutLabel("V"))
+		clipKey, ok4 := tester.Access(shortcutLabel("⇧V"))
+		if !ok3 || !ok4 {
+			t.Fatalf("expected right-column shortcut keycaps: ok3=%v ok4=%v", ok3, ok4)
+		}
+		if math.Abs(float64((clipKey.Bounds.X+clipKey.Bounds.W)-(secondKey.Bounds.X+secondKey.Bounds.W))) > 0.5 {
+			t.Fatalf("right-column shortcut row must stay aligned in the right column: second=%v clip=%v", secondKey.Bounds, clipKey.Bounds)
+		}
 	}
 }
 

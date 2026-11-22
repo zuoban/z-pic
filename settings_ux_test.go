@@ -13,7 +13,7 @@ func TestSettingsHeadingsAndCurrentPresetValue(t *testing.T) {
 	app := newApplication()
 	app.setSettingsOpen(true)
 	tester := ui.NewTester(app.settingsView, 640, 600)
-	for _, name := range []string{"设置", "外观", "快捷键"} {
+	for _, name := range []string{"设置", "外观", "工作流"} {
 		heading, ok := tester.AccessByRole(ui.RoleHeading, name)
 		if !ok || heading.Level == 0 {
 			t.Fatalf("%q must be a navigable heading: %+v", name, heading)
@@ -22,6 +22,24 @@ func TestSettingsHeadingsAndCurrentPresetValue(t *testing.T) {
 	picker, _ := tester.AccessByRole(ui.RoleMenuButton, "选择预设")
 	if picker.Value != "均衡" {
 		t.Fatalf("the picker must expose the current complete value: %+v", picker)
+	}
+	if err := tester.Click("系统集成"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"设置", "命令行工具", "访达右键快捷操作"} {
+		heading, ok := tester.AccessByRole(ui.RoleHeading, name)
+		if !ok || heading.Level == 0 {
+			t.Fatalf("%q must be a navigable heading on integrations tab: %+v", name, heading)
+		}
+	}
+	if err := tester.Click("关于"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"设置", "快捷键", "关于与更新"} {
+		heading, ok := tester.AccessByRole(ui.RoleHeading, name)
+		if !ok || heading.Level == 0 {
+			t.Fatalf("%q must be a navigable heading on about tab: %+v", name, heading)
+		}
 	}
 }
 
@@ -260,7 +278,7 @@ func TestSettingsDirtyFeedbackTracksRealChanges(t *testing.T) {
 
 func TestSettingsLargeTextKeepsControlsAndContentReachable(t *testing.T) {
 	for _, size := range [][2]int{{640, 600}, {724, 700}} {
-		for _, section := range []settingsSection{settingsGeneral, settingsPresets} {
+		for _, section := range []settingsSection{settingsGeneral, settingsPresets, settingsAbout} {
 			app := newApplication()
 			app.setSettingsOpen(true)
 			app.editor.section = section
@@ -280,20 +298,137 @@ func TestSettingsLargeTextKeepsControlsAndContentReachable(t *testing.T) {
 				t.Fatal("the settings heading must honor text scaling")
 			}
 			save, _ := tester.AccessByRole(ui.RoleButton, "保存")
-			tester.Scroll(float32(size[0])/2, float32(size[1])/2, 0, 2000)
+			tester.Scroll(float32(size[0])*0.7, float32(size[1])/2, 0, 2000)
 			nextSave, _ := tester.AccessByRole(ui.RoleButton, "保存")
 			nextHeading, _ := tester.AccessByRole(ui.RoleHeading, "设置")
 			if nextSave.Bounds != save.Bounds || nextHeading.Bounds != heading.Bounds {
 				t.Fatal("scrolling large content must keep navigation and actions fixed")
 			}
-			label := "打开设置"
-			if section == settingsPresets {
+			label := "下载目录"
+			switch section {
+			case settingsPresets:
 				label = "元数据"
+			case settingsAbout:
+				label = "打开设置"
 			}
 			info, ok := tester.AccessByRole(ui.RoleText, label)
 			if !ok || info.Offscreen || info.Bounds.Y+info.Bounds.H > save.Bounds.Y-12 {
 				t.Fatalf("large-text content must remain reachable above the footer: %s %+v", label, info)
 			}
+		}
+	}
+}
+
+func TestSettingsSidebarNavigationPreservesDraftsAndRemovesRedundantPicker(t *testing.T) {
+	app := testSelectedApplication()
+	app.setSettingsOpen(true)
+	tester := ui.NewTester(app.settingsView, 780, 680)
+
+	// Make draft changes across general & preset selection.
+	if err := tester.Click("深色"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("选择预设"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.ChooseMenuItem("画质优先"); err != nil {
+		t.Fatal(err)
+	}
+	if !tester.HasText("保存后使用：画质优先") {
+		t.Fatal("general tab must show pending preset status in footer")
+	}
+
+	steps := []struct {
+		label      string
+		section    settingsSection
+		wantText   string
+		wantPicker bool
+	}{
+		{label: "预设", section: settingsPresets, wantText: "图片质量", wantPicker: false},
+		{label: "文件夹监听", section: settingsFolderWatch, wantText: "监听预设", wantPicker: false},
+		{label: "系统集成", section: settingsIntegrations, wantText: "命令行工具", wantPicker: false},
+		{label: "关于", section: settingsAbout, wantText: "切换对比 / 原图 / 结果 / 差异", wantPicker: false},
+		{label: "通用", section: settingsGeneral, wantText: "外观", wantPicker: true},
+	}
+
+	for _, step := range steps {
+		if err := tester.Click(step.label); err != nil {
+			t.Fatalf("clicking sidebar item %q failed: %v", step.label, err)
+		}
+		if app.editor.section != step.section {
+			t.Fatalf("after clicking %q: section=%v, want %v", step.label, app.editor.section, step.section)
+		}
+		tab, ok := tester.AccessByRole(ui.RoleTab, step.label)
+		if !ok || !tab.Selected || tab.Offscreen || tab.Bounds.X < 0 || tab.Bounds.X+tab.Bounds.W > settingsSidebarWidth {
+			t.Fatalf("sidebar item %q must be selected inside the left sidebar: %+v", step.label, tab)
+		}
+		if !tester.HasText(step.wantText) {
+			t.Fatalf("section %q missing expected content %q", step.label, step.wantText)
+		}
+		_, hasPicker := tester.AccessByRole(ui.RoleMenuButton, "选择预设")
+		if hasPicker != step.wantPicker {
+			t.Fatalf("section %q picker visibility = %v, want %v", step.label, hasPicker, step.wantPicker)
+		}
+		if !tester.HasText("保存后使用：画质优先") {
+			t.Fatalf("section %q must keep pending preset status visible in shared footer", step.label)
+		}
+		if step.section == settingsAbout && !tester.HasText("1 ~ 4") {
+			t.Fatal("about section shortcuts must include 1 ~ 4 preview mode keycap")
+		}
+		if step.section == settingsPresets {
+			replaceTestPresetName(t, tester, "我的画质预设")
+			if err := tester.Click("设为当前预设"); err != nil && app.editor.active != app.editor.selected {
+				t.Fatal(err)
+			}
+			// Keep name reverted to verify draft preservation cleanly across all tabs.
+			replaceTestPresetName(t, tester, "画质优先")
+		}
+	}
+
+	if app.editor.theme != themeDark || app.editor.presets[app.editor.active].name != "画质优先" {
+		t.Fatalf("switching through all 5 sections must preserve draft state: theme=%q active=%q",
+			app.editor.theme, app.editor.presets[app.editor.active].name)
+	}
+}
+
+func TestSettingsNarrowLayoutFitsAllNavigationTabs(t *testing.T) {
+	const width, height = 420, 680
+	app := testSelectedApplication()
+	app.setSettingsOpen(true)
+	tester := ui.NewTester(app.settingsView, width, height)
+
+	navLabels := []string{"通用", "预设", "文件夹监听", "系统集成", "关于"}
+	var prevRight float32
+	for index, label := range navLabels {
+		tab, ok := tester.AccessByRole(ui.RoleTab, label)
+		if !ok || tab.Offscreen || tab.Bounds.W <= 0 || tab.Bounds.H <= 0 ||
+			tab.Bounds.X < 0 || tab.Bounds.X+tab.Bounds.W > width {
+			t.Fatalf("narrow nav tab %q must fit within %dpx without clipping: %+v", label, width, tab)
+		}
+		if index > 0 && tab.Bounds.X < prevRight {
+			t.Fatalf("narrow nav tab %q overlaps previous tab: prevRight=%.1f tab=%+v", label, prevRight, tab.Bounds)
+		}
+		prevRight = tab.Bounds.X + tab.Bounds.W
+	}
+
+	for _, step := range []struct {
+		label   string
+		section settingsSection
+	}{
+		{"预设", settingsPresets},
+		{"文件夹监听", settingsFolderWatch},
+		{"系统集成", settingsIntegrations},
+		{"关于", settingsAbout},
+		{"通用", settingsGeneral},
+	} {
+		if err := tester.Click(step.label); err != nil {
+			t.Fatalf("narrow click %q failed: %v", step.label, err)
+		}
+		if app.editor.section != step.section {
+			t.Fatalf("narrow click %q: section=%v, want %v", step.label, app.editor.section, step.section)
+		}
+		if _, hasPicker := tester.AccessByRole(ui.RoleMenuButton, "选择预设"); hasPicker != (step.section == settingsGeneral) {
+			t.Fatalf("narrow section %q picker visibility = %v, want %v", step.label, hasPicker, step.section == settingsGeneral)
 		}
 	}
 }

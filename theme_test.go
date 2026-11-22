@@ -276,7 +276,7 @@ func TestThemeAppliesAcrossMainSettingsAndFloatingViews(t *testing.T) {
 		if got := floatingTester.Image().RGBAAt(2, 2); got != want {
 			t.Fatalf("%s: floating window background = %+v, want %+v", context, got, want)
 		}
-		if got := settingsTester.Image().RGBAAt(4, 180); got != want {
+		if got := settingsTester.Image().RGBAAt(720, 180); got != want {
 			t.Fatalf("%s: settings window background = %+v, want %+v", context, got, want)
 		}
 	}
@@ -527,7 +527,7 @@ func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
 	if got := floatingTester.Image().RGBAAt(2, 2); got.A != 0 {
 		t.Fatalf("floating root must be transparent when glass vibrancy is enabled, got %+v", got)
 	}
-	if got := settingsTester.Image().RGBAAt(4, 180); got.A != 0 {
+	if got := settingsTester.Image().RGBAAt(720, 180); got.A != 0 {
 		t.Fatalf("settings root must be transparent when glass vibrancy is enabled, got %+v", got)
 	}
 	// Preview panel surface should be translucent over the glass root.
@@ -561,7 +561,7 @@ func TestLiquidGlassVibrancyAndReduceTransparencyFallback(t *testing.T) {
 	if got := floatingTester.Image().RGBAAt(2, 2); got != darkBg {
 		t.Fatalf("dark ReduceTransparency fallback floating background = %+v, want %+v", got, darkBg)
 	}
-	if got := settingsTester.Image().RGBAAt(4, 180); got != darkBg {
+	if got := settingsTester.Image().RGBAAt(720, 180); got != darkBg {
 		t.Fatalf("dark ReduceTransparency fallback settings background = %+v, want %+v", got, darkBg)
 	}
 

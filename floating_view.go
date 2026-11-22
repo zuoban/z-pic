@@ -424,9 +424,9 @@ func (s *application) floatingView(c *ui.Context) {
 				s.floatingFeedback(c)
 			})
 			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c)).Shrink(0)
-			ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(6).Background(sidebarSurface(c)).Shrink(0).
+			ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(8).Background(sidebarSurface(c)).Shrink(0).
 				Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
-				ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					compressLabel, canCompress := s.floatingCompressAction()
 					compressIcon := toolbarCompressIcon
 					switch compressLabel {
@@ -441,19 +441,20 @@ func (s *application) floatingView(c *ui.Context) {
 						Tooltip("直接按当前预设压缩队列图片").
 						OnClick(s.compressFromFloating)
 					ui.Box(c).Size(1, 14).Margin(0, 3).Background(hairlineDivider(c))
-					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 7).
+					ghostButton(c, "floating-show-main", "查看队列", 28, false).FontSize(12).Padding(0, 8).
 						OnClick(s.showMainWindow)
 					item, selected := s.floatingSelectedImage()
-					ghostButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 7).
+					ghostButton(c, "floating-preview", "预览选中", 28, !selected || item.invalidInput || s.modalOpen()).FontSize(12).Padding(0, 8).
 						Tooltip("在主窗口查看所选图片，也可双击图片或按 Enter").
 						OnClick(s.openFloatingSelection)
+				})
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Shrink(0).Children(func() {
+					ui.Box(c).Size(1, 14).Margin(0, 3).Background(hairlineDivider(c))
 					if s.canCopyFloatingSelection() {
-						ghostButton(c, "floating-copy", "复制", 28, false).FontSize(12).Padding(0, 7).
-							Label("复制图片").Tooltip("复制所选图片的压缩结果到剪贴板").
-							OnClick(s.copyFloatingSelection)
-						dragExportControl(c, "floating-drag", "拖出图片", "拖出",
+						floatingFooterIconButton(c, "floating-copy", "复制图片",
+							"复制所选图片的压缩结果到剪贴板", actionCopyIcon, s.copyFloatingSelection)
+						floatingFooterDragIcon(c, "floating-drag", "拖出图片",
 							"按住将所选压缩结果拖到 Finder 或其他应用",
-							28, 12, 500, false,
 							func() transfer.Data {
 								sel, ok := s.floatingSelectedImage()
 								if !ok {
@@ -462,11 +463,9 @@ func (s *application) floatingView(c *ui.Context) {
 								return s.floatingItemDragExportData(sel)
 							}, s.dragExportOptions())
 					}
+					floatingFooterIconButton(c, "floating-downloads", "下载位置",
+						"打开网页原图下载文件夹", actionFolderIcon, s.openDownloadedImagesDir)
 				})
-				iconLabelButton(c, ghostButton(c, "floating-downloads", "", 28, false).Padding(0, 8),
-					"下载位置", actionFolderIcon, 12, 500).
-					Tooltip("打开网页原图下载文件夹").
-					OnClick(s.openDownloadedImagesDir)
 			})
 			return
 		}
@@ -911,6 +910,76 @@ func (s *application) floatingFeedback(c *ui.Context) {
 				OnClick(s.cancelWork)
 		}
 	})
+}
+
+func floatingFooterIconButton(c *ui.Context, key, label, tooltip string, icon *ui.SVG, action func()) ui.Element {
+	theme := c.Theme()
+	border := ui.Transparent
+	if c.Preferences().HighContrast {
+		border = controlBorder(c)
+	}
+	button := ui.ButtonBase(c.Key(key)).Size(28, 28).Center().Shrink(0).Radius(8).
+		Background(ui.Transparent).Border(1, border).Label(label).Tooltip(tooltip)
+	iconColor := theme.TextMuted
+	if button.Pressed() {
+		iconColor = theme.Text
+		button.Background(glassControlPressed(c)).Border(1, controlBorder(c))
+	} else if button.Hovered() {
+		iconColor = theme.Text
+		button.Background(glassControlHover(c)).Border(1, controlBorder(c))
+	}
+	if action != nil {
+		button.OnClick(action)
+	}
+	button.Children(func() {
+		ui.Icon(c, icon).Size(14, 14).TextColor(iconColor).Shrink(0)
+	})
+	return button
+}
+
+func floatingFooterDragIcon(
+	c *ui.Context,
+	key, label, tooltip string,
+	data func() transfer.Data,
+	opts transfer.DragOptions,
+) ui.Element {
+	theme := c.Theme()
+	const radius = float32(8)
+	highContrast := c.Preferences().HighContrast
+	solidBorder := ui.Transparent
+	if highContrast {
+		solidBorder = controlBorder(c)
+	}
+	dashColor := controlBorder(c)
+	chip := ui.Row(c.Key(key)).Size(28, 28).Center().Shrink(0).Radius(radius).
+		Background(tonalWellSurface(c)).Border(1, solidBorder).
+		Label(label).Tooltip(tooltip).
+		DragDataFrom(data, opts).Cursor(ui.CursorGrab)
+	iconColor := theme.TextMuted
+	if chip.Pressed() {
+		iconColor = theme.Text
+		dashColor = controlHoverBorder(c)
+		chip.Cursor(ui.CursorGrabbing).Background(glassControlPressed(c))
+		if highContrast {
+			chip.Border(1, controlHoverBorder(c))
+		}
+	} else if chip.Hovered() {
+		iconColor = theme.Text
+		dashColor = controlHoverBorder(c)
+		chip.Background(glassControlHover(c))
+		if highContrast {
+			chip.Border(1, controlHoverBorder(c))
+		}
+	}
+	if !highContrast {
+		chip.DrawOver(func(p *ui.Painter, bounds ui.Rect) {
+			drawDashedOutline(p, bounds, radius, dashColor)
+		})
+	}
+	chip.Children(func() {
+		ui.Icon(c, toolbarDragIcon).Size(14, 14).TextColor(iconColor).Shrink(0)
+	})
+	return chip
 }
 
 func floatingIconButton(c *ui.Context, key, label, icon string, action func()) ui.Element {

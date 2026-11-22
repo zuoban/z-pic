@@ -175,7 +175,7 @@ func (s *application) presetSettingsContent(c *ui.Context) {
 	locked := s.settingsDraftLocked()
 	bodyPad := settingsPagePadding(c)
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(6, bodyPad, 6, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
+		ui.Column(c).FillWidth().Padding(8, bodyPad, 8, bodyPad).Background(sidebarSurface(c)).Children(func() { s.presetEditorTabs(c) })
 		ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
 		ui.Scroll(c.Key("preset-editor")).Grow(1).MinHeight(0).Padding(10, bodyPad, 16, bodyPad).Gap(8).Children(func() {
 			preset := editor.selectedPreset()

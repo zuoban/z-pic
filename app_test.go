@@ -56,7 +56,8 @@ func TestEmptyViewCannotCompress(t *testing.T) {
 	if !tt.HasText("选择图片") || !tt.HasText("选择文件夹") || !tt.HasText("选择或拖入图片") {
 		t.Fatalf("the empty view must explain how to start: %q", tt.Texts())
 	}
-	settings := openTestSettings(t, s)
+	s.setSettingsOpen(true)
+	settings := ui.NewTester(s.settingsView, 640, 600)
 	if err := settings.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,8 @@ func TestPresetPickerSelectionAndDismissal(t *testing.T) {
 	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	result := &compress.Result{OriginalSize: 4096, OutputSize: 2048}
 	s.result = result
-	tt := openTestSettings(t, s)
+	s.setSettingsOpen(true)
+	tt := ui.NewTester(s.settingsView, 640, 600)
 	if err := tt.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +655,9 @@ func TestComparisonUnavailableAfterOverwrite(t *testing.T) {
 
 func TestPresetSelectionSupportsArrowKeys(t *testing.T) {
 	s := testSelectedApplication()
-	tt := openTestSettings(t, s)
+	s.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	s.setSettingsOpen(true)
+	tt := ui.NewTester(s.settingsView, 640, 600)
 	if err := tt.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}

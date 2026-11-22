@@ -189,8 +189,11 @@ func TestAppUpdateCheckFlowAndTrayItem(t *testing.T) {
 	}
 
 	tester := ui.NewTester(app.settingsView, 724, 960)
+	if err := tester.Click("关于"); err != nil {
+		t.Fatalf("switching to about tab failed: %v", err)
+	}
 	if !tester.HasText("关于与更新") || !tester.HasText("新版本 v0.3.0") || !tester.HasText("前往下载") {
-		t.Fatal("settings view must show version badge and download button when update is available")
+		t.Fatal("about settings view must show version badge and download button when update is available")
 	}
 	app.openReleaseDownloadPage()
 	if openedURL != "https://github.com/zuoban/z-pic/releases/tag/v0.3.0" {

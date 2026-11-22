@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"zpic/internal/compress"
@@ -297,4 +300,190 @@ func TestWorkspaceUXReviewRenders(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestMainWindowDropOptionsAndDragOverLabel(t *testing.T) {
+	options := mainWindowDropOptions()
+	if options.Operations != transfer.Copy {
+		t.Fatalf("mainWindowDropOptions Operations = %v, want %v", options.Operations, transfer.Copy)
+	}
+	for _, want := range []transfer.Format{
+		transfer.FileList,
+		transfer.URIList,
+		transfer.HTML,
+		transfer.Text,
+		transfer.PNG,
+		transfer.Format("image/jpeg"),
+		transfer.Format("image/webp"),
+	} {
+		if !slices.Contains(options.Formats, want) {
+			t.Fatalf("mainWindowDropOptions missing format %q: %v", want, options.Formats)
+		}
+	}
+	if gotAVIF := slices.Contains(options.Formats, transfer.Format("image/avif")); gotAVIF != compress.SupportsAVIF() {
+		t.Fatalf("mainWindowDropOptions AVIF presence (%v) must match SupportsAVIF (%v)", gotAVIF, compress.SupportsAVIF())
+	}
+
+	app := newApplication()
+	if got := app.mainWindowDragOverLabel(); got != "松开导入图片" {
+		t.Fatalf("empty workspace drag-over label = %q, want %q", got, "松开导入图片")
+	}
+
+	app.file = &selectedImage{path: "/photos/one.png", format: "png"}
+	if got := app.mainWindowDragOverLabel(); got != "松开加入批量队列" {
+		t.Fatalf("single-image workspace drag-over label = %q, want %q", got, "松开加入批量队列")
+	}
+
+	app.file = nil
+	app.batch = newBatchState([]batchItem{{path: "/photos/one.png", absPath: "/photos/one.png", relPath: "one.png"}})
+	if got := app.mainWindowDragOverLabel(); got != "松开加入批量队列" {
+		t.Fatalf("batch workspace drag-over label = %q, want %q", got, "松开加入批量队列")
+	}
+}
+
+func TestMainWindowDropRoutingAndGuards(t *testing.T) {
+	t.Run("promotes single image and second local file into batch queue", func(t *testing.T) {
+		root := t.TempDir()
+		first := filepath.Join(root, "first.jpg")
+		second := filepath.Join(root, "second.jpg")
+		writeTestJPEG(t, first, 80, 60, 90)
+		writeTestJPEG(t, second, 100, 75, 90)
+
+		selected, err := readSelection(context.Background(), first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates := make(chan func(), 16)
+		app := newApplication()
+		app.dispatchUpdate = func(fn func()) { updates <- fn }
+		app.completeSelection(context.Background(), selected, nil)
+
+		data, err := transfer.FileData(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.receiveMainWindowDrop(data)
+		waitForDropImports(t, app, updates)
+
+		if app.batch == nil || len(app.batch.items) != 2 || app.failed {
+			t.Fatalf("expected single image + second drop promoted into 2-item batch: batch=%+v failed=%v msg=%q",
+				app.batch, app.failed, app.message)
+		}
+		if app.batch.items[0].path != first || app.batch.items[1].path != second {
+			t.Fatalf("unexpected batch item order: got [%q, %q], want [%q, %q]",
+				app.batch.items[0].path, app.batch.items[1].path, first, second)
+		}
+	})
+
+	t.Run("routes non-FileList web data to receiveDrop", func(t *testing.T) {
+		// While busy, web drops are queued on dropQueue via receiveDrop without running local openPaths.
+		app := newApplication()
+		app.busy = true
+		uriData := transfer.New(transfer.NewItem(transfer.Bytes(transfer.URIList, []byte("https://example.com/photo.png"))))
+		htmlData := transfer.New(transfer.NewItem(transfer.Bytes(transfer.HTML, []byte(`<img src="https://example.com/banner.webp">`))))
+
+		app.receiveMainWindowDrop(uriData)
+		app.receiveMainWindowDrop(htmlData)
+		if len(app.dropQueue) != 2 || app.batch != nil || app.file != nil {
+			t.Fatalf("non-FileList drops must queue via receiveDrop: dropQueue=%d batch=%v file=%v",
+				len(app.dropQueue), app.batch, app.file)
+		}
+
+		// When idle, HTML data URL routes through receiveDrop and imports cleanly.
+		root := t.TempDir()
+		src := filepath.Join(root, "inline.jpg")
+		raw := writeTestJPEG(t, src, 64, 48, 90)
+		inlineHTML := fmt.Sprintf(`<img src="data:image/jpeg;base64,%s">`, base64.StdEncoding.EncodeToString(raw))
+
+		updates := make(chan func(), 16)
+		idle := newApplication()
+		idle.downloadDir = filepath.Join(root, "downloads")
+		idle.dispatchUpdate = func(fn func()) { updates <- fn }
+		idle.receiveMainWindowDrop(transfer.New(transfer.NewItem(transfer.Bytes(transfer.HTML, []byte(inlineHTML)))))
+		if !idle.dropImporting {
+			t.Fatal("idle web drop must enter receiveDrop / startNextDropImport")
+		}
+		waitForDropImports(t, idle, updates)
+		if idle.batch == nil || len(idle.batch.items) != 1 || idle.failed || idle.dropFailed {
+			t.Fatalf("expected inline HTML image imported into batch via receiveDrop: batch=%+v failed=%v dropFailed=%v msg=%q dropMsg=%q",
+				idle.batch, idle.failed, idle.dropFailed, idle.message, idle.dropMessage)
+		}
+	})
+
+	t.Run("ignores staged drag-out paths", func(t *testing.T) {
+		root := t.TempDir()
+		stagedDir := filepath.Join(root, "drag-stage")
+		if err := os.MkdirAll(stagedDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stagedPath := filepath.Join(stagedDir, "exported.jpg")
+		realPath := filepath.Join(root, "real.jpg")
+		writeTestJPEG(t, stagedPath, 60, 40, 90)
+		writeTestJPEG(t, realPath, 80, 60, 90)
+
+		updates := make(chan func(), 16)
+		app := newApplication()
+		app.dragTempDir = stagedDir
+		app.dispatchUpdate = func(fn func()) { updates <- fn }
+		if !app.isDragStagedPath(stagedPath) || app.isDragStagedPath(realPath) {
+			t.Fatalf("unexpected isDragStagedPath result: staged=%v real=%v",
+				app.isDragStagedPath(stagedPath), app.isDragStagedPath(realPath))
+		}
+
+		stagedOnly, err := transfer.FileData(stagedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.receiveMainWindowDrop(stagedOnly)
+		if app.busy || app.file != nil || app.batch != nil || len(app.dropQueue) != 0 {
+			t.Fatalf("staged drag-out path must be ignored: busy=%v file=%v batch=%v queue=%d",
+				app.busy, app.file, app.batch, len(app.dropQueue))
+		}
+
+		// Mixed drop filters out staged path and still opens the real file.
+		mixed, err := transfer.FileData(stagedPath, realPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.receiveMainWindowDrop(mixed)
+		waitForDropImports(t, app, updates)
+		if app.batch != nil || app.file == nil || app.file.path != realPath {
+			t.Fatalf("mixed drop must filter staged path and open only real file: file=%+v batch=%+v", app.file, app.batch)
+		}
+	})
+
+	t.Run("ignores drops when closed, draggingOut, or dialogOpen", func(t *testing.T) {
+		root := t.TempDir()
+		filePath := filepath.Join(root, "img.jpg")
+		writeTestJPEG(t, filePath, 60, 40, 90)
+		fileDrop, err := transfer.FileData(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		webDrop := transfer.New(transfer.NewItem(transfer.Bytes(transfer.URIList, []byte("https://example.com/a.png"))))
+
+		guards := []struct {
+			name  string
+			apply func(*application)
+		}{
+			{name: "closed", apply: func(app *application) { app.closed = true }},
+			{name: "draggingOut", apply: func(app *application) { app.draggingOut = true }},
+			{name: "settingsOpen", apply: func(app *application) { app.settingsOpen = true }},
+			{name: "confirmOverwrite", apply: func(app *application) { app.confirmOverwrite = true }},
+			{name: "confirmBatchOverwrite", apply: func(app *application) { app.confirmBatchOverwrite = true }},
+		}
+
+		for _, g := range guards {
+			t.Run(g.name, func(t *testing.T) {
+				app := newApplication()
+				g.apply(app)
+				app.receiveMainWindowDrop(fileDrop)
+				app.receiveMainWindowDrop(webDrop)
+				if app.busy || app.file != nil || app.batch != nil || len(app.dropQueue) != 0 {
+					t.Fatalf("guard %s must ignore main window drops: busy=%v file=%v batch=%v queue=%d",
+						g.name, app.busy, app.file, app.batch, len(app.dropQueue))
+				}
+			})
+		}
+	})
 }

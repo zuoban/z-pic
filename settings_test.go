@@ -26,7 +26,11 @@ func openTestSettings(t *testing.T, application *application) *ui.Tester {
 
 func chooseTestPreset(t *testing.T, application *application, name string) {
 	t.Helper()
-	tester := openTestSettings(t, application)
+	if application.settingsFile == "" {
+		application.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	}
+	application.setSettingsOpen(true)
+	tester := ui.NewTester(application.settingsView, 640, 600)
 	if err := tester.Click("选择预设"); err != nil {
 		t.Fatal(err)
 	}

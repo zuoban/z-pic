@@ -6,9 +6,32 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-var (
-	settingsChevronIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6.5 3 3 3-3"/></svg>`))
+const (
+	settingsSidebarWidth      = 164
+	settingsSidebarBreakpoint = 580
 )
+
+var (
+	settingsChevronIcon      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6.5 3 3 3-3"/></svg>`))
+	settingsGeneralIcon      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.25"/><path d="M8 2.25v1.5M8 12.25v1.5M2.25 8h1.5M12.25 8h1.5M3.93 3.93l1.06 1.06M11.01 11.01l1.06 1.06M12.07 3.93l-1.06 1.06M4.99 11.01l-1.06 1.06"/></svg>`))
+	settingsPresetsIcon      = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 5h2.5m3.5 0h6M2 11h6m3.5 0H14"/><circle cx="6.25" cy="5" r="1.75"/><circle cx="9.75" cy="11" r="1.75"/></svg>`))
+	settingsIntegrationsIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.25" y="3" width="11.5" height="10" rx="2"/><path d="m5 6.5 2 1.75-2 1.75M8.5 10h2.5"/></svg>`))
+	settingsAboutIcon        = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="5.75"/><path d="M8 7.25v3.5M8 5.1v.15"/></svg>`))
+)
+
+type settingsNavItem struct {
+	section settingsSection
+	label   string
+	icon    *ui.SVG
+}
+
+var settingsNavItems = [...]settingsNavItem{
+	{section: settingsGeneral, label: "通用", icon: settingsGeneralIcon},
+	{section: settingsPresets, label: "预设", icon: settingsPresetsIcon},
+	{section: settingsFolderWatch, label: "文件夹监听", icon: folderWatchIcon},
+	{section: settingsIntegrations, label: "系统集成", icon: settingsIntegrationsIcon},
+	{section: settingsAbout, label: "关于", icon: settingsAboutIcon},
+}
 
 func (s *application) settingsView(c *ui.Context) {
 	s.applyTheme(c)
@@ -24,91 +47,189 @@ func (s *application) settingsView(c *ui.Context) {
 		s.setSettingsOpen(false)
 	})
 	c.OnWindowShortcut(ui.Cmd, ui.KeyS, s.saveSettingsEdits)
+	width, _ := c.Size()
+	wide := width >= settingsSidebarBreakpoint
 	ui.Column(c).Fill().Background(windowRootBackground(c)).Role(ui.RoleDialog).Label("应用设置").Children(func() {
-		ui.Column(c).FillWidth().Background(sidebarSurface(c)).Children(func() {
-			s.settingsNavigation(c)
-			if s.editor.section != settingsFolderWatch {
-				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
-				s.settingsPresetSelection(c)
-			}
-		})
-		if s.editor.section == settingsPresets {
-			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+		if wide {
+			ui.Row(c).FillWidth().Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				s.settingsSidebar(c)
+				ui.Box(c).Width(1).FillHeight().Shrink(0).Background(hairlineDivider(c))
+				ui.Column(c).Width(0).Grow(1).MinWidth(0).FillHeight().Children(func() {
+					s.settingsSectionContent(c)
+				})
+			})
 		} else {
-			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
-		}
-		switch s.editor.section {
-		case settingsPresets:
-			s.presetSettingsContent(c)
-		case settingsFolderWatch:
-			s.folderWatchSettingsContent(c)
-		default:
-			s.generalSettingsContent(c)
+			s.settingsCompactNavigation(c)
+			if s.editor.section == settingsGeneral || s.editor.section == settingsPresets {
+				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+			} else {
+				ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+			}
+			s.settingsSectionContent(c)
 		}
 		s.settingsFooter(c)
 	})
 }
 
+func (s *application) settingsSectionContent(c *ui.Context) {
+	switch s.editor.section {
+	case settingsPresets:
+		s.presetSettingsContent(c)
+	case settingsFolderWatch:
+		s.folderWatchSettingsContent(c)
+	case settingsIntegrations:
+		s.integrationsSettingsContent(c)
+	case settingsAbout:
+		s.aboutSettingsContent(c)
+	default:
+		ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+			s.settingsPresetSelection(c)
+			ui.Box(c).FillWidth().Height(1).Background(hairlineDivider(c))
+			s.generalSettingsContent(c)
+		})
+	}
+}
+
 func (s *application) settingsPresetSelection(c *ui.Context) {
 	editor := s.editor
 	t := c.Theme()
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 38)).Padding(0, settingsPagePadding(c)).Gap(10).Background(sidebarSurface(c)).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 42)).Padding(0, settingsPagePadding(c)).Gap(10).Background(sidebarSurface(c)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "当前预设").FontSize(settingsFontSize(c, 12)).FontWeight(500).TextColor(metadataColor(c)).Shrink(0)
 		preset := editor.presets[editor.active]
 		disabled := s.busy || editor.confirmDelete
-		picker := ui.ButtonBase(c.Key("settings-preset-picker"))
-		picker.PopoverMenuButton(func(menu *ui.Menu) {
-			menu.MaxWidth(360)
-			for index, option := range editor.presets {
-				name := presetDisplayName(option)
-				item := menu.Item(name).Radio(editor.active == index).
-					Tooltip(name).Disabled(s.settingsDraftLocked())
-				if item.Chosen() {
-					s.selectSettingsPreset(index)
+		ui.Row(c).Width(0).Grow(1).MinWidth(0).AlignItems(ui.Center).Children(func() {
+			picker := ui.ButtonBase(c.Key("settings-preset-picker"))
+			picker.PopoverMenuButton(func(menu *ui.Menu) {
+				menu.MaxWidth(360)
+				for index, option := range editor.presets {
+					name := presetDisplayName(option)
+					item := menu.Item(name).Radio(editor.active == index).
+						Tooltip(name).Disabled(s.settingsDraftLocked())
+					if item.Chosen() {
+						s.selectSettingsPreset(index)
+					}
+				}
+			}, ui.PopoverMenuButtonOptions{
+				At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
+				Panel: func(panel ui.Element) {
+					stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
+				},
+			}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
+				Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 28)).Padding(0, 10).Gap(8).
+				AlignItems(ui.Center).Radius(innerRadius(c)).
+				Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
+			if !disabled {
+				if picker.Pressed() {
+					picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
+				} else {
+					controlElevation(picker, c)
+					if picker.Hovered() {
+						picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
+					}
 				}
 			}
-		}, ui.PopoverMenuButtonOptions{
-			At: ui.AnchorBottomStart, Self: ui.AnchorTopStart,
-			Panel: func(panel ui.Element) {
-				stylePopoverPanel(panel, c).MinWidth(max(180, picker.Bounds().W)).MaxWidth(360)
-			},
-		}).Label("选择预设").Value(presetDisplayName(preset)).Tooltip(presetDisplayName(preset)).
-			Width(0).Grow(1).MinWidth(0).MaxWidth(340).Height(settingsControlHeight(c, 28)).Padding(0, 10).Gap(8).
-			AlignItems(ui.Center).Radius(innerRadius(c)).
-			Background(glassControlSurface(c)).Border(1, controlBorder(c)).Disabled(disabled)
-		if !disabled {
-			if picker.Pressed() {
-				picker.Background(glassControlPressed(c)).Border(1, controlHoverBorder(c))
-			} else {
-				controlElevation(picker, c)
-				if picker.Hovered() {
-					picker.Background(glassControlHover(c)).Border(1, controlHoverBorder(c))
-				}
-			}
-		}
-		settingsGlassControl(picker, c, 28, disabled, ui.Transparent)
-		picker.Children(func() {
-			ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
-				Width(0).Grow(1).MinWidth(0)
-			ui.Icon(c, settingsChevronIcon).Size(15, 15).Shrink(0).TextColor(t.TextMuted)
-		})
-		ui.Box(c).Grow(1).MinWidth(0)
-		if editor.section == settingsGeneral {
-			settingsButton(c, "manage-presets", "管理预设", 28, s.settingsDraftLocked()).Padding(0, 12).OnClick(func() {
-				editor.selected = editor.active
-				editor.section = settingsPresets
+			settingsGlassControl(picker, c, 28, disabled, ui.Transparent)
+			picker.Children(func() {
+				ui.Text(c, presetDisplayName(preset)).FontSize(settingsFontSize(c, 13)).FontWeight(500).SingleLine().TruncateMiddle().
+					Width(0).Grow(1).MinWidth(0)
+				ui.Icon(c, settingsChevronIcon).Size(15, 15).Shrink(0).TextColor(t.TextMuted)
 			})
-		}
+		})
+		settingsButton(c, "manage-presets", "管理预设", 28, s.settingsDraftLocked()).Padding(0, 12).OnClick(func() {
+			editor.selected = editor.active
+			editor.section = settingsPresets
+		})
 	})
 }
 
-func (s *application) settingsNavigation(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(settingsControlHeight(c, 46)).Padding(0, settingsPagePadding(c)).Gap(16).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1).Grow(1)
-		section := int(s.editor.section)
-		settingsSegments(c, "settings-navigation", "设置分类", &section, s.busy || s.editor.confirmDelete, "通用", "预设", "文件夹监听").
-			Width(settingsFontSize(c, 282))
-		s.editor.section = settingsSection(section)
+func (s *application) settingsSidebar(c *ui.Context) {
+	t := c.Theme()
+	disabled := s.busy || s.editor.confirmDelete
+	ui.Column(c).Width(settingsSidebarWidth).FillHeight().Shrink(0).
+		Background(sidebarSurface(c)).Padding(14, 8, 12, 8).Gap(10).Children(func() {
+		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).
+			Role(ui.RoleHeading).Level(1).Padding(0, 8)
+		ui.Column(c.Key("settings-navigation")).FillWidth().Gap(3).
+			Role(ui.RoleTabList).Label("设置分类").Children(func() {
+			for _, item := range settingsNavItems {
+				active := s.editor.section == item.section
+				btn := ui.ButtonBase(c.Key(fmt.Sprintf("settings-nav-%d", item.section)))
+				btn.Role(ui.RoleTab).Label(item.label).AccessSelected(active).Disabled(disabled).
+					FillWidth().Height(settingsControlHeight(c, 34)).Padding(0, 8).Gap(8).
+					Radius(innerRadius(c)).AlignItems(ui.Center).
+					Border(1, ui.Transparent).TextColor(chromeMutedColor(c))
+				iconColor := chromeMetadataColor(c)
+				weight := 400
+				if active {
+					iconColor = accentForeground(t)
+					weight = 600
+					btn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+					settingsGlassControl(btn, c, 34, disabled, t.Accent.Alpha(0.14)).Radius(innerRadius(c))
+				} else if !disabled {
+					if btn.Pressed() {
+						btn.Background(glassControlPressed(c)).TextColor(t.Text)
+						iconColor = t.Text
+					} else if btn.Hovered() {
+						btn.Background(glassControlHover(c)).TextColor(t.Text)
+						iconColor = t.Text
+					}
+				}
+				section := item.section
+				btn.OnClick(func() {
+					if !disabled {
+						s.editor.section = section
+					}
+				})
+				btn.Children(func() {
+					ui.Icon(c, item.icon).Size(15, 15).Shrink(0).TextColor(iconColor)
+					ui.Text(c, item.label).FontSize(settingsFontSize(c, 13)).FontWeight(weight).
+						SingleLine().Width(0).Grow(1).MinWidth(0)
+				})
+			}
+		})
+	})
+}
+
+func (s *application) settingsCompactNavigation(c *ui.Context) {
+	t := c.Theme()
+	disabled := s.busy || s.editor.confirmDelete
+	pad := settingsPagePadding(c)
+	navH := settingsControlHeight(c, 32)
+	ui.Column(c).FillWidth().Background(sidebarSurface(c)).Padding(10, pad, 8, pad).Gap(8).Children(func() {
+		ui.Text(c, "设置").FontSize(settingsFontSize(c, 16)).FontWeight(600).Role(ui.RoleHeading).Level(1)
+		ui.ScrollHorizontal(c.Key("settings-navigation-scroll")).FillWidth().Height(navH).Children(func() {
+			ui.Row(c.Key("settings-navigation")).Height(navH).Gap(4).AlignItems(ui.Center).
+				Role(ui.RoleTabList).Label("设置分类").Children(func() {
+				for _, item := range settingsNavItems {
+					active := s.editor.section == item.section
+					btn := ui.ButtonBase(c.Key(fmt.Sprintf("settings-nav-%d", item.section)))
+					btn.Role(ui.RoleTab).Label(item.label).AccessSelected(active).Disabled(disabled).
+						Height(navH).Padding(0, 10).Radius(innerRadius(c)).Center().
+						Border(1, ui.Transparent).TextColor(chromeMutedColor(c)).Shrink(0)
+					weight := 400
+					if active {
+						weight = 600
+						btn.Background(glassSelectionBackground(c)).Border(1, selectionBorder(c)).TextColor(t.Text)
+						settingsGlassControl(btn, c, 32, disabled, t.Accent.Alpha(0.14)).Radius(innerRadius(c))
+					} else if !disabled {
+						if btn.Pressed() {
+							btn.Background(glassControlPressed(c)).TextColor(t.Text)
+						} else if btn.Hovered() {
+							btn.Background(glassControlHover(c)).TextColor(t.Text)
+						}
+					}
+					section := item.section
+					btn.OnClick(func() {
+						if !disabled {
+							s.editor.section = section
+						}
+					})
+					btn.Children(func() {
+						ui.Text(c, item.label).FontSize(settingsFontSize(c, 12)).FontWeight(weight).SingleLine()
+					})
+				}
+			})
+		})
 	})
 }
 
@@ -159,7 +280,6 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 	width, height := c.Size()
 	narrow := width < 560
 	compactHeight := height > 0 && height <= 620
-	twoColShortcuts := width >= 400 && c.Preferences().TextScale <= 1.1
 	scrollPadV, scrollGap := float32(12), float32(10)
 	if narrow || compactHeight {
 		scrollPadV, scrollGap = 10, 8
@@ -244,74 +364,134 @@ func (s *application) generalSettingsContent(c *ui.Context) {
 				})
 			})
 		})
-		shortcutsPanel := settingsPanel(c, "settings-shortcuts-panel")
-		if compactHeight {
-			shortcutsPanel.Padding(12, 16).Gap(8)
+	})
+}
+
+func (s *application) integrationsSettingsContent(c *ui.Context) {
+	width, height := c.Size()
+	narrow := width < 560
+	compactHeight := height > 0 && height <= 620
+	scrollPadV, scrollGap := float32(12), float32(10)
+	if narrow || compactHeight {
+		scrollPadV, scrollGap = 10, 8
+	}
+	ui.Scroll(c.Key("integrations-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
+		s.cliInstallSettingsPanel(c, compactHeight)
+		s.quickActionSettingsPanel(c, compactHeight)
+	})
+}
+
+func (s *application) aboutSettingsContent(c *ui.Context) {
+	width, height := c.Size()
+	narrow := width < 560
+	compactHeight := height > 0 && height <= 620
+	scrollPadV, scrollGap := float32(12), float32(10)
+	if narrow || compactHeight {
+		scrollPadV, scrollGap = 10, 8
+	}
+	ui.Scroll(c.Key("about-settings")).FillWidth().Grow(1).MinHeight(0).Padding(scrollPadV, settingsPagePadding(c)).Gap(scrollGap).Children(func() {
+		s.shortcutsSettingsPanel(c, width, narrow, compactHeight)
+		s.aboutAndUpdateSettingsPanel(c, compactHeight)
+	})
+}
+
+func settingsRawKeycap(c *ui.Context, text string) ui.Element {
+	t := c.Theme()
+	fg := t.TextMuted
+	if t.Dark {
+		fg = t.Text.Alpha(0.82)
+	}
+	return ui.Text(c, text).FontSize(settingsFontSize(c, 12)).FontWeight(500).FontFeatures("tnum").
+		TextColor(fg).Padding(2, 7).Radius(5).
+		Background(keycapSurface(c)).Border(1, controlBorder(c)).SingleLine().Shrink(0)
+}
+
+func (s *application) shortcutsSettingsPanel(c *ui.Context, width float32, narrow, compactHeight bool) {
+	t := c.Theme()
+	contentWidth := width
+	if width >= settingsSidebarBreakpoint {
+		contentWidth = width - settingsSidebarWidth - 1
+	}
+	twoColShortcuts := contentWidth >= 460 && c.Preferences().TextScale <= 1.1
+	shortcutsPanel := settingsPanel(c, "settings-shortcuts-panel")
+	if compactHeight {
+		shortcutsPanel.Padding(12, 16).Gap(8)
+	}
+	shortcutsPanel.Children(func() {
+		ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
+		type shortcutItem struct {
+			label string
+			key   string
+			raw   bool
 		}
-		shortcutsPanel.Children(func() {
-			ui.Text(c, "快捷键").FontSize(settingsFontSize(c, 14)).FontWeight(600).Role(ui.RoleHeading).Level(2)
-			shortcuts := []struct{ label, key string }{
-				{"选择图片", "O"}, {"粘贴图片入队", "V"}, {"复制压缩结果", "C"}, {"压缩队列或当前图片", "↵"}, {"保存结果 / 选择输出位置", "S"}, {"打开设置", ","},
-			}
-			if s.clipboardPNGCompressionAvailable() {
-				shortcuts = append(shortcuts, struct{ label, key string }{"压缩剪贴板图片", "⇧V"})
-			}
-			rowHeight := float32(26)
-			if compactHeight {
-				rowHeight = 24
-			}
-			renderRow := func(label, key string) {
-				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, rowHeight)).Padding(2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
-						Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(label)
-					keyboardKeycap(c, key).FontSize(settingsFontSize(c, 12))
-				})
-			}
-			if twoColShortcuts {
-				ui.Column(c).FillWidth().Children(func() {
-					for row := 0; row < len(shortcuts); row += 2 {
-						shortcutGap := float32(14)
-						if narrow {
-							shortcutGap = 8
+		shortcuts := []shortcutItem{
+			{label: "选择图片", key: "O"},
+			{label: "粘贴图片入队", key: "V"},
+			{label: "复制压缩结果", key: "C"},
+			{label: "压缩队列或当前图片", key: "↵"},
+			{label: "保存结果 / 选择输出位置", key: "S"},
+			{label: "打开设置", key: ","},
+			{label: "切换对比 / 原图 / 结果 / 差异", key: "1 ~ 4", raw: true},
+		}
+		if s.clipboardPNGCompressionAvailable() {
+			shortcuts = append(shortcuts, shortcutItem{label: "压缩剪贴板图片", key: "⇧V"})
+		}
+		rowHeight := float32(26)
+		if compactHeight {
+			rowHeight = 24
+		}
+		renderRow := func(item shortcutItem) {
+			ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, rowHeight)).Padding(2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, item.label).FontSize(settingsFontSize(c, 13)).TextColor(t.TextMuted).
+					Width(0).Grow(1).SingleLine().TruncateMiddle().Tooltip(item.label)
+				if item.raw {
+					settingsRawKeycap(c, item.key)
+				} else {
+					keyboardKeycap(c, item.key).FontSize(settingsFontSize(c, 12))
+				}
+			})
+		}
+		if twoColShortcuts {
+			ui.Column(c).FillWidth().Children(func() {
+				for row := 0; row < len(shortcuts); row += 2 {
+					shortcutGap := float32(14)
+					if narrow {
+						shortcutGap = 8
+					}
+					ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Stretch).Children(func() {
+						ui.Column(c).Width(0).Grow(1).Children(func() {
+							if row > 0 {
+								ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+							}
+							renderRow(shortcuts[row])
+						})
+						centerDivider := ui.Box(c).Width(1).Shrink(0)
+						if row+1 < len(shortcuts) {
+							centerDivider.Background(subtleRowDivider(c))
 						}
-						ui.Row(c).FillWidth().Gap(shortcutGap).AlignItems(ui.Stretch).Children(func() {
+						if row+1 < len(shortcuts) {
 							ui.Column(c).Width(0).Grow(1).Children(func() {
 								if row > 0 {
 									ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 								}
-								renderRow(shortcuts[row].label, shortcuts[row].key)
+								renderRow(shortcuts[row+1])
 							})
-							centerDivider := ui.Box(c).Width(1).Shrink(0)
-							if row+1 < len(shortcuts) {
-								centerDivider.Background(subtleRowDivider(c))
-							}
-							if row+1 < len(shortcuts) {
-								ui.Column(c).Width(0).Grow(1).Children(func() {
-									if row > 0 {
-										ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
-									}
-									renderRow(shortcuts[row+1].label, shortcuts[row+1].key)
-								})
-							} else {
-								ui.Box(c).Width(0).Grow(1)
-							}
-						})
-					}
-				})
-			} else {
-				ui.Column(c).FillWidth().Children(func() {
-					for index, shortcut := range shortcuts {
-						if index > 0 {
-							ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
+						} else {
+							ui.Box(c).Width(0).Grow(1)
 						}
-						renderRow(shortcut.label, shortcut.key)
+					})
+				}
+			})
+		} else {
+			ui.Column(c).FillWidth().Children(func() {
+				for index, shortcut := range shortcuts {
+					if index > 0 {
+						ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 					}
-				})
-			}
-		})
-		s.cliInstallSettingsPanel(c, compactHeight)
-		s.quickActionSettingsPanel(c, compactHeight)
-		s.aboutAndUpdateSettingsPanel(c, compactHeight)
+					renderRow(shortcut)
+				}
+			})
+		}
 	})
 }
 

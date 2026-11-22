@@ -316,6 +316,29 @@ func (s *application) removeFailedBatchItems() {
 	s.finishBulkFailureRemoval(removed, "失败")
 }
 
+func (s *application) removeCompletedBatchItems() {
+	if s.batch == nil || s.modalOpen() || s.batch.running {
+		return
+	}
+	removed := s.deleteBatchItems(func(_ int, item batchItem) bool {
+		return item.status == batchDone
+	})
+	if removed == 0 {
+		return
+	}
+	if s.batch == nil {
+		s.setMessage(fmt.Sprintf("已清除 %d 张已完成图片，队列已清空。", removed), false)
+		return
+	}
+	if s.batch.filter == batchFilterDone || s.batch.filter == batchFilterTargetSizeMissed {
+		s.batch.filter = batchFilterAll
+		if visible := s.filteredBatchIndices(); len(visible) > 0 && s.batch.selected < 0 {
+			s.batch.selected = visible[0]
+		}
+	}
+	s.setMessage(fmt.Sprintf("已清除 %d 张已完成图片。", removed), false)
+}
+
 func (s *application) finishBulkFailureRemoval(removed int, kind string) {
 	if removed == 0 {
 		return
@@ -335,7 +358,7 @@ func (s *application) finishBulkFailureRemoval(removed int, kind string) {
 }
 
 func (s *application) deleteBatchItems(shouldRemove func(index int, item batchItem) bool) int {
-	if s.modalOpen() || s.batch == nil {
+	if s.modalOpen() || s.batch == nil || s.batch.running {
 		return 0
 	}
 	visPos := slices.Index(s.filteredBatchIndices(), s.batch.selected)

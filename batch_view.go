@@ -34,7 +34,7 @@ func (s *application) batchListPanel(c *ui.Context) {
 	panel.Children(func() {
 		ui.Column(c).FillWidth().Padding(pad, pad, 10, pad).Gap(8).Children(func() {
 			headerRow := ui.Row(c).MinHeight(30).Gap(6).AlignItems(ui.Center)
-			if narrow {
+			if compactQueue {
 				headerRow.Wrap()
 			}
 			headerRow.Children(func() {
@@ -54,6 +54,12 @@ func (s *application) batchListPanel(c *ui.Context) {
 					"添加文件夹", actionFolderIcon, 12, 500).
 					Tooltip("从文件夹添加图片").
 					OnClick(s.chooseFolder)
+				if doneCount := s.batch.cachedStats.done; doneCount > 0 {
+					quietButton(c, "batch-remove-done", "清除已完成", 30, s.modalOpen() || s.batch.running).
+						FontSize(12).FontWeight(500).Padding(0, 9).
+						Tooltip(fmt.Sprintf("从队列移除 %d 张已完成图片", doneCount)).
+						OnClick(s.removeCompletedBatchItems)
+				}
 				ui.Box(c).Size(1, 14).Background(hairlineDivider(c))
 				iconLabelButton(c, ghostDestructiveButton(c, "batch-clear", "", 30, s.modalOpen()).Padding(0, 8),
 					"清空", actionCloseIcon, 12, 500).
@@ -241,12 +247,20 @@ func (s *application) batchListPanel(c *ui.Context) {
 			s.batch.list.Label = func(i int) string { return s.batch.items[visible[i]].relPath }
 			baseTheme := c.Theme()
 			var list ui.Element
+			var rowAction func()
 			ui.Themed(c, customSelectionListTheme(c)).Fill().Background(ui.Transparent).Children(func() {
 				list = ui.List(c, &s.batch.list, len(visible)).
 					Label("批量图片列表").Fill().Padding(6, pad-4).Gap(2)
 				list.Rows(func(r ui.ListRow) {
+					if s.batch == nil || r.Index >= len(visible) {
+						return
+					}
+					itemIndex := visible[r.Index]
+					if itemIndex < 0 || itemIndex >= len(s.batch.items) {
+						return
+					}
 					showDivider := r.Index < len(visible)-1 && visible[r.Index+1] != s.batch.selected
-					s.batchListRow(r, visible[r.Index], showDivider, baseTheme)
+					s.batchListRow(r, itemIndex, showDivider, baseTheme, &rowAction)
 				})
 			})
 			if s.batch.listSelected >= 0 && s.batch.listSelected < len(visible) {
@@ -255,6 +269,13 @@ func (s *application) batchListPanel(c *ui.Context) {
 			} else {
 				s.batch.selected = -1
 				s.batch.listSelectedKey = ""
+			}
+			if rowAction != nil {
+				rowAction()
+				c.Invalidate()
+				if s.batch == nil {
+					return
+				}
 			}
 			if list.Submitted() && !s.modalOpen() && s.batch.selected >= 0 &&
 				s.batch.selected < len(s.batch.items) && !s.batch.items[s.batch.selected].invalidInput {
@@ -367,7 +388,7 @@ func (s *application) emptyBatchFilterMessage() string {
 	}
 }
 
-func (s *application) batchListRow(r ui.ListRow, itemIndex int, showDivider bool, baseTheme *ui.Theme) {
+func (s *application) batchListRow(r ui.ListRow, itemIndex int, showDivider bool, baseTheme *ui.Theme, onAction *func()) {
 	c := r.Context
 	item := s.batch.items[itemIndex]
 	ui.Themed(c, baseTheme).FillWidth().Background(ui.Transparent).Children(func() {
@@ -441,7 +462,107 @@ func (s *application) batchListRow(r ui.ListRow, itemIndex int, showDivider bool
 				})
 			})
 		})
+		menuOpen := ui.Local(rowCard, "batch-row-menu", func() bool { return false })
+		if s.modalOpen() {
+			*menuOpen = false
+		} else {
+			wasOpen := *menuOpen
+			m := ui.ContextMenuBase(c, rowCard, menuOpen)
+			if !wasOpen && m.Open() {
+				s.batch.selected = itemIndex
+				s.batch.list.Choose(r.Index)
+				s.batch.listSelectedKey = item.absPath
+			}
+			m.Popup(func(panel ui.Element) {
+				stylePopoverPanel(panel, c).MinWidth(168).Padding(4)
+				s.batchRowContextMenuItems(c, m, itemIndex, item, onAction)
+			})
+		}
 	})
+}
+
+func (s *application) batchRowContextMenuItems(c *ui.Context, m ui.MenuParts, itemIndex int, item batchItem, onAction *func()) {
+	setAction := func(fn func()) {
+		if onAction != nil {
+			*onAction = fn
+		}
+	}
+	hasPrimary := false
+	if !item.invalidInput {
+		hasPrimary = true
+		if batchContextMenuItem(c, m, "预览", actionPreviewIcon, false, false) {
+			idx := itemIndex
+			setAction(func() { s.openBatchPreview(idx) })
+		}
+	}
+	if item.status == batchPending && !item.invalidInput && !s.batch.running {
+		hasPrimary = true
+		if batchContextMenuItem(c, m, "开始压缩", toolbarCompressIcon, false, false) {
+			idx := itemIndex
+			setAction(func() { s.compressBatchItem(idx) })
+		}
+	}
+	if item.status == batchFailed && !item.invalidInput && !s.batch.running {
+		hasPrimary = true
+		if batchContextMenuItem(c, m, "重新压缩", toolbarRestartIcon, false, false) {
+			idx := itemIndex
+			setAction(func() { s.compressBatchItem(idx) })
+		}
+	}
+	revealPath := ""
+	if item.status == batchDone && item.savedPath != "" {
+		revealPath = item.savedPath
+	} else if item.path != "" {
+		revealPath = item.path
+	}
+	if revealPath != "" {
+		hasPrimary = true
+		if batchContextMenuItem(c, m, "定位文件", actionRevealIcon, false, false) {
+			path := revealPath
+			setAction(func() { s.revealFileInFolder(path) })
+		}
+	}
+	if s.canCopyBatchItem(item) {
+		hasPrimary = true
+		if batchContextMenuItem(c, m, "复制图片", actionCopyIcon, false, false) {
+			idx := itemIndex
+			setAction(func() { s.copyBatchItem(idx) })
+		}
+	}
+	if hasPrimary {
+		ui.Box(c).FillWidth().Height(1).Margin(4, 6).Background(hairlineDivider(c)).Shrink(0)
+	}
+	if batchContextMenuItem(c, m, "从队列移除", actionTrashIcon, true, s.batch.running) {
+		idx := itemIndex
+		setAction(func() { s.removeBatchItem(idx) })
+	}
+}
+
+func batchContextMenuItem(c *ui.Context, m ui.MenuParts, label string, icon *ui.SVG, danger, disabled bool) bool {
+	t := c.Theme()
+	el := m.Item().FillWidth().Height(28).Padding(0, 8).Gap(8).AlignItems(ui.Center).
+		Radius(6).Shrink(0).Label(label).Disabled(disabled)
+	textColor := t.Text
+	iconColor := t.TextMuted
+	if danger {
+		textColor = t.Danger
+		iconColor = t.Danger
+	}
+	if disabled {
+		textColor = t.TextMuted
+		iconColor = t.TextMuted
+	} else if el.Highlighted() {
+		el.Background(t.Accent)
+		textColor = t.AccentText
+		iconColor = t.AccentText
+	}
+	el.TextColor(textColor).Children(func() {
+		if icon != nil {
+			ui.Icon(c, icon).Size(14, 14).TextColor(iconColor).Shrink(0)
+		}
+		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(textColor).SingleLine().NoWrap()
+	})
+	return el.Clicked()
 }
 
 func (s *application) batchThumbnailView(c *ui.Context, item batchItem) {

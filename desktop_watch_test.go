@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -563,5 +564,118 @@ func TestDesktopWatchCaseInsensitiveNonexistentPaths(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected nonexistent /Out and /out to conflict on case-insensitive platform")
+	}
+}
+
+func TestFolderWatchStatusBarRevealButton(t *testing.T) {
+	root := t.TempDir()
+	inPath := filepath.Join(root, "in.jpg")
+	outPath := filepath.Join(root, "out.jpg")
+	writeTestJPEG(t, inPath, 64, 48, 90)
+	writeTestJPEG(t, outPath, 64, 48, 80)
+
+	var revealed []string
+	app := newApplication()
+	app.showInFolder = func(path string) {
+		revealed = append(revealed, path)
+	}
+
+	// Hidden when Output == "" (even if status bar is visible because Input != "").
+	app.watch.last = folderWatchOutcome{Input: inPath, Output: ""}
+	mainTester := ui.NewTester(app.view, 980, 720)
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "定位最新输出文件"); ok {
+		t.Fatal("reveal button must be hidden when watch.last.Output is empty")
+	}
+
+	// Hidden when Err != nil (even if Output != "").
+	app.watch.last = folderWatchOutcome{
+		Input:  inPath,
+		Output: outPath,
+		Err:    errors.New("encode failed"),
+	}
+	mainTester.Frame()
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "定位最新输出文件"); ok {
+		t.Fatal("reveal button must be hidden when watch.last.Err is non-nil")
+	}
+
+	// Shown and clickable in main window when Output != "" and Err == nil.
+	app.watch.last = folderWatchOutcome{
+		Input:         inPath,
+		Output:        outPath,
+		OriginalBytes: 4096,
+		OutputBytes:   2048,
+	}
+	mainTester.Frame()
+	btn, ok := mainTester.AccessByRole(ui.RoleButton, "定位最新输出文件")
+	if !ok || btn.Offscreen || btn.Disabled {
+		t.Fatalf("reveal button must be shown and enabled in main window: ok=%v btn=%+v", ok, btn)
+	}
+	if err := mainTester.Click("定位最新输出文件"); err != nil {
+		t.Fatalf("click main window watch reveal button: %v", err)
+	}
+	if len(revealed) != 1 || revealed[0] != outPath {
+		t.Fatalf("clicking main window watch reveal must invoke showInFolder(%q), got %v", outPath, revealed)
+	}
+
+	// In main window, disabled whenever app.modalOpen() is true.
+	for _, modal := range []struct {
+		name string
+		set  func(*application, bool)
+	}{
+		{name: "busy", set: func(a *application, on bool) { a.busy = on }},
+		{name: "settingsOpen", set: func(a *application, on bool) { a.settingsOpen = on }},
+		{name: "confirmOverwrite", set: func(a *application, on bool) { a.confirmOverwrite = on }},
+		{name: "confirmBatchOverwrite", set: func(a *application, on bool) { a.confirmBatchOverwrite = on }},
+	} {
+		modal.set(app, true)
+		if !app.modalOpen() {
+			t.Fatalf("expected app.modalOpen() == true for %s", modal.name)
+		}
+		mainTester.Frame()
+		btn, ok := mainTester.AccessByRole(ui.RoleButton, "定位最新输出文件")
+		if !ok || !btn.Disabled {
+			t.Fatalf("main window reveal button must be disabled when modalOpen (%s): ok=%v btn=%+v", modal.name, ok, btn)
+		}
+		modal.set(app, false)
+	}
+
+	// In settings window on settingsFolderWatch: enabled even though app.settingsOpen == true,
+	// clicking reveals watch.last.Output, and disabled when app.editor.confirmDelete == true.
+	app.setSettingsOpen(true)
+	app.editor.section = settingsFolderWatch
+	if !app.settingsOpen || !app.modalOpen() {
+		t.Fatalf("expected settingsOpen && modalOpen, got settingsOpen=%v modalOpen=%v", app.settingsOpen, app.modalOpen())
+	}
+	settingsTester := ui.NewTester(app.settingsView, 724, 700)
+	btn, ok = settingsTester.AccessByRole(ui.RoleButton, "定位最新输出文件")
+	if !ok || btn.Offscreen || btn.Disabled {
+		t.Fatalf("settings window watch reveal button must be enabled even when settingsOpen==true: ok=%v btn=%+v", ok, btn)
+	}
+	if err := settingsTester.Click("定位最新输出文件"); err != nil {
+		t.Fatalf("click settings window watch reveal button: %v", err)
+	}
+	if len(revealed) != 2 || revealed[1] != outPath {
+		t.Fatalf("clicking settings window watch reveal must invoke showInFolder(%q), got %v", outPath, revealed)
+	}
+
+	app.editor.confirmDelete = true
+	settingsTester.Frame()
+	btn, ok = settingsTester.AccessByRole(ui.RoleButton, "定位最新输出文件")
+	if !ok || !btn.Disabled {
+		t.Fatalf("settings window watch reveal button must be disabled when confirmDelete==true: ok=%v btn=%+v", ok, btn)
+	}
+
+	// Hidden in settings window when Output == "" or Err != nil.
+	app.editor.confirmDelete = false
+	app.watch.last.Err = errors.New("watch failed")
+	settingsTester.Frame()
+	if _, ok := settingsTester.AccessByRole(ui.RoleButton, "定位最新输出文件"); ok {
+		t.Fatal("settings window watch reveal button must hide when watch.last.Err != nil")
+	}
+	app.watch.last.Err = nil
+	app.watch.last.Output = ""
+	settingsTester.Frame()
+	if _, ok := settingsTester.AccessByRole(ui.RoleButton, "定位最新输出文件"); ok {
+		t.Fatal("settings window watch reveal button must hide when watch.last.Output == \"\"")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"path/filepath"
 
 	"github.com/egoist/mygo"
@@ -31,32 +32,85 @@ type appTray struct {
 	synced     bool
 }
 
+func sdRoundedRect(x, y, cx, cy, hx, hy, radius float64) float64 {
+	qx := math.Abs(x-cx) - (hx - radius)
+	qy := math.Abs(y-cy) - (hy - radius)
+	return math.Hypot(math.Max(qx, 0), math.Max(qy, 0)) + math.Min(math.Max(qx, qy), 0) - radius
+}
+
+func sdSegment(px, py, ax, ay, bx, by float64) float64 {
+	pax, pay := px-ax, py-ay
+	bax, bay := bx-ax, by-ay
+	denom := bax*bax + bay*bay
+	if denom == 0 {
+		return math.Hypot(pax, pay)
+	}
+	t := math.Max(0, math.Min(1, (pax*bax+pay*bay)/denom))
+	return math.Hypot(pax-bax*t, pay-bay*t)
+}
+
+func trayIconSDF(x, y float64) float64 {
+	const (
+		cx, cy       = 16.0, 16.0
+		halfStroke   = 1.1
+		frameHalf    = 11.9
+		frameRadius  = 5.4
+		invSqrt2     = math.Sqrt2 / 2.0
+		diamondHalf  = 1.75
+		diamondRound = 0.5
+	)
+	// Outer rounded frame (~3px inset, ~2.2px stroke, ~6px outer corner radius).
+	d := math.Abs(sdRoundedRect(x, y, cx, cy, frameHalf, frameHalf, frameRadius)) - halfStroke
+
+	// Signature opposing viewfinder corner brackets unified with brandLockup.
+	tlHoriz := sdSegment(x, y, 9.5, 9.5, 14.0, 9.5) - halfStroke
+	tlVert := sdSegment(x, y, 9.5, 9.5, 9.5, 14.0) - halfStroke
+	brHoriz := sdSegment(x, y, 18.0, 22.5, 22.5, 22.5) - halfStroke
+	brVert := sdSegment(x, y, 22.5, 18.0, 22.5, 22.5) - halfStroke
+	d = math.Min(d, math.Min(math.Min(tlHoriz, tlVert), math.Min(brHoriz, brVert)))
+
+	// Subtle center compression diamond accent.
+	dx, dy := x-cx, y-cy
+	u := (dx + dy) * invSqrt2
+	v := (dx - dy) * invSqrt2
+	diamond := sdRoundedRect(u, v, 0, 0, diamondHalf, diamondHalf, diamondRound)
+	return math.Min(d, diamond)
+}
+
 // buildTrayTemplateIconPNG generates a crisp 32x32 Retina monochrome template
-// icon (black strokes on transparent background) suitable for macOS menu bar
-// tinting as well as Windows/Linux dark/light system trays.
+// icon (black strokes on transparent background) using 4x supersampled (128x128
+// box-filtered to 32x32) analytic signed distance fields.
 func buildTrayTemplateIconPNG() []byte {
-	const size = 32
+	const (
+		size        = 32
+		supersample = 4
+		subSamples  = supersample * supersample
+		subInv      = 1.0 / float64(supersample)
+	)
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	black := color.NRGBA{R: 0, G: 0, B: 0, A: 255}
-	setRect := func(x0, y0, x1, y1 int) {
-		for y := max(0, y0); y < min(size, y1); y++ {
-			for x := max(0, x0); x < min(size, x1); x++ {
-				img.SetNRGBA(x, y, black)
+	for py := range size {
+		for px := range size {
+			var coverage float64
+			for sy := range supersample {
+				y := float64(py) + (float64(sy)+0.5)*subInv
+				for sx := range supersample {
+					x := float64(px) + (float64(sx)+0.5)*subInv
+					d := trayIconSDF(x, y)
+					subCov := 0.5 - d*float64(supersample)
+					if subCov > 0 {
+						if subCov >= 1 {
+							coverage += 1
+						} else {
+							coverage += subCov
+						}
+					}
+				}
+			}
+			alpha := uint8(math.Round((coverage / float64(subSamples)) * 255.0))
+			if alpha > 0 {
+				img.SetNRGBA(px, py, color.NRGBA{R: 0, G: 0, B: 0, A: alpha})
 			}
 		}
-	}
-	// Outer rounded-corner picture frame (3px stroke, inset 3px).
-	setRect(5, 4, 27, 7)
-	setRect(5, 25, 27, 28)
-	setRect(4, 5, 7, 27)
-	setRect(25, 5, 28, 27)
-	// Subtle "Z" compression glyph inside the frame.
-	setRect(10, 10, 22, 13)
-	setRect(10, 19, 22, 22)
-	for i := range 9 {
-		x := 19 - i
-		y := 12 + i
-		setRect(x-1, y, x+2, y+2)
 	}
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
@@ -333,7 +387,10 @@ func (s *application) buildTrayMenu() *mygo.Menu {
 			s.setSettingsOpen(true)
 			if s.settingsOpen && s.editor != nil {
 				s.editor.confirmDelete = false
-				s.editor.section = settingsGeneral
+				s.editor.section = settingsAbout
+				if s.settingsWindow != nil {
+					s.settingsWindow.Invalidate()
+				}
 				s.checkAppUpdates()
 			}
 			s.refreshTrayMenu()

@@ -187,8 +187,11 @@ func TestSettingsGeneralQuickActionPanelActions(t *testing.T) {
 	}
 	app.setSettingsOpen(true)
 	tester := ui.NewTester(app.settingsView, 724, 900)
+	if err := tester.Click("系统集成"); err != nil {
+		t.Fatalf("switching to integrations tab failed: %v", err)
+	}
 	if !tester.HasText("访达右键快捷操作") {
-		t.Fatal("general settings must render Finder Quick Action panel")
+		t.Fatal("integrations settings must render Finder Quick Action panel")
 	}
 
 	// Install runs asynchronously so UI thread is never blocked by pbs -update.

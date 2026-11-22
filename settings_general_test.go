@@ -226,7 +226,7 @@ func TestPresetEntryAndDeleteConfirmationRetainDraft(t *testing.T) {
 }
 
 func TestGeneralSettingsControlsFitWindow(t *testing.T) {
-	for _, size := range [][2]float32{{724, 700}, {640, 600}, {420, 680}} {
+	for _, size := range [][2]float32{{780, 680}, {724, 700}, {640, 600}, {420, 680}} {
 		app := newApplication()
 		app.setSettingsOpen(true)
 		tester := ui.NewTester(app.settingsView, int(size[0]), int(size[1]))
@@ -238,12 +238,20 @@ func TestGeneralSettingsControlsFitWindow(t *testing.T) {
 				t.Fatalf("%q must fit %v: %+v", label, size, control)
 			}
 		}
+		download, ok := tester.AccessByRole(ui.RoleText, "下载目录")
+		save, _ := tester.AccessByRole(ui.RoleButton, "保存")
+		if !ok || download.Offscreen || download.Bounds.Y+download.Bounds.H > save.Bounds.Y-12 {
+			t.Fatalf("the last general setting must fit above the footer at %v: %+v", size, download)
+		}
+		if err := tester.Click("关于"); err != nil {
+			t.Fatalf("switching to about tab at %v failed: %v", size, err)
+		}
 		// All shortcuts should be readable without scrolling at the supported
 		// minimum size, rather than disappearing beneath the fixed footer.
-		shortcut, ok := tester.AccessByRole(ui.RoleText, "打开设置")
-		save, _ := tester.AccessByRole(ui.RoleButton, "保存")
+		shortcut, ok := tester.AccessByRole(ui.RoleText, "切换对比 / 原图 / 结果 / 差异")
+		save, _ = tester.AccessByRole(ui.RoleButton, "保存")
 		if !ok || shortcut.Offscreen || shortcut.Bounds.Y+shortcut.Bounds.H > save.Bounds.Y-12 {
-			t.Fatalf("the last shortcut must fit above the footer at %v: %+v", size, shortcut)
+			t.Fatalf("the preview shortcut must fit above the footer at %v: %+v", size, shortcut)
 		}
 	}
 }

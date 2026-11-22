@@ -172,6 +172,8 @@ const (
 	settingsGeneral settingsSection = iota
 	settingsPresets
 	settingsFolderWatch
+	settingsIntegrations
+	settingsAbout
 )
 
 type settingsEditor struct {
@@ -476,7 +478,7 @@ func (s *application) setSettingsOpen(open bool) {
 	}
 	s.settingsWindow = mygo.NewWindow(mygo.WindowOptions{
 		Title: "设置 · Z Pic", Parent: s.window, Modal: true,
-		Width: 724, Height: 700, MinWidth: 640, MinHeight: 600,
+		Width: 780, Height: 680, MinWidth: 640, MinHeight: 600,
 		Vibrancy:        mygo.VibrancyGlass,
 		VibrancyTint:    windowVibrancyTintCSS,
 		BackgroundColor: windowBackgroundCSS,

@@ -444,6 +444,26 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 					Tooltip(first.rule.InputDir + " → " + first.rule.OutputDir)
 			}
 		})
+		if watch.last.Output != "" && watch.last.Err == nil {
+			outputPath := watch.last.Output
+			revealDisabled := !inSettings && s.modalOpen()
+			if inSettings && s.editor != nil && s.editor.confirmDelete {
+				revealDisabled = true
+			}
+			quietButton(c, "watch-reveal-last", "定位", 28, revealDisabled).
+				FontSize(fontSize).Padding(0, 8).Shrink(0).
+				Label("定位最新输出文件").Tooltip("在文件夹中显示最新输出文件").
+				OnClick(func() {
+					if inSettings {
+						if s.editor != nil && s.editor.confirmDelete {
+							return
+						}
+						s.revealFileInFolderDirect(outputPath)
+						return
+					}
+					s.revealFileInFolder(outputPath)
+				})
+		}
 		if len(sessions) > 0 {
 			label := "停止监听"
 			if allStopping {

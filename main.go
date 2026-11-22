@@ -97,6 +97,9 @@ func main() {
 			app.setFloatingOpen(false)
 			app.closeTray()
 		})
+		// Fallback for drops not consumed by ui.DropData on the main root
+		// (e.g., local file drops queued while busy or raw native file paths).
+		// mygo stops before invoking OnFileDrop whenever ui.DropData accepts the event.
 		app.window.OnFileDrop(func(e *mygo.FileDropEvent) {
 			app.dropFiles(e.Paths)
 		})
