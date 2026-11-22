@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	maxAVIFBytes  = imageinput.MaxSize
-	maxAVIFPixels = 32_000_000
-	maxFTYPBytes  = 64 << 10
-	maxBoxCount   = 1 << 16
+	maxAVIFBytes            = imageinput.MaxSize
+	maxIntermediatePNGBytes = imageinput.MaxIntermediatePNGSize
+	maxAVIFPixels           = 32_000_000
+	maxFTYPBytes            = 64 << 10
+	maxBoxCount             = 1 << 16
 )
 
 var (

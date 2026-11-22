@@ -158,9 +158,8 @@ func TestMainViewShowsWatchStatusBarForExtraRuleOnly(t *testing.T) {
 	}
 	app.watch.extraRules = []folderWatchRule{extraRule}
 	app.setWatchSessionForRule(1, &desktopWatchSession{
-		ruleIndex: 1,
-		rule:      extraRule,
-		ready:     true,
+		rule:  extraRule,
+		ready: true,
 	})
 
 	if app.watch.session != nil || app.watch.last.Input != "" || app.watch.err != nil {

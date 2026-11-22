@@ -172,9 +172,12 @@ func encodeResizedPNG(ctx context.Context, img image.Image, chunks [][]byte) ([]
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	output := pngTransformOutput{ctx: ctx, limit: maxInputSize}
+	output := pngTransformOutput{ctx: ctx, limit: maxIntermediatePNGSize}
 	for _, chunk := range chunks {
 		output.limit -= len(chunk)
+	}
+	if output.limit <= 0 {
+		return nil, fmt.Errorf("中间 PNG 超过 128 MiB 限制")
 	}
 	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
 	if err := encoder.Encode(&output, img); err != nil {
@@ -197,7 +200,7 @@ func (out *pngTransformOutput) Write(data []byte) (int, error) {
 		return 0, err
 	}
 	if len(data) > out.limit-out.buf.Len() {
-		return 0, fmt.Errorf("输出超过 64 MiB 限制")
+		return 0, fmt.Errorf("中间 PNG 超过 128 MiB 限制")
 	}
 	out.buf.AppendBounded(nil, data, out.limit)
 	return len(data), nil

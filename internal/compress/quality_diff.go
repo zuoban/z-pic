@@ -303,6 +303,22 @@ func absDiffUint8(a, b uint8) uint8 {
 	return b - a
 }
 
+var diffHeatmapLUT [256][3]uint8
+
+func init() {
+	for diff := 1; diff < len(diffHeatmapLUT); diff++ {
+		level := math.Pow(float64(diff)/255.0, 0.52)
+		if level < 0.08 {
+			level = 0.08
+		}
+		if level > 1 {
+			level = 1
+		}
+		hr, hg, hb := heatmapColor(level)
+		diffHeatmapLUT[diff] = [3]uint8{hr, hg, hb}
+	}
+}
+
 // diffHeatmapPixel renders identical regions as a dark desaturated reference
 // of the original image and maps nonzero pixel deltas onto a high-contrast
 // perceptual ramp (deep cyan -> emerald -> gold -> orange -> magenta) so even
@@ -316,20 +332,13 @@ func diffHeatmapPixel(r1, g1, b1, a1, a2, maxDiff uint8) (uint8, uint8, uint8) {
 	if maxDiff == 0 {
 		return base, base, base
 	}
-	// Nonlinear boost makes 1..15 level quantization artifacts immediately visible.
-	t := math.Pow(float64(maxDiff)/255.0, 0.52)
-	if t < 0.08 {
-		t = 0.08
-	}
-	if t > 1 {
-		t = 1
-	}
-	hr, hg, hb := heatmapColor(t)
+	heat := diffHeatmapLUT[maxDiff]
 	// Blend strongly over the muted base so structure stays subtly anchored.
 	const mix = 0.86
-	r := uint8(math.Round(float64(base)*(1-mix) + float64(hr)*mix))
-	g := uint8(math.Round(float64(base)*(1-mix) + float64(hg)*mix))
-	b := uint8(math.Round(float64(base)*(1-mix) + float64(hb)*mix))
+	baseWeighted := float64(base) * (1 - mix)
+	r := uint8(math.Round(baseWeighted + float64(heat[0])*mix))
+	g := uint8(math.Round(baseWeighted + float64(heat[1])*mix))
+	b := uint8(math.Round(baseWeighted + float64(heat[2])*mix))
 	return r, g, b
 }
 
@@ -339,11 +348,11 @@ func heatmapColor(t float64) (uint8, uint8, uint8) {
 		r, g, b float64
 	}
 	stops := [...]stop{
-		{0.00, 32, 132, 236},  // vivid blue (tiny 1-2 level diffs)
-		{0.25, 34, 211, 238},  // cyan
-		{0.50, 250, 204, 21},  // amber-yellow
-		{0.78, 249, 115, 22},  // vivid orange
-		{1.00, 244, 63, 94},   // crimson-rose (heavy artifacts)
+		{0.00, 32, 132, 236}, // vivid blue (tiny 1-2 level diffs)
+		{0.25, 34, 211, 238}, // cyan
+		{0.50, 250, 204, 21}, // amber-yellow
+		{0.78, 249, 115, 22}, // vivid orange
+		{1.00, 244, 63, 94},  // crimson-rose (heavy artifacts)
 	}
 	for i := 1; i < len(stops); i++ {
 		if t <= stops[i].pos {

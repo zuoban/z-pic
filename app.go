@@ -15,17 +15,30 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"zpic/internal/compress"
 	"zpic/internal/imageinput"
 )
 
 const (
-	maxInputBytes = imageinput.MaxSize
-	maxPixels     = 32_000_000
+	maxInputBytes         = imageinput.MaxSize
+	maxPixels             = 32_000_000
+	openFileCoalesceDelay = 60 * time.Millisecond
 	// A save dialog suggestion is advisory; actual saving uses O_EXCL.
 	maxSuggestedPathChecks = 1000
 )
+
+type openFileCoalescer struct {
+	mu      sync.Mutex
+	closed  bool
+	paths   []string
+	seen    map[string]struct{}
+	timer   *time.Timer
+	seq     uint64
+	firstAt time.Time
+	delay   time.Duration
+}
 
 type selectedImage struct {
 	path    string
@@ -139,6 +152,7 @@ type application struct {
 	dragTempDir           string
 	dragStagedResult      *compress.Result
 	dragStagedPath        string
+	openFiles             openFileCoalescer
 }
 
 func newApplication() *application {
@@ -238,6 +252,84 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 			apply()
 		}
 	})
+}
+
+func (s *application) enqueueOpenFile(path string) {
+	if path == "" {
+		return
+	}
+	s.openFiles.mu.Lock()
+	defer s.openFiles.mu.Unlock()
+	if s.openFiles.closed {
+		return
+	}
+	if s.openFiles.seen == nil {
+		s.openFiles.seen = make(map[string]struct{})
+	}
+	if _, dup := s.openFiles.seen[path]; dup {
+		return
+	}
+	s.openFiles.seen[path] = struct{}{}
+	s.openFiles.paths = append(s.openFiles.paths, path)
+
+	delay := s.openFiles.delay
+	if delay <= 0 {
+		delay = openFileCoalesceDelay
+	}
+	now := time.Now()
+	if s.openFiles.firstAt.IsZero() {
+		s.openFiles.firstAt = now
+	}
+	maxWait := 5 * delay
+	remaining := maxWait - now.Sub(s.openFiles.firstAt)
+	if remaining <= 0 {
+		if s.openFiles.timer != nil {
+			return
+		}
+		remaining = 0
+	}
+	wait := min(delay, remaining)
+	if s.openFiles.timer != nil {
+		s.openFiles.timer.Stop()
+	}
+	s.openFiles.seq++
+	seq := s.openFiles.seq
+	s.openFiles.timer = time.AfterFunc(wait, func() {
+		s.flushOpenFiles(seq)
+	})
+}
+
+func (s *application) flushOpenFiles(seq uint64) {
+	s.openFiles.mu.Lock()
+	if s.openFiles.closed || s.openFiles.seq != seq || len(s.openFiles.paths) == 0 {
+		s.openFiles.mu.Unlock()
+		return
+	}
+	paths := s.openFiles.paths
+	s.openFiles.paths = nil
+	s.openFiles.seen = nil
+	s.openFiles.timer = nil
+	s.openFiles.firstAt = time.Time{}
+	s.openFiles.mu.Unlock()
+
+	s.update(func() {
+		s.showMainWindow()
+		s.dropFiles(paths)
+	})
+}
+
+func (s *application) cancelOpenFiles() {
+	s.openFiles.mu.Lock()
+	s.openFiles.closed = true
+	s.openFiles.seq++
+	if s.openFiles.timer != nil {
+		s.openFiles.timer.Stop()
+		s.openFiles.timer = nil
+	}
+	s.openFiles.paths = nil
+	s.openFiles.seen = nil
+	s.openFiles.firstAt = time.Time{}
+	s.openFiles.mu.Unlock()
 }
 
 func supportedImageFormats() []string {

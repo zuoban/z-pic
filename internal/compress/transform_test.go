@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"zpic/internal/jpegtools"
@@ -421,6 +422,64 @@ func TestNativeLosslessMetadataConvertAndResize(t *testing.T) {
 	}
 	if !pngHasChunk(pngResized.Data, "iCCP") {
 		t.Fatal("resized PNG with MetadataKeepICC must preserve iCCP")
+	}
+}
+
+func TestLosslessJPEGWithoutMozJPEGMustStripFails(t *testing.T) {
+	origAvailable := jpegtoolsAvailable
+	jpegtoolsAvailable = func() bool { return false }
+	defer func() { jpegtoolsAvailable = origAvailable }()
+
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := range 64 {
+		for x := range 64 {
+			img.SetRGBA(x, y, color.RGBA{R: uint8(x * 4), G: uint8(y * 4), B: 90, A: 255})
+		}
+	}
+	icc := syntheticRGBICC()
+	withMeta := makeJPEGWithICCAndOrient(t, img, icc, 6)
+
+	for _, policy := range []MetadataPolicy{MetadataKeepICC, MetadataStrip} {
+		if _, err := Bytes(context.Background(), withMeta, "/tmp/meta.jpg", Options{
+			Quality:  80,
+			Lossless: true,
+			Metadata: policy,
+		}); err == nil || !strings.Contains(err.Error(), "MozJPEG") {
+			t.Fatalf("policy=%q: expected explicit MozJPEG error when stripping metadata losslessly, got %v", policy, err)
+		}
+	}
+
+	keepAll, err := Bytes(context.Background(), withMeta, "/tmp/meta.jpg", Options{
+		Quality:  80,
+		Lossless: true,
+		Metadata: MetadataKeepAll,
+	})
+	if err != nil {
+		t.Fatalf("lossless JPEG MetadataKeepAll without MozJPEG failed: %v", err)
+	}
+	if !keepAll.Unchanged || !bytes.Equal(keepAll.Data, withMeta) {
+		t.Fatalf("lossless JPEG MetadataKeepAll without MozJPEG must preserve exact bytes: unchanged=%v", keepAll.Unchanged)
+	}
+
+	var plainBuf bytes.Buffer
+	if err := jpeg.Encode(&plainBuf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	plain := plainBuf.Bytes()
+	keepPlain, err := Bytes(context.Background(), plain, "/tmp/plain.jpg", Options{
+		Quality:  80,
+		Lossless: true,
+		Metadata: MetadataStrip,
+	})
+	if err != nil {
+		t.Fatalf("lossless JPEG without strippable metadata failed: %v", err)
+	}
+	if !keepPlain.Unchanged || !bytes.Equal(keepPlain.Data, plain) {
+		t.Fatalf("lossless JPEG without strippable metadata must preserve exact bytes: unchanged=%v", keepPlain.Unchanged)
+	}
+
+	if _, err := encodeResizedPNG(context.Background(), img, [][]byte{make([]byte, maxIntermediatePNGSize)}); err == nil || !strings.Contains(err.Error(), "128 MiB") {
+		t.Fatalf("expected intermediate PNG 128 MiB limit error, got %v", err)
 	}
 }
 

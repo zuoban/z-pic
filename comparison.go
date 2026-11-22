@@ -109,9 +109,10 @@ func (s *application) ensureComparisonDiff() {
 		Height: s.file.height,
 		Size:   s.file.size,
 	}
+	outputBytes := int64(len(compData))
 	go func() {
 		defer cancel()
-		release, memErr := s.acquirePreviewMemory(ctx, info)
+		release, memErr := s.acquireVisualDiffMemory(ctx, info, outputBytes)
 		var (
 			metrics compress.QualityMetrics
 			bitmap  *ui.Bitmap
@@ -333,7 +334,7 @@ func (s *application) previewZoomControls(c *ui.Context) {
 				button := ui.Button(c.Key(key), "").Size(28, 28).Radius(pillRadius(28, c)).
 					Background(ui.Transparent).Border(0, ui.Transparent).Label(label).
 					KeyShortcuts(ui.Cmd, keyCode).
-					Tooltip(label+" · "+shortcutLabel(hintKey)).
+					Tooltip(label + " · " + shortcutLabel(hintKey)).
 					Disabled(disabled)
 				if !disabled {
 					if button.Pressed() {

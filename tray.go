@@ -103,11 +103,18 @@ func (s *application) trayWatchRulesHash() uint64 {
 		}
 		mixByte(0)
 	}
-	mixRule := func(idx int, rule folderWatchRule) {
+	mixUint64 := func(value uint64) {
+		for range 8 {
+			mixByte(byte(value))
+			value >>= 8
+		}
+	}
+	mixRule := func(ruleID uint64, rule folderWatchRule) {
+		mixUint64(ruleID)
 		mixString(rule.InputDir)
 		mixString(rule.OutputDir)
 		mixString(rule.Preset)
-		sess := s.watchSessionForRule(idx)
+		sess := s.watchSessionForRuleID(ruleID)
 		var flags byte
 		if sess != nil {
 			flags |= 1
@@ -117,9 +124,8 @@ func (s *application) trayWatchRulesHash() uint64 {
 		}
 		mixByte(flags)
 	}
-	mixRule(0, s.watch.settings.primaryRule())
-	for i, rule := range s.watch.extraRules {
-		mixRule(i+1, rule)
+	for _, item := range s.watchRulesWithIDs() {
+		mixRule(item.id, item.rule)
 	}
 	return h
 }
@@ -240,10 +246,10 @@ func (s *application) buildTrayMenu() *mygo.Menu {
 	items = append(items, mygo.Separator())
 
 	activeCount := s.activeFolderWatchCount()
-	rules := s.allWatchRules()
+	rules := s.watchRulesWithIDs()
 	configured := 0
-	for _, r := range rules {
-		if r.InputDir != "" && r.OutputDir != "" {
+	for _, item := range rules {
+		if item.rule.InputDir != "" && item.rule.OutputDir != "" {
 			configured++
 		}
 	}
@@ -257,13 +263,14 @@ func (s *application) buildTrayMenu() *mygo.Menu {
 		Disabled: true,
 	})
 
-	for idx, rule := range rules {
+	for _, item := range rules {
+		rule := item.rule
 		if rule.InputDir == "" || rule.OutputDir == "" {
 			continue
 		}
-		ruleIdx := idx
+		ruleID := item.id
 		ruleCopy := rule
-		session := s.watchSessionForRule(ruleIdx)
+		session := s.watchSessionForRuleID(ruleID)
 		running := session != nil
 		name := filepath.Base(rule.InputDir)
 		if name == "" || name == "." || name == "/" {
@@ -275,16 +282,16 @@ func (s *application) buildTrayMenu() *mygo.Menu {
 		}
 		label := fmt.Sprintf("%s（%s）", name, presetName)
 		items = append(items, &mygo.MenuItem{
-			ID:       fmt.Sprintf("tray-watch-rule-%d", ruleIdx),
+			ID:       fmt.Sprintf("tray-watch-rule-%d", ruleID),
 			Label:    label,
 			Type:     mygo.MenuItemCheckbox,
 			Checked:  running,
 			Disabled: session != nil && session.stopping,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				if s.watchSessionForRule(ruleIdx) != nil {
-					s.stopWatchRule(ruleIdx)
+				if s.watchSessionForRuleID(ruleID) != nil {
+					s.stopWatchRuleByID(ruleID)
 				} else {
-					if err := s.startWatchRule(ruleIdx, ruleCopy); err != nil {
+					if err := s.startWatchRuleByID(ruleID, ruleCopy, s.watch.settings.Notify, true); err != nil {
 						s.watch.err = err
 						s.invalidateFolderWatchViews()
 					}

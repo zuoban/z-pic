@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -179,5 +182,386 @@ func TestDesktopWatchExtraRuleInvalidPresetWarning(t *testing.T) {
 	tester.Frame()
 	if _, ok := tester.AccessByRole(ui.RoleAlert, "所选监听预设已不可用，请重新选择"); ok {
 		t.Fatal("invalid preset alert must disappear once extra rule preset is valid")
+	}
+}
+
+func TestDesktopWatchDeleteStoppedRuleWhileLaterRuleRunning(t *testing.T) {
+	root := t.TempDir()
+	in2, out2 := filepath.Join(root, "in2"), filepath.Join(root, "out2")
+	in3, out3 := filepath.Join(root, "in3"), filepath.Join(root, "out3")
+	for _, dir := range []string{in2, in3} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settingsPath := filepath.Join(root, "settings.json")
+	t.Setenv("ZPIC_CONFIG_FILE", settingsPath)
+
+	app := newApplication()
+	app.restoreSettings()
+	updates := make(chan func(), 32)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	t.Cleanup(app.closeFolderWatch)
+
+	rule2 := folderWatchRule{InputDir: in2, OutputDir: out2, Preset: "均衡"}
+	rule3 := folderWatchRule{InputDir: in3, OutputDir: out3, Preset: "≤ 500 KiB"}
+	app.watch.extraRules = []folderWatchRule{rule2, rule3}
+	app.ensureWatchRuleIDs()
+	rule3ID := app.watch.extraRuleIDs[1]
+
+	if err := app.startWatchRuleByID(rule3ID, rule3, false, false); err != nil {
+		t.Fatalf("startWatchRuleByID(rule3): %v", err)
+	}
+	awaitDesktopWatchUpdate(t, updates, func() bool {
+		sess := app.watchSessionForRuleID(rule3ID)
+		return sess != nil && sess.ready
+	})
+
+	tester := openTestSettings(t, app)
+	if err := tester.Click("文件夹监听"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+
+	// Stopped Rule 2 must be deletable while Rule 3 is actively running.
+	var deleteButtons []ui.AccessInfo
+	for _, node := range tester.AccessAll() {
+		if node.Role == ui.RoleButton && node.Name == "删除" {
+			deleteButtons = append(deleteButtons, node)
+		}
+	}
+	if len(deleteButtons) != 2 {
+		t.Fatalf("expected 2 delete buttons for extra rules, got %d", len(deleteButtons))
+	}
+	if deleteButtons[0].Disabled {
+		t.Fatal("delete button for stopped earlier rule must be enabled while later rule runs")
+	}
+	if !deleteButtons[1].Disabled {
+		t.Fatal("delete button for actively running rule must remain disabled")
+	}
+	if deleteButtons[0].Offscreen {
+		tester.Scroll(420, 350, 0, 360)
+		tester.Frame()
+	}
+
+	if err := tester.Click("删除"); err != nil {
+		t.Fatalf("click delete on Rule 2: %v", err)
+	}
+	tester.Frame()
+
+	if len(app.editor.watchRules) != 1 || app.editor.watchRules[0] != rule3 {
+		t.Fatalf("expected only rule3 left in editor, got %+v", app.editor.watchRules)
+	}
+	if len(app.editor.watchRuleIDs) != 1 || app.editor.watchRuleIDs[0] != rule3ID {
+		t.Fatalf("expected rule3 stable ID %d preserved in editor, got %+v", rule3ID, app.editor.watchRuleIDs)
+	}
+	if app.watchSessionForRuleID(rule3ID) == nil {
+		t.Fatal("rule3 session must keep running after deleting stopped rule2")
+	}
+
+	app.saveSettingsEdits()
+	if app.settingsOpen {
+		t.Fatalf("expected settings to save and close cleanly, watchMessage=%q message=%q", app.editor.watchMessage, app.editor.message)
+	}
+	if len(app.watch.extraRules) != 1 || app.watch.extraRules[0] != rule3 {
+		t.Fatalf("expected saved extraRules to contain only rule3, got %+v", app.watch.extraRules)
+	}
+	if app.watchSessionForRule(1) == nil || app.watchSessionForRule(1) != app.watchSessionForRuleID(rule3ID) {
+		t.Fatal("expected rule3 session to remain bound to saved rule slot and stable ID")
+	}
+
+	// Verify rule3 still processes incoming files cleanly after rule2 was removed.
+	writeTestJPEG(t, filepath.Join(in3, "after-delete.jpg"), 160, 120, 95)
+	awaitDesktopWatchUpdate(t, updates, func() bool {
+		sess := app.watchSessionForRuleID(rule3ID)
+		return sess != nil && sess.last.Input != ""
+	})
+	if err := app.watchSessionForRuleID(rule3ID).last.Err; err != nil {
+		t.Fatalf("rule3 failed processing after index shift: %v", err)
+	}
+
+	// Verify tray menu tracks rule3 by its stable ID and can stop it cleanly.
+	menu := app.buildTrayMenu()
+	trayItem := menu.ItemByID(fmt.Sprintf("tray-watch-rule-%d", rule3ID))
+	if trayItem == nil || !trayItem.Checked || trayItem.Click == nil {
+		t.Fatalf("expected checked tray item for rule3 ID %d, got %+v", rule3ID, trayItem)
+	}
+	trayItem.Click(trayItem, nil)
+	awaitDesktopWatchUpdate(t, updates, func() bool {
+		return app.activeFolderWatchCount() == 0
+	})
+}
+
+func TestDesktopWatchConflictValidation(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "a")
+	dirB := filepath.Join(root, "b")
+	dirBSub := filepath.Join(dirB, "sub")
+	dirC := filepath.Join(root, "c")
+	dirOut1 := filepath.Join(root, "out1")
+	dirOut2 := filepath.Join(root, "out2")
+	for _, dir := range []string{dirA, dirB, dirBSub, dirC, dirOut1, dirOut2} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkA := filepath.Join(root, "link-a")
+	linkB := filepath.Join(root, "link-b")
+	if err := os.Symlink(dirA, linkA); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dirB, linkB); err != nil {
+		t.Fatal(err)
+	}
+
+	conflictCases := []struct {
+		name   string
+		first  folderWatchRule
+		second folderWatchRule
+	}{
+		{
+			name:   "direct loop A->B and B->A",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirB, OutputDir: dirA, Preset: "均衡"},
+		},
+		{
+			name:   "chain A->B and B->C",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirB, OutputDir: dirC, Preset: "均衡"},
+		},
+		{
+			name:   "recursive A->B/sub vs B->C",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirBSub, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirB, OutputDir: dirC, Preset: "均衡", Recursive: true},
+		},
+		{
+			name:   "recursive A->B vs B/sub->C",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "均衡", Recursive: true},
+			second: folderWatchRule{InputDir: dirBSub, OutputDir: dirC, Preset: "均衡"},
+		},
+		{
+			name:   "duplicate A->B and A->B",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "≤ 500 KiB"},
+		},
+		{
+			name:   "symlink alias loop A->B and linkB->linkA",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirB, Preset: "均衡"},
+			second: folderWatchRule{InputDir: linkB, OutputDir: linkA, Preset: "均衡"},
+		},
+	}
+
+	for _, tc := range conflictCases {
+		t.Run("reject_"+tc.name, func(t *testing.T) {
+			// 1. Reject on saveSettingsEdits.
+			settingsPath := filepath.Join(t.TempDir(), "settings.json")
+			app := newApplication()
+			app.settingsFile = settingsPath
+			app.setSettingsOpen(true)
+			app.editor.section = settingsGeneral
+			app.editor.watch.applyPrimaryRule(tc.first)
+			app.editor.watchRules = []folderWatchRule{tc.second}
+			app.saveSettingsEdits()
+			if !app.settingsOpen {
+				t.Fatalf("saveSettingsEdits must reject conflicting rules (%s)", tc.name)
+			}
+			if app.editor.section != settingsFolderWatch {
+				t.Fatalf("expected section to switch to settingsFolderWatch, got %v", app.editor.section)
+			}
+			if app.editor.watchMessage == "" {
+				t.Fatal("expected watchMessage to describe the conflict")
+			}
+
+			// 2. Reject on startWatchRule against an actively running rule.
+			runApp := newApplication()
+			updates := make(chan func(), 32)
+			runApp.dispatchUpdate = func(update func()) { updates <- update }
+			t.Cleanup(runApp.closeFolderWatch)
+			if err := runApp.startWatchRuleWithNotify(0, tc.first, false, false); err != nil {
+				t.Fatalf("start first rule: %v", err)
+			}
+			awaitDesktopWatchUpdate(t, updates, func() bool {
+				return runApp.watch.session != nil && runApp.watch.session.ready
+			})
+			if err := runApp.startWatchRuleWithNotify(1, tc.second, false, false); err == nil {
+				t.Fatalf("startWatchRule must reject conflicting rule (%s)", tc.name)
+			}
+			if runApp.watchSessionForRule(1) != nil {
+				t.Fatal("conflicting second rule must not create an active session")
+			}
+		})
+	}
+
+	allowedCases := []struct {
+		name   string
+		first  folderWatchRule
+		second folderWatchRule
+	}{
+		{
+			name:   "fan-out A->Out1 and A->Out2",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirOut1, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirA, OutputDir: dirOut2, Preset: "≤ 500 KiB"},
+		},
+		{
+			name:   "fan-in A->Out1 and B->Out1",
+			first:  folderWatchRule{InputDir: dirA, OutputDir: dirOut1, Preset: "均衡"},
+			second: folderWatchRule{InputDir: dirB, OutputDir: dirOut1, Preset: "≤ 500 KiB"},
+		},
+	}
+
+	for _, tc := range allowedCases {
+		t.Run("allow_"+tc.name, func(t *testing.T) {
+			// 1. Allow on saveSettingsEdits.
+			settingsPath := filepath.Join(t.TempDir(), "settings.json")
+			app := newApplication()
+			app.settingsFile = settingsPath
+			app.setSettingsOpen(true)
+			app.editor.watch.applyPrimaryRule(tc.first)
+			app.editor.watchRules = []folderWatchRule{tc.second}
+			app.saveSettingsEdits()
+			if app.settingsOpen {
+				t.Fatalf("saveSettingsEdits must allow %s, got watchMessage=%q message=%q", tc.name, app.editor.watchMessage, app.editor.message)
+			}
+
+			// 2. Allow concurrent startWatchRule.
+			runApp := newApplication()
+			updates := make(chan func(), 32)
+			runApp.dispatchUpdate = func(update func()) { updates <- update }
+			t.Cleanup(runApp.closeFolderWatch)
+			if err := runApp.startWatchRuleWithNotify(0, tc.first, false, false); err != nil {
+				t.Fatalf("start first rule (%s): %v", tc.name, err)
+			}
+			if err := runApp.startWatchRuleWithNotify(1, tc.second, false, false); err != nil {
+				t.Fatalf("start second rule (%s): %v", tc.name, err)
+			}
+			awaitDesktopWatchUpdate(t, updates, func() bool {
+				s0 := runApp.watchSessionForRule(0)
+				s1 := runApp.watchSessionForRule(1)
+				return s0 != nil && s0.ready && s1 != nil && s1.ready
+			})
+		})
+	}
+
+	selfOverlapCases := []struct {
+		name string
+		rule folderWatchRule
+	}{
+		{name: "same input and output", rule: folderWatchRule{InputDir: dirA, OutputDir: dirA, Preset: "均衡"}},
+		{name: "output inside input", rule: folderWatchRule{InputDir: dirB, OutputDir: dirBSub, Preset: "均衡"}},
+		{name: "recursive input inside output", rule: folderWatchRule{InputDir: dirBSub, OutputDir: dirB, Preset: "均衡", Recursive: true}},
+	}
+	for _, tc := range selfOverlapCases {
+		t.Run("self_"+tc.name, func(t *testing.T) {
+			app := newApplication()
+			app.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+			app.setSettingsOpen(true)
+			app.editor.section = settingsGeneral
+			app.editor.watch.applyPrimaryRule(tc.rule)
+			app.saveSettingsEdits()
+			if !app.settingsOpen || app.editor.section != settingsFolderWatch || app.editor.watchMessage == "" {
+				t.Fatalf("saveSettingsEdits must reject self-overlapping rule (%s)", tc.name)
+			}
+			if err := app.startWatchRuleWithNotify(0, tc.rule, false, false); err == nil {
+				t.Fatalf("startWatchRule must reject self-overlapping rule (%s)", tc.name)
+			}
+		})
+	}
+}
+
+func TestDesktopWatchPersistingStartRejectsConflictWithStoppedSavedRule(t *testing.T) {
+	root := t.TempDir()
+	dirA := filepath.Join(root, "A")
+	dirB := filepath.Join(root, "B")
+	dirC := filepath.Join(root, "C")
+	for _, d := range []string{dirA, dirB, dirC} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settingsPath := filepath.Join(root, "settings.json")
+	t.Setenv("ZPIC_CONFIG_FILE", settingsPath)
+
+	app := newApplication()
+	app.restoreSettings()
+	t.Cleanup(app.closeFolderWatch)
+
+	// Save primary rule A -> B (stopped).
+	primary := folderWatchSettings{
+		InputDir:  dirA,
+		OutputDir: dirB,
+		Preset:    "均衡",
+	}
+	if err := app.rememberFolderWatchSettings(primary); err != nil {
+		t.Fatalf("rememberFolderWatchSettings: %v", err)
+	}
+
+	// Attempting to start rule 2 (B -> C) with persist=true must fail synchronously
+	// even though primary rule is not currently running.
+	conflicting := folderWatchRule{
+		InputDir:  dirB,
+		OutputDir: dirC,
+		Preset:    "均衡",
+	}
+	if err := app.startWatchRule(1, conflicting); err == nil {
+		t.Fatal("startWatchRule(persist=true) must reject rule conflicting with stopped saved primary rule")
+	}
+	if app.watchSessionForRule(1) != nil {
+		t.Fatal("conflicting rule must not start a session")
+	}
+
+	// Direct rememberFolderWatchRule must also refuse to persist a conflicting rule.
+	if err := app.rememberFolderWatchRule(1, conflicting, false); err == nil {
+		t.Fatal("rememberFolderWatchRule must reject rule conflicting with saved primary rule")
+	}
+
+	// settings.json must still contain only the clean primary rule and zero extra rules.
+	loaded, err := loadFullSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("loadFullSettings: %v", err)
+	}
+	if loaded.watch.primaryRule() != primary.primaryRule() {
+		t.Fatalf("primary rule changed unexpectedly: %+v", loaded.watch)
+	}
+	if len(loaded.watchRules) != 0 {
+		t.Fatalf("expected no conflicting extra watch rules persisted, got %+v", loaded.watchRules)
+	}
+}
+
+func TestDesktopWatchInspectInputParentNotDirWording(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "not-a-dir")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveOutputDirectory(context.Background(), filePath); err == nil {
+		t.Fatal("expected error when resolved path is a regular file")
+	} else if strings.Contains(err.Error(), "输出路径") || !strings.Contains(err.Error(), "父级不是文件夹") {
+		t.Fatalf("unexpected resolveOutputDirectory error wording: %v", err)
+	}
+	if _, err := inspectWatchPath(filepath.Join(filePath, "child"), "输入目录"); err == nil {
+		t.Fatal("expected error when input parent is a regular file")
+	} else if strings.Contains(err.Error(), "输出路径") || !strings.Contains(err.Error(), "输入目录无效") {
+		t.Fatalf("unexpected inspectWatchPath error wording: %v", err)
+	}
+}
+
+func TestDesktopWatchCaseInsensitiveNonexistentPaths(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("case-insensitive nonexistent watch path matching applies on darwin/windows")
+	}
+	root := t.TempDir()
+	dirA := filepath.Join(root, "in-a")
+	dirC := filepath.Join(root, "out-c")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := newApplication()
+	err := app.validateFolderWatchRules(
+		folderWatchRule{InputDir: dirA, OutputDir: filepath.Join(root, "Out"), Preset: "均衡"},
+		[]folderWatchRule{{InputDir: filepath.Join(root, "out"), OutputDir: dirC, Preset: "均衡"}},
+		[]uint64{1},
+	)
+	if err == nil {
+		t.Fatal("expected nonexistent /Out and /out to conflict on case-insensitive platform")
 	}
 }

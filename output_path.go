@@ -70,7 +70,7 @@ func resolveOutputDirectory(ctx context.Context, directory string) (string, erro
 		}
 	}
 	if !info.IsDir() {
-		return "", errors.New("输出路径中的父级不是文件夹")
+		return "", errors.New("路径中的父级不是文件夹")
 	}
 	return resolved, ctx.Err()
 }

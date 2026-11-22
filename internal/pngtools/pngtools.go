@@ -1,5 +1,5 @@
 // Package pngtools runs pinned native PNG tools on raw PNG bytes.
-// Callers validate static PNG input (at most 64 MiB and 32 MP) and output.
+// Callers validate static PNG input (at most 64 MiB for original files or 128 MiB for intermediate PNGs, and 32 MP) and output (at most 64 MiB).
 package pngtools
 
 import (
@@ -16,17 +16,19 @@ import (
 	"strings"
 	"time"
 
+	"zpic/internal/imageinput"
 	"zpic/internal/toolcache"
 	"zpic/internal/toolio"
 )
 
 const (
-	maxPNGBytes = 64 << 20
-	maxStderr   = toolio.MaxDiagnosticBytes
-	toolTimeout = 2 * time.Minute
+	maxPNGBytes      = imageinput.MaxSize
+	maxPNGInputBytes = imageinput.MaxIntermediatePNGSize
+	maxStderr        = toolio.MaxDiagnosticBytes
+	toolTimeout      = 2 * time.Minute
 )
 
-var errOutputLimit = errors.New("PNG 工具输出超过 64 MiB 限制")
+var ErrOutputLimit = errors.New("PNG 工具输出超过 64 MiB 限制")
 
 var (
 	userCacheDir = os.UserCacheDir
@@ -178,8 +180,8 @@ func checkInput(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("PNG 处理已取消：%w", err)
 	}
-	if len(data) > maxPNGBytes {
-		return fmt.Errorf("PNG 输入超过 64 MiB 限制")
+	if len(data) > maxPNGInputBytes {
+		return fmt.Errorf("PNG 输入超过 128 MiB 限制")
 	}
 	return nil
 }
@@ -281,7 +283,7 @@ func runCommandWithConfig(ctx context.Context, name, path string, args []string,
 		return nil, fmt.Errorf("%s 已取消或超时：%w", name, ctx.Err())
 	}
 	if stdout.overflow || stdout.size > limit {
-		return nil, fmt.Errorf("%s：%w", name, errOutputLimit)
+		return nil, fmt.Errorf("%s：%w", name, ErrOutputLimit)
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -334,7 +336,7 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 	if n < len(p) || w.size == w.limit {
 		w.overflow = true
 		w.cancel()
-		return n, errOutputLimit
+		return n, ErrOutputLimit
 	}
 	return n, nil
 }

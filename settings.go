@@ -186,6 +186,7 @@ type settingsEditor struct {
 	downloadDir          string
 	watch                folderWatchSettings
 	watchRules           []folderWatchRule
+	watchRuleIDs         []uint64
 	watchMessage         string
 	cliStatus            cliInstallStatus
 	cliMessage           string
@@ -384,6 +385,8 @@ func (s *application) restoreSettings() {
 	s.downloadDir = normalizeDownloadDir(cfg.downloadDir)
 	s.watch.settings = cfg.watch
 	s.watch.extraRules = slices.Clone(cfg.watchRules)
+	s.watch.extraRuleIDs = nil
+	s.ensureWatchRuleIDs()
 	s.syncTheme(cfg.theme)
 	s.applyScheme(cfg.selected)
 }
@@ -416,14 +419,31 @@ func (s *application) setSettingsOpen(open bool) {
 			active = index
 		}
 	}
+	s.ensureWatchRuleIDs()
 	watch := s.watch.settings
 	if session := s.watch.session; session != nil {
 		watch = session.settings
 	}
 	watchRules := slices.Clone(s.watch.extraRules)
-	for i := range watchRules {
-		if session := s.watchSessionForRule(i + 1); session != nil {
+	watchRuleIDs := slices.Clone(s.watch.extraRuleIDs[:len(watchRules)])
+	seenRuleIDs := make(map[uint64]bool, len(watchRuleIDs))
+	for i, id := range watchRuleIDs {
+		seenRuleIDs[id] = true
+		if session := s.watchSessionForRuleID(id); session != nil {
 			watchRules[i] = session.rule
+		}
+	}
+	if len(s.watch.ruleSessions) > 0 {
+		extraIDs := make([]uint64, 0, len(s.watch.ruleSessions))
+		for id, session := range s.watch.ruleSessions {
+			if session != nil && !seenRuleIDs[id] {
+				extraIDs = append(extraIDs, id)
+			}
+		}
+		slices.Sort(extraIDs)
+		for _, id := range extraIDs {
+			watchRules = append(watchRules, s.watch.ruleSessions[id].rule)
+			watchRuleIDs = append(watchRuleIDs, id)
 		}
 	}
 	openAtLoginSupported := s.effectiveOpenAtLoginSupported()
@@ -442,6 +462,7 @@ func (s *application) setSettingsOpen(open bool) {
 		downloadDir:          s.downloadDir,
 		watch:                watch,
 		watchRules:           watchRules,
+		watchRuleIDs:         watchRuleIDs,
 		cliStatus:            inspectCLIInstall(s.effectiveCLIInstallEnv()),
 		quickActionStatus:    inspectQuickAction(s.effectiveQuickActionEnv()),
 		presets:              slices.Clone(s.presets),
@@ -847,6 +868,26 @@ func (s *application) saveSettingsEdits() {
 		s.editor.notice = ""
 		return
 	}
+	s.ensureEditorWatchRuleIDs(s.editor)
+	watch := s.editor.watch
+	if watch.Preset == "" && (watch.InputDir != "" || watch.OutputDir != "") {
+		watch.Preset = s.scheme
+	}
+	watchRules := slices.Clone(s.editor.watchRules)
+	watchRuleIDs := slices.Clone(s.editor.watchRuleIDs)
+	for i := range watchRules {
+		if watchRules[i].Preset == "" && (watchRules[i].InputDir != "" || watchRules[i].OutputDir != "") {
+			watchRules[i].Preset = s.scheme
+		}
+	}
+	if err := s.validateFolderWatchRules(watch.primaryRule(), watchRules, watchRuleIDs); err != nil {
+		s.editor.section = settingsFolderWatch
+		s.editor.watchMessage = err.Error()
+		s.editor.message = "无法保存设置：" + err.Error()
+		s.editor.notice = ""
+		return
+	}
+	s.editor.watchMessage = ""
 	if s.settingsFile == "" {
 		path, err := settingsFilePath()
 		if err != nil {
@@ -854,16 +895,6 @@ func (s *application) saveSettingsEdits() {
 			return
 		}
 		s.settingsFile = path
-	}
-	watch := s.editor.watch
-	if watch.Preset == "" && (watch.InputDir != "" || watch.OutputDir != "") {
-		watch.Preset = s.scheme
-	}
-	watchRules := slices.Clone(s.editor.watchRules)
-	for i := range watchRules {
-		if watchRules[i].Preset == "" && (watchRules[i].InputDir != "" || watchRules[i].OutputDir != "") {
-			watchRules[i].Preset = s.scheme
-		}
 	}
 	if err := s.saveSettingsSnapshotFull(presets, selected, s.batchOutputDir, s.editor.theme, s.editor.autoCompress, s.editor.backupToTrash, s.editor.keepInMenuBar, downloadDir, watch, watchRules); err != nil {
 		s.editor.message = "无法保存设置：" + err.Error()
@@ -876,6 +907,7 @@ func (s *application) saveSettingsEdits() {
 	s.downloadDir = downloadDir
 	s.watch.settings = watch
 	s.watch.extraRules = watchRules
+	s.watch.extraRuleIDs = watchRuleIDs
 	if s.settingsError != "" {
 		s.setMessage("设置已保存。", false)
 	}

@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"math/rand/v2"
 	"testing"
+
+	"zpic/internal/pngtools"
 )
 
 const (
@@ -436,4 +439,72 @@ func targetSizeNoise(width, height int) *image.NRGBA {
 		}
 	}
 	return img
+}
+
+func TestCompressPNGTargetSizeRecoversFromOutputLimit(t *testing.T) {
+	basePNG := pngFixture(t, image.NewNRGBA(image.Rect(0, 0, 4, 4)), png.DefaultCompression)
+	cfg := image.Config{Width: 4, Height: 4}
+	paddedPNG := func(extra int) []byte {
+		return insertPNGChunk(basePNG, "tEXt", append([]byte("pad\x00"), bytes.Repeat([]byte{'a'}, extra)...))
+	}
+
+	t.Run("recovers when baseline and high tiers exceed 64 MiB limit", func(t *testing.T) {
+		target := int64(len(paddedPNG(600)))
+		var calls int
+		out, _, err := compressPNGWithEncoder(context.Background(), basePNG, cfg, Options{
+			PNG:             DefaultPNGOptions(),
+			TargetSizeBytes: target,
+		}, nil, true, func(_ context.Context, _ []byte, _ image.Config, opt Options, _ [][]byte) (pngCandidate, error) {
+			calls++
+			// Baseline (MinQuality 65) and higher tiers hit 64 MiB limit.
+			if opt.PNG.Colors >= 128 {
+				return pngCandidate{}, fmt.Errorf("oxipng：%w", pngtools.ErrOutputLimit)
+			}
+			// 64 colors exceeds target, 32 colors fits right under target, fewer are smaller.
+			extra := opt.PNG.Colors * 16
+			return pngCandidate{data: paddedPNG(extra), quantized: true}, nil
+		})
+		if err != nil {
+			t.Fatalf("expected recovery via target-size tiers, got error: %v", err)
+		}
+		if calls < 2 {
+			t.Fatalf("expected target-size tiers to be probed, got %d call(s)", calls)
+		}
+		if int64(len(out)) > target {
+			t.Fatalf("output size %d exceeds target %d", len(out), target)
+		}
+		// 32 colors -> 512 bytes padding is the highest-quality fitting tier.
+		wantLen := len(paddedPNG(32 * 16))
+		if len(out) != wantLen {
+			t.Fatalf("got output size %d, want highest fitting tier size %d", len(out), wantLen)
+		}
+	})
+
+	t.Run("returns ErrOutputLimit when all tiers exceed limit", func(t *testing.T) {
+		_, _, err := compressPNGWithEncoder(context.Background(), basePNG, cfg, Options{
+			PNG:             DefaultPNGOptions(),
+			TargetSizeBytes: 1024,
+		}, nil, true, func(_ context.Context, _ []byte, _ image.Config, _ Options, _ [][]byte) (pngCandidate, error) {
+			return pngCandidate{}, fmt.Errorf("oxipng：%w", pngtools.ErrOutputLimit)
+		})
+		if !errors.Is(err, pngtools.ErrOutputLimit) {
+			t.Fatalf("expected ErrOutputLimit, got %v", err)
+		}
+	})
+
+	t.Run("lossless or no-target does not retry on ErrOutputLimit", func(t *testing.T) {
+		for _, opt := range []Options{
+			{PNG: DefaultPNGOptions(), TargetSizeBytes: 0},
+			{PNG: DefaultPNGOptions(), TargetSizeBytes: 1024, Lossless: true},
+		} {
+			calls := 0
+			_, _, err := compressPNGWithEncoder(context.Background(), basePNG, cfg, opt, nil, true, func(_ context.Context, _ []byte, _ image.Config, _ Options, _ [][]byte) (pngCandidate, error) {
+				calls++
+				return pngCandidate{}, fmt.Errorf("oxipng：%w", pngtools.ErrOutputLimit)
+			})
+			if !errors.Is(err, pngtools.ErrOutputLimit) || calls != 1 {
+				t.Fatalf("opt=%+v: expected single call returning ErrOutputLimit, got calls=%d err=%v", opt, calls, err)
+			}
+		}
+	})
 }

@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -343,5 +344,30 @@ func TestAVIFCancellationAndCorruptPayload(t *testing.T) {
 	}
 	if _, err := DecodePNG(t.Context(), data, 1); err == nil {
 		t.Fatal("decoded a corrupt image payload")
+	}
+}
+
+func TestIntermediatePNGLimit(t *testing.T) {
+	over64 := make([]byte, maxAVIFBytes+1)
+	if _, err := EncodePNG(t.Context(), over64, EncodeOptions{Quality: 70}); err == nil || strings.Contains(err.Error(), "限制") {
+		t.Fatalf("EncodePNG should accept >64 MiB intermediate PNG past size check, got %v", err)
+	}
+	over128 := make([]byte, maxIntermediatePNGBytes+1)
+	if _, err := EncodePNG(t.Context(), over128, EncodeOptions{Quality: 70}); err == nil || !strings.Contains(err.Error(), "128 MiB") {
+		t.Fatalf("EncodePNG should reject >128 MiB intermediate PNG, got %v", err)
+	}
+
+	buf := pngBuffer{ctx: t.Context()}
+	chunk := make([]byte, 32<<20)
+	for range 3 {
+		if n, err := buf.Write(chunk); err != nil || n != len(chunk) {
+			t.Fatalf("pngBuffer write failed within 128 MiB: n=%d err=%v", n, err)
+		}
+	}
+	if buf.buf.Len() != 96<<20 {
+		t.Fatalf("pngBuffer len = %d, want %d", buf.buf.Len(), 96<<20)
+	}
+	if _, err := buf.Write(make([]byte, (32<<20)+1)); err == nil || !strings.Contains(err.Error(), "128 MiB") {
+		t.Fatalf("pngBuffer should reject writes beyond 128 MiB, got %v", err)
 	}
 }

@@ -243,3 +243,47 @@ func TestStreamYCbCrAndNYCbCrAClipboardPNGMatches8BitModelAndHonorsCancel(t *tes
 		t.Fatalf("expected row cancellation, got %v", err)
 	}
 }
+
+func TestNormalizeBMFFClipboardPNGEnforcesSizeLimit(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 128, 128))
+	for y := range 128 {
+		for x := range 128 {
+			img.SetNRGBA(x, y, color.NRGBA{R: uint8((x / 16) * 32), G: uint8((y / 16) * 32), B: 180, A: 255})
+		}
+	}
+	uncompressed := pngFixture(t, img, png.NoCompression)
+	compressed := pngFixture(t, img, png.BestSpeed)
+	if len(compressed) >= len(uncompressed) {
+		t.Fatalf("expected compressed PNG (%d) < uncompressed (%d)", len(compressed), len(uncompressed))
+	}
+
+	// Within limit: fast-path returns the decoded AVIF PNG as-is.
+	same, err := normalizeBMFFClipboardPNG(context.Background(), uncompressed, "avif", len(uncompressed))
+	if err != nil {
+		t.Fatalf("within-limit AVIF failed: %v", err)
+	}
+	if !sameBytesBacking(same, uncompressed) {
+		t.Fatal("within-limit AVIF should return decoded PNG without re-encoding")
+	}
+
+	// Over limit but compressible: re-encodes within the limit instead of bypassing it.
+	limit := len(compressed) + 128
+	if limit >= len(uncompressed) {
+		limit = len(uncompressed) - 1
+	}
+	reencoded, err := normalizeBMFFClipboardPNG(context.Background(), uncompressed, "avif", limit)
+	if err != nil {
+		t.Fatalf("oversized compressible AVIF failed: %v", err)
+	}
+	if len(reencoded) > limit {
+		t.Fatalf("re-encoded AVIF PNG size = %d, exceeds limit %d", len(reencoded), limit)
+	}
+	if _, err := png.Decode(bytes.NewReader(reencoded)); err != nil {
+		t.Fatalf("re-encoded AVIF PNG invalid: %v", err)
+	}
+
+	// Still over limit after re-encoding: must fail instead of returning oversized bytes.
+	if out, err := normalizeBMFFClipboardPNG(context.Background(), uncompressed, "avif", 64); err == nil || out != nil {
+		t.Fatalf("expected error when AVIF clipboard PNG cannot fit within limit, got len=%d err=%v", len(out), err)
+	}
+}

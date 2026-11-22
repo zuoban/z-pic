@@ -30,10 +30,7 @@ func main() {
 			pendingOpenFiles = append(pendingOpenFiles, path)
 			return
 		}
-		app.update(func() {
-			app.showMainWindow()
-			app.dropFiles([]string{path})
-		})
+		app.enqueueOpenFile(path)
 	})
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
 		if app.window != nil && (!hasVisibleWindows || !app.window.IsVisible()) {
@@ -46,6 +43,7 @@ func main() {
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		app.quitting = true
+		app.cancelOpenFiles()
 		app.cancelUpdateCheck()
 		app.clearWindowProgress()
 		app.closeFolderWatch()
@@ -81,6 +79,7 @@ func main() {
 		app.window.OnHide(func() { app.refreshTrayMenu() })
 		app.window.OnClosed(func() {
 			app.closed = true
+			app.cancelOpenFiles()
 			app.stopFolderWatch()
 			app.cancelComparisonDiff()
 			app.cancelUpdateCheck()
@@ -111,6 +110,7 @@ func main() {
 		}
 	})
 	err := mygo.App.Run()
+	app.cancelOpenFiles()
 	app.closeFolderWatch()
 	app.closeTray()
 	app.saves.Wait()

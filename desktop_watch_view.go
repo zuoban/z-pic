@@ -16,6 +16,7 @@ var folderWatchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000
 
 func (s *application) folderWatchSettingsContent(c *ui.Context) {
 	editor := s.editor
+	s.ensureEditorWatchRuleIDs(editor)
 	t := c.Theme()
 	locked := s.settingsDraftLocked() || s.watch.session != nil
 	ui.Scroll(c.Key("folder-watch-settings")).FillWidth().Grow(1).MinHeight(0).
@@ -31,7 +32,9 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 						if s.settingsDraftLocked() || s.editor != editor {
 							return
 						}
+						s.ensureEditorWatchRuleIDs(editor)
 						editor.watchRules = append(editor.watchRules, folderWatchRule{Preset: s.scheme})
+						editor.watchRuleIDs = append(editor.watchRuleIDs, s.allocWatchRuleID())
 						editor.watchMessage = ""
 					})
 			})
@@ -39,11 +42,11 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 				FontSize(settingsFontSize(c, 12)).TextColor(metadataColor(c)).MaxLines(2)
 			ui.Column(c).FillWidth().Gap(0).Children(func() {
 				s.folderWatchDirectoryField(c, "watch-input-dir", "输入目录", editor.watch.InputDir, locked, func() {
-					s.chooseFolderWatchDirectoryForRule(0, false)
+					s.chooseFolderWatchDirectoryForRuleID(watchPrimaryRuleID, false)
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				s.folderWatchDirectoryField(c, "watch-output-dir", "输出目录", editor.watch.OutputDir, locked, func() {
-					s.chooseFolderWatchDirectoryForRule(0, true)
+					s.chooseFolderWatchDirectoryForRuleID(watchPrimaryRuleID, true)
 				})
 				ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 				ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 46)).Padding(8, 0, 2, 0).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -143,16 +146,17 @@ func (s *application) folderWatchSettingsContent(c *ui.Context) {
 
 func (s *application) extraFolderWatchRulePanel(c *ui.Context, extraIdx int) {
 	editor := s.editor
+	s.ensureEditorWatchRuleIDs(editor)
 	t := c.Theme()
-	ruleIndex := extraIdx + 1
+	ruleID := editor.watchRuleIDs[extraIdx]
 	rule := &editor.watchRules[extraIdx]
-	session := s.watchSessionForRule(ruleIndex)
+	session := s.watchSessionForRuleID(ruleID)
 	ruleLocked := s.settingsDraftLocked() || session != nil
-	prefix := fmt.Sprintf("watch-rule-%d", ruleIndex)
+	prefix := fmt.Sprintf("watch-rule-%d", ruleID)
 
 	settingsPanel(c, prefix+"-panel").Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "监听规则 %d", ruleIndex+1).FontSize(settingsFontSize(c, 14)).FontWeight(600).Grow(1)
+			ui.Textf(c, "监听规则 %d", extraIdx+2).FontSize(settingsFontSize(c, 14)).FontWeight(600).Grow(1)
 			if session != nil {
 				status := "正在启动"
 				color := t.TextMuted
@@ -163,28 +167,28 @@ func (s *application) extraFolderWatchRulePanel(c *ui.Context, extraIdx int) {
 				}
 				statusCapsule(c, status, color).FontSize(settingsFontSize(c, 11))
 			}
-			deleteDisabled := ruleLocked || s.hasActiveWatchSessionFrom(ruleIndex)
+			deleteDisabled := ruleLocked
 			deleteBtn := ghostDestructiveButton(c, prefix+"-remove", "删除", 26, deleteDisabled).
 				FontSize(settingsFontSize(c, 12)).Padding(0, 8).Shrink(0)
-			if !ruleLocked && deleteDisabled {
-				deleteBtn.Tooltip("请先停止后续规则的监听后再删除")
-			}
 			deleteBtn.OnClick(func() {
-				if s.settingsDraftLocked() || s.editor != editor || s.hasActiveWatchSessionFrom(ruleIndex) {
+				if s.settingsDraftLocked() || s.editor != editor || s.watchSessionForRuleID(ruleID) != nil {
 					return
 				}
-				if extraIdx < len(editor.watchRules) {
-					editor.watchRules = slices.Delete(editor.watchRules, extraIdx, extraIdx+1)
+				s.ensureEditorWatchRuleIDs(editor)
+				if idx := slices.Index(editor.watchRuleIDs, ruleID); idx >= 0 && idx < len(editor.watchRules) {
+					editor.watchRules = slices.Delete(editor.watchRules, idx, idx+1)
+					editor.watchRuleIDs = slices.Delete(editor.watchRuleIDs, idx, idx+1)
+					editor.watchMessage = ""
 				}
 			})
 		})
 		ui.Column(c).FillWidth().Gap(0).Children(func() {
 			s.folderWatchDirectoryField(c, prefix+"-input", "输入目录", rule.InputDir, ruleLocked, func() {
-				s.chooseFolderWatchDirectoryForRule(ruleIndex, false)
+				s.chooseFolderWatchDirectoryForRuleID(ruleID, false)
 			})
 			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 			s.folderWatchDirectoryField(c, prefix+"-output", "输出目录", rule.OutputDir, ruleLocked, func() {
-				s.chooseFolderWatchDirectoryForRule(ruleIndex, true)
+				s.chooseFolderWatchDirectoryForRuleID(ruleID, true)
 			})
 			ui.Box(c).FillWidth().Height(1).Background(subtleRowDivider(c))
 			ui.Row(c).FillWidth().MinHeight(settingsControlHeight(c, 42)).Padding(6, 0).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -206,7 +210,7 @@ func (s *application) extraFolderWatchRulePanel(c *ui.Context, extraIdx int) {
 					}
 					ghostDestructiveButton(c, prefix+"-stop", label, 28, session.stopping).
 						FontSize(settingsFontSize(c, 12)).Padding(0, 10).OnClick(func() {
-						s.stopWatchRule(ruleIndex)
+						s.stopWatchRuleByID(ruleID)
 					})
 				} else {
 					_, validPreset := s.folderWatchPreset(rule.Preset)
@@ -216,12 +220,17 @@ func (s *application) extraFolderWatchRulePanel(c *ui.Context, extraIdx int) {
 						if s.settingsDraftLocked() || s.editor != editor {
 							return
 						}
-						if err := s.startWatchRuleWithNotify(ruleIndex, *rule, editor.watch.Notify, true); err != nil {
+						s.ensureEditorWatchRuleIDs(editor)
+						idx := slices.Index(editor.watchRuleIDs, ruleID)
+						if idx < 0 || idx >= len(editor.watchRules) {
+							return
+						}
+						if err := s.startWatchRuleByID(ruleID, editor.watchRules[idx], editor.watch.Notify, true); err != nil {
 							editor.watchMessage = err.Error()
 							return
 						}
-						if sess := s.watchSessionForRule(ruleIndex); sess != nil {
-							*rule = sess.rule
+						if sess := s.watchSessionForRuleID(ruleID); sess != nil {
+							editor.watchRules[idx] = sess.rule
 						}
 						editor.watchMessage = ""
 					})
@@ -302,26 +311,27 @@ func (s *application) folderWatchRulePresetPicker(c *ui.Context, key string, tar
 }
 
 func (s *application) chooseFolderWatchDirectory(output bool) {
-	s.chooseFolderWatchDirectoryForRule(0, output)
+	s.chooseFolderWatchDirectoryForRuleID(watchPrimaryRuleID, output)
 }
 
-func (s *application) chooseFolderWatchDirectoryForRule(ruleIndex int, output bool) {
-	if s.settingsDraftLocked() || s.watchSessionForRule(ruleIndex) != nil {
+func (s *application) chooseFolderWatchDirectoryForRuleID(ruleID uint64, output bool) {
+	if s.settingsDraftLocked() || s.watchSessionForRuleID(ruleID) != nil {
 		return
 	}
 	editor, parent := s.editor, s.settingsWindow
+	s.ensureEditorWatchRuleIDs(editor)
 	title := "选择输入目录"
 	if output {
 		title = "选择输出目录"
 	}
 	var defaultPath string
-	if ruleIndex == 0 {
+	if ruleID == watchPrimaryRuleID {
 		if output {
 			defaultPath = editor.watch.OutputDir
 		} else {
 			defaultPath = editor.watch.InputDir
 		}
-	} else if idx := ruleIndex - 1; idx >= 0 && idx < len(editor.watchRules) {
+	} else if idx := slices.Index(editor.watchRuleIDs, ruleID); idx >= 0 && idx < len(editor.watchRules) {
 		if output {
 			defaultPath = editor.watchRules[idx].OutputDir
 		} else {
@@ -341,18 +351,21 @@ func (s *application) chooseFolderWatchDirectoryForRule(ruleIndex int, output bo
 			}
 			if err != nil {
 				editor.watchMessage = title + "失败：" + err.Error()
-			} else if len(paths) > 0 {
-				if ruleIndex == 0 {
+			} else if len(paths) > 0 && s.watchSessionForRuleID(ruleID) == nil {
+				if ruleID == watchPrimaryRuleID {
 					if output {
 						editor.watch.OutputDir = paths[0]
 					} else {
 						editor.watch.InputDir = paths[0]
 					}
-				} else if idx := ruleIndex - 1; idx >= 0 && idx < len(editor.watchRules) {
-					if output {
-						editor.watchRules[idx].OutputDir = paths[0]
-					} else {
-						editor.watchRules[idx].InputDir = paths[0]
+				} else {
+					s.ensureEditorWatchRuleIDs(editor)
+					if idx := slices.Index(editor.watchRuleIDs, ruleID); idx >= 0 && idx < len(editor.watchRules) {
+						if output {
+							editor.watchRules[idx].OutputDir = paths[0]
+						} else {
+							editor.watchRules[idx].InputDir = paths[0]
+						}
 					}
 				}
 				editor.watchMessage = ""

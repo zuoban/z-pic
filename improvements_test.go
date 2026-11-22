@@ -71,8 +71,8 @@ func TestDesktopFolderWatchMultiRuleRecursiveAndNotify(t *testing.T) {
 	if got := app.activeFolderWatchCount(); got != 2 {
 		t.Fatalf("expected 2 active watch sessions, got %d", got)
 	}
-	if !app.hasActiveWatchSessionFrom(1) {
-		t.Fatal("expected hasActiveWatchSessionFrom(1) to be true")
+	if app.watchSessionForRule(1) == nil {
+		t.Fatal("expected watchSessionForRule(1) to be active")
 	}
 
 	// Write a file to rule 0 and a nested file to rule 1.

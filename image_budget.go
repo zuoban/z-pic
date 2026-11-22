@@ -72,6 +72,16 @@ func (s *application) acquirePreviewMemory(ctx context.Context, info compress.Im
 	return s.imageMemory.acquire(ctx, previewMemoryEstimate(info))
 }
 
+func (s *application) acquireVisualDiffMemory(ctx context.Context, info compress.ImageInfo, outputBytes int64) (func(), error) {
+	if s == nil || s.imageMemory == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
+	}
+	return s.imageMemory.acquire(ctx, visualDiffMemoryEstimate(info, outputBytes))
+}
+
 func previewMemoryEstimate(info compress.ImageInfo) int64 {
 	if info.Width <= 0 || info.Height <= 0 ||
 		int64(info.Width) > int64(maxPixels)/int64(info.Height) ||
@@ -79,6 +89,16 @@ func previewMemoryEstimate(info compress.ImageInfo) int64 {
 		return imageMemoryLimit
 	}
 	return int64(info.Width)*int64(info.Height)*12 + 2*info.Size + 4<<20
+}
+
+func visualDiffMemoryEstimate(info compress.ImageInfo, outputBytes int64) int64 {
+	if info.Width <= 0 || info.Height <= 0 ||
+		int64(info.Width) > int64(maxPixels)/int64(info.Height) ||
+		info.Size < 0 || info.Size > maxInputBytes ||
+		outputBytes < 0 || outputBytes > maxInputBytes {
+		return imageMemoryLimit
+	}
+	return int64(info.Width)*int64(info.Height)*20 + 2*info.Size + 2*outputBytes + 8<<20
 }
 
 func imageMemoryEstimate(info compress.ImageInfo, thumbnail bool) int64 {

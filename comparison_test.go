@@ -804,4 +804,3 @@ func TestComparisonDiffUnchangedOverwriteAndRetry(t *testing.T) {
 		t.Fatalf("completeOverwriteWithBackup must clear diff state and bump diffGen: %+v", s.comparison)
 	}
 }
-

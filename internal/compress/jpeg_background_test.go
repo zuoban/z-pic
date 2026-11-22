@@ -86,11 +86,11 @@ func TestFlattenAlphaForJPEGBackgrounds(t *testing.T) {
 	// Include a non-zero origin rectangle to exercise bounds offset handling.
 	src := image.NewNRGBA(image.Rect(3, 5, 8, 6))
 	pixels := []color.NRGBA{
-		{R: 0, G: 0, B: 0, A: 0},         // fully transparent
-		{R: 255, G: 0, B: 0, A: 0},       // fully transparent with nonzero RGB
-		{R: 200, G: 100, B: 50, A: 128},  // ~50% alpha
-		{R: 60, G: 180, B: 240, A: 64},   // ~25% alpha
-		{R: 200, G: 100, B: 50, A: 255},  // fully opaque
+		{R: 0, G: 0, B: 0, A: 0},        // fully transparent
+		{R: 255, G: 0, B: 0, A: 0},      // fully transparent with nonzero RGB
+		{R: 200, G: 100, B: 50, A: 128}, // ~50% alpha
+		{R: 60, G: 180, B: 240, A: 64},  // ~25% alpha
+		{R: 200, G: 100, B: 50, A: 255}, // fully opaque
 	}
 	for i, c := range pixels {
 		src.SetNRGBA(3+i, 5, c)

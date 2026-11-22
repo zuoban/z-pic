@@ -85,6 +85,54 @@ func TestImageMemoryEstimateAccountsForFormatAndDimensions(t *testing.T) {
 	}
 }
 
+func TestVisualDiffMemoryEstimateAndBudget(t *testing.T) {
+	info := compress.ImageInfo{Format: "png", Width: 4000, Height: 3000, Size: 6 << 20}
+	outputBytes := int64(2 << 20)
+	previewEst := previewMemoryEstimate(info)
+	diffEst := visualDiffMemoryEstimate(info, outputBytes)
+	want := int64(4000)*int64(3000)*20 + 2*info.Size + 2*outputBytes + 8<<20
+	if diffEst != want {
+		t.Fatalf("visualDiffMemoryEstimate = %d, want %d", diffEst, want)
+	}
+	if diffEst <= previewEst {
+		t.Fatalf("visual diff estimate (%d) must exceed single preview estimate (%d)", diffEst, previewEst)
+	}
+
+	large := compress.ImageInfo{Format: "jpeg", Width: 8000, Height: 4000, Size: 8 << 20}
+	if visualDiffMemoryEstimate(large, 4<<20) <= imageMemoryLimit {
+		t.Fatal("maximum-size visual diff should reserve the full memory budget")
+	}
+
+	for _, tc := range []struct {
+		info        compress.ImageInfo
+		outputBytes int64
+	}{
+		{compress.ImageInfo{}, 0},
+		{compress.ImageInfo{Width: 1 << 62, Height: 2}, 0},
+		{compress.ImageInfo{Width: 100, Height: 100, Size: -1}, 100},
+		{compress.ImageInfo{Width: 100, Height: 100, Size: maxInputBytes + 1}, 100},
+		{compress.ImageInfo{Width: 100, Height: 100, Size: 100}, -1},
+		{compress.ImageInfo{Width: 100, Height: 100, Size: 100}, maxInputBytes + 1},
+	} {
+		if got := visualDiffMemoryEstimate(tc.info, tc.outputBytes); got != imageMemoryLimit {
+			t.Fatalf("invalid diff budget input (%+v, %d) = %d, want %d", tc.info, tc.outputBytes, got, imageMemoryLimit)
+		}
+	}
+
+	app := newApplication()
+	release, err := app.acquireVisualDiffMemory(context.Background(), info, outputBytes)
+	if err != nil {
+		t.Fatalf("acquireVisualDiffMemory: %v", err)
+	}
+	if app.imageMemory.used != diffEst {
+		t.Fatalf("budget used = %d, want %d", app.imageMemory.used, diffEst)
+	}
+	release()
+	if app.imageMemory.used != 0 {
+		t.Fatalf("budget used after release = %d, want 0", app.imageMemory.used)
+	}
+}
+
 func TestSingleImagePreviewAndClipboardRespectMemoryBudget(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := root + "/photo.jpg"

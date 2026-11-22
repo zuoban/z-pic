@@ -132,7 +132,7 @@ func TestCommandExecution(t *testing.T) {
 		})
 		t.Run(tool+"-larger-overflow", func(t *testing.T) {
 			out, err := runCommand(context.Background(), tool, exe, helperArgs("larger-98"), input, 1024)
-			if out != nil || !errors.Is(err, errOutputLimit) {
+			if out != nil || !errors.Is(err, ErrOutputLimit) {
 				t.Fatalf("output=%q err=%v", out, err)
 			}
 		})
@@ -159,7 +159,7 @@ func TestCommandExecution(t *testing.T) {
 	t.Run("overflow-kills-child", func(t *testing.T) {
 		start := time.Now()
 		out, err := runCommand(context.Background(), "oxipng", exe, helperArgs("overflow"), input, 128)
-		if out != nil || !errors.Is(err, errOutputLimit) || time.Since(start) > 5*time.Second {
+		if out != nil || !errors.Is(err, ErrOutputLimit) || time.Since(start) > 5*time.Second {
 			t.Fatalf("output=%q err=%v elapsed=%v", out, err, time.Since(start))
 		}
 	})
@@ -201,7 +201,7 @@ func TestBoundedWriters(t *testing.T) {
 	w := &limitedOutput{input: bytes.Repeat([]byte("x"), 1024), limit: 129, cancel: func() { canceled = true }}
 	// io.Copy must not bypass Write via an accidentally promoted ReadFrom.
 	_, err := io.Copy(w, struct{ io.Reader }{bytes.NewReader(make([]byte, 1024))})
-	if !errors.Is(err, errOutputLimit) || w.buf.Len() != 129 || w.size != 129 || !canceled {
+	if !errors.Is(err, ErrOutputLimit) || w.buf.Len() != 129 || w.size != 129 || !canceled {
 		t.Fatalf("len=%d size=%d canceled=%v err=%v", w.buf.Len(), w.size, canceled, err)
 	}
 	d := toolio.NewDiagnostic(8)
@@ -287,11 +287,11 @@ func TestOutputLimitAfterDiscard(t *testing.T) {
 		t.Fatalf("empty write count=%d canceled=%v err=%v", count, canceled, err)
 	}
 	count, err = output.Write(chunk[:1])
-	if count != 1 || !errors.Is(err, errOutputLimit) || !canceled || !output.overflow || output.buf.Cap() != 0 {
+	if count != 1 || !errors.Is(err, ErrOutputLimit) || !canceled || !output.overflow || output.buf.Cap() != 0 {
 		t.Fatalf("overflow count=%d canceled=%v err=%v", count, canceled, err)
 	}
 	count, err = output.Write(chunk)
-	if count != 0 || !errors.Is(err, errOutputLimit) {
+	if count != 0 || !errors.Is(err, ErrOutputLimit) {
 		t.Fatalf("write after overflow count=%d err=%v", count, err)
 	}
 }
@@ -496,5 +496,30 @@ func TestToolCacheReuseRecoveryAndFallback(test *testing.T) {
 	fallbackCleanup()
 	if _, err := os.Stat(fallbackPath); !os.IsNotExist(err) {
 		test.Fatalf("expected fallback temporary binary removal, got err=%v", err)
+	}
+}
+
+func TestIntermediatePNGInputAndBoundedOutput(t *testing.T) {
+	over64 := make([]byte, maxPNGBytes+1)
+	if err := checkInput(context.Background(), over64); err != nil {
+		t.Fatalf("checkInput should allow >64 MiB intermediate PNG, got %v", err)
+	}
+	over128 := make([]byte, maxPNGInputBytes+1)
+	if err := checkInput(context.Background(), over128); err == nil || !strings.Contains(err.Error(), "128 MiB") {
+		t.Fatalf("checkInput should reject >128 MiB PNG, got %v", err)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeInput := bytes.Repeat([]byte("a"), 512)
+	out, err := runCommandWithConfig(context.Background(), "oxipng", exe, helperArgs("stderr"), largeInput, 128, 0, false)
+	if err != nil || string(out) != "ok" {
+		t.Fatalf("expected bounded output below limit from larger input, got out=%q err=%v", out, err)
+	}
+	out, err = runCommandWithConfig(context.Background(), "oxipng", exe, helperArgs("overflow"), largeInput, 128, 0, false)
+	if out != nil || !errors.Is(err, ErrOutputLimit) {
+		t.Fatalf("expected output limit error when output exceeds limit, got out=%q err=%v", out, err)
 	}
 }

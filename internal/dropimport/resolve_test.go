@@ -800,4 +800,3 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 		t.Fatalf("blocked URLs still attempted dial: %v", dialed[beforeDials:])
 	}
 }
-

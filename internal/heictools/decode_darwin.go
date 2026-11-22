@@ -18,12 +18,13 @@ import (
 	"time"
 
 	"zpic/internal/contextio"
+	"zpic/internal/imageinput"
 	"zpic/internal/toolio"
 )
 
 const (
 	toolTimeout        = 60 * time.Second
-	maxDecodedPNGBytes = 128 << 20
+	maxDecodedPNGBytes = imageinput.MaxIntermediatePNGSize
 )
 
 var sipsBinaryPath = "/usr/bin/sips"

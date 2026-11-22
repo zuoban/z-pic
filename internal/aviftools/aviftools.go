@@ -62,8 +62,8 @@ func EncodePNG(ctx context.Context, pngData []byte, options EncodeOptions) ([]by
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("AVIF 编码已取消：%w", err)
 	}
-	if len(pngData) == 0 || len(pngData) > maxAVIFBytes {
-		return nil, fmt.Errorf("AVIF 编码输入为空或超过 64 MiB 限制")
+	if len(pngData) == 0 || len(pngData) > maxIntermediatePNGBytes {
+		return nil, fmt.Errorf("AVIF 编码输入为空或超过 128 MiB 限制")
 	}
 	args, err := encodeArgs(options)
 	if err != nil {
@@ -96,7 +96,7 @@ func EncodePNG(ctx context.Context, pngData []byte, options EncodeOptions) ([]by
 	if err := runTool(ctx, "avifenc", append(args, output), bytes.NewReader(pngData)); err != nil {
 		return nil, err
 	}
-	return readOutput(ctx, "avifenc", output)
+	return readOutput(ctx, "avifenc", output, maxAVIFBytes)
 }
 
 func encodeArgs(options EncodeOptions) ([]string, error) {
@@ -171,7 +171,7 @@ func DecodePNG(ctx context.Context, avifData []byte, threads int) ([]byte, error
 	if err := runTool(ctx, "avifdec", args, nil); err != nil {
 		return nil, err
 	}
-	data, err := readOutput(ctx, "avifdec", output)
+	data, err := readOutput(ctx, "avifdec", output, maxIntermediatePNGBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +252,8 @@ func runTool(ctx context.Context, name string, args []string, stdin io.Reader) e
 	return nil
 }
 
-func readOutput(ctx context.Context, name, path string) ([]byte, error) {
-	data, err := imageinput.Read(ctx, path)
+func readOutput(ctx context.Context, name, path string, maxSize int64) ([]byte, error) {
+	data, err := imageinput.ReadLimit(ctx, path, maxSize)
 	if err != nil {
 		return nil, fmt.Errorf("无法读取 %s 输出：%w", name, err)
 	}
@@ -272,9 +272,9 @@ func (w *pngBuffer) Write(data []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if len(data) > maxAVIFBytes-w.buf.Len() {
-		return 0, fmt.Errorf("AVIF 编码所需的 PNG 超过 64 MiB 限制")
+	if len(data) > maxIntermediatePNGBytes-w.buf.Len() {
+		return 0, fmt.Errorf("AVIF 编码所需的 PNG 超过 128 MiB 限制")
 	}
-	w.buf.AppendBounded(nil, data, maxAVIFBytes)
+	w.buf.AppendBounded(nil, data, maxIntermediatePNGBytes)
 	return len(data), nil
 }

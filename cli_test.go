@@ -834,4 +834,3 @@ func TestCLICompressActivePreset(t *testing.T) {
 		t.Fatalf("expected exit 2 conflict for --preset + --active-preset: code=%d stderr=%q", code, errBuf.String())
 	}
 }
-

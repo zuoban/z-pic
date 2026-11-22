@@ -149,3 +149,27 @@ func TestReadSizedEnforcesActualByteLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestReadLimitEnforcesCustomLimit(t *testing.T) {
+	if MaxIntermediatePNGSize != 128<<20 {
+		t.Fatalf("MaxIntermediatePNGSize = %d, want %d", MaxIntermediatePNGSize, 128<<20)
+	}
+	path := filepath.Join(t.TempDir(), "payload")
+	payload := bytes.Repeat([]byte("a"), 32)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadLimit(context.Background(), path, 32)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("ReadLimit at exact limit returned %d bytes, err=%v", len(got), err)
+	}
+	if got, err := ReadLimit(context.Background(), path, 31); got != nil || err == nil || !strings.Contains(err.Error(), "31 字节") {
+		t.Fatalf("ReadLimit above limit returned %d bytes, err=%v", len(got), err)
+	}
+	if got, err := ReadLimit(context.Background(), path, 0); got != nil || err == nil {
+		t.Fatalf("ReadLimit with invalid limit returned %d bytes, err=%v", len(got), err)
+	}
+	if got, err := readSizedLimit(context.Background(), io.LimitReader(zeroReader{}, 2<<20+1), 2<<20, 2<<20); got != nil || err == nil || !strings.Contains(err.Error(), "2 MiB") {
+		t.Fatalf("readSizedLimit MiB limit returned %d bytes, err=%v", len(got), err)
+	}
+}

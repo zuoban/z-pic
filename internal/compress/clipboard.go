@@ -75,25 +75,7 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if format == "avif" {
-			return pngBytes, nil
-		}
-		orient := pngOrientation(pngBytes)
-		if orient == 1 && len(pngBytes) <= maxInputSize {
-			return pngBytes, nil
-		}
-		decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes)))
-		if err != nil {
-			return nil, fmt.Errorf("无法解码图片：%w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		decoded, err = orientForJPEGEncode(ctx, decoded, orient)
-		if err != nil {
-			return nil, err
-		}
-		return encodeClipboardPNG(ctx, decoded, maxInputSize)
+		return normalizeBMFFClipboardPNG(ctx, pngBytes, format, maxInputSize)
 	}
 	config, format, err := image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 	if err != nil {
@@ -133,6 +115,28 @@ func PNGBytes(ctx context.Context, data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return encodeClipboardPNG(ctx, decoded, maxInputSize)
+}
+
+func normalizeBMFFClipboardPNG(ctx context.Context, pngBytes []byte, format string, limit int) ([]byte, error) {
+	orient := 1
+	if format == "heic" {
+		orient = pngOrientation(pngBytes)
+	}
+	if orient == 1 && len(pngBytes) <= limit {
+		return pngBytes, nil
+	}
+	decoded, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(pngBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("无法解码图片：%w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	decoded, err = orientForJPEGEncode(ctx, decoded, orient)
+	if err != nil {
+		return nil, err
+	}
+	return encodeClipboardPNG(ctx, decoded, limit)
 }
 
 func encodeClipboardPNG(ctx context.Context, decoded image.Image, limit int) ([]byte, error) {

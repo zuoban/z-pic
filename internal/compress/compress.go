@@ -29,9 +29,12 @@ import (
 )
 
 const (
-	maxInputSize = imageinput.MaxSize
-	maxPixels    = 32_000_000
+	maxInputSize           = imageinput.MaxSize
+	maxIntermediatePNGSize = imageinput.MaxIntermediatePNGSize
+	maxPixels              = 32_000_000
 )
+
+var jpegtoolsAvailable = jpegtools.Available
 
 type Options struct {
 	Quality        int // JPEG, WebP, and AVIF quality in [1, 100].
@@ -563,8 +566,8 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				}
 				return nil, fmt.Errorf("图片数据损坏或无法解码：%w", decodeErr)
 			}
-			if jpegtools.Available() {
-				mustStrip := options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
+			mustStrip := options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
+			if jpegtoolsAvailable() {
 				orientTransform := 0
 				if sourceOrient > 1 && options.Metadata != MetadataKeepAll {
 					orientTransform = sourceOrient
@@ -599,6 +602,8 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				} else {
 					encoded = data
 				}
+			} else if mustStrip {
+				return nil, fmt.Errorf("当前平台未捆绑 MozJPEG，无法在无损模式下移除 JPEG 元数据；请保留全部元数据或关闭无损模式")
 			} else {
 				encoded = data
 			}
@@ -816,20 +821,31 @@ type pngCandidate struct {
 	data      []byte
 	stripped  bool
 	quantized bool
+	oversized bool
 }
 
 func compressPNG(ctx context.Context, data []byte, config image.Config, options Options, preview *image.Image, transformed bool) ([]byte, bool, error) {
+	return compressPNGWithEncoder(ctx, data, config, options, preview, transformed, encodePNGCandidate)
+}
+
+func compressPNGWithEncoder(ctx context.Context, data []byte, config image.Config, options Options, preview *image.Image, transformed bool, encode func(context.Context, []byte, image.Config, Options, [][]byte) (pngCandidate, error)) ([]byte, bool, error) {
 	var colorChunks [][]byte
 	if transformed && options.Metadata != MetadataStrip {
 		colorChunks = extractPNGColorChunks(data)
 	}
-	candidate, err := encodePNGCandidate(ctx, data, config, options, colorChunks)
-	if err != nil {
-		return nil, false, err
-	}
 	target := options.TargetSizeBytes
-	if target > 0 && !options.Lossless && int64(len(candidate.data)) > target &&
-		(transformed || candidate.stripped || int64(len(data)) > target) {
+	targetSearchEligible := target > 0 && !options.Lossless
+	candidate, err := encode(ctx, data, config, options, colorChunks)
+	var limitErr error
+	if err != nil {
+		if !targetSearchEligible || !errors.Is(err, pngtools.ErrOutputLimit) {
+			return nil, false, err
+		}
+		limitErr = err
+		candidate = pngCandidate{oversized: true}
+	}
+	if targetSearchEligible && (candidate.oversized || int64(len(candidate.data)) > target) &&
+		(transformed || candidate.stripped || candidate.oversized || int64(len(data)) > target) {
 		baseline := options.PNG
 		if baseline == (PNGOptions{}) {
 			baseline = DefaultPNGOptions()
@@ -842,15 +858,26 @@ func compressPNG(ctx context.Context, data []byte, config image.Config, options 
 			tiers = append(tiers, tier)
 		}
 		candidate, _, err = searchTargetSize(ctx, candidate, len(tiers)+1, target, func(out pngCandidate) int {
+			if out.oversized {
+				return maxInputSize + 1
+			}
 			return len(out.data)
 		}, func(rank int) (pngCandidate, error) {
 			probe := options
 			probe.PNG = tiers[len(tiers)-rank]
-			return encodePNGCandidate(ctx, data, config, probe, colorChunks)
+			out, probeErr := encode(ctx, data, config, probe, colorChunks)
+			if errors.Is(probeErr, pngtools.ErrOutputLimit) {
+				limitErr = probeErr
+				return pngCandidate{oversized: true}, nil
+			}
+			return out, probeErr
 		})
 		if err != nil {
 			return nil, false, err
 		}
+	}
+	if candidate.oversized {
+		return nil, false, limitErr
 	}
 	if !transformed && !candidate.stripped && sameBytesBacking(candidate.data, data) {
 		if _, _, err := image.Decode(contextio.NewReader(ctx, bytes.NewReader(data))); err != nil {

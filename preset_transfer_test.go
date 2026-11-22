@@ -183,8 +183,8 @@ func TestPresetBundleRejectsInvalidInput(t *testing.T) {
 
 	t.Run("rejects unknown fields", func(t *testing.T) {
 		for name, raw := range map[string]string{
-			"top level": strings.Replace(validBundle, `"version":1`, `"version":1,"extra":true`, 1),
-			"in preset": strings.Replace(validBundle, `"quality":80`, `"quality":80,"bogus":1`, 1),
+			"top level":   strings.Replace(validBundle, `"version":1`, `"version":1,"extra":true`, 1),
+			"in preset":   strings.Replace(validBundle, `"quality":80`, `"quality":80,"bogus":1`, 1),
 			"in settings": `{"version":1,"selected":"均衡","unknown_setting":1,"presets":[{"name":"均衡","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}}]}`,
 		} {
 			t.Run(name, func(t *testing.T) {
@@ -252,19 +252,19 @@ func TestPresetBundleRejectsInvalidInput(t *testing.T) {
 	t.Run("rejects invalid preset parameters", func(t *testing.T) {
 		longName := strings.Repeat("长", 41)
 		for name, raw := range map[string]string{
-			"empty presets":      `{"version":1,"presets":[]}`,
+			"empty presets":        `{"version":1,"presets":[]}`,
 			"quality out of range": strings.Replace(validBundle, `"quality":80`, `"quality":101`, 1),
-			"fractional quality": strings.Replace(validBundle, `"quality":80`, `"quality":80.5`, 1),
-			"missing png":        `{"version":1,"presets":[{"name":"均衡","quality":80}]}`,
-			"invalid png colors": strings.Replace(validBundle, `"Colors":256`, `"Colors":1`, 1),
-			"invalid metadata":   strings.Replace(validBundle, `"quality":80`, `"quality":80,"metadata":"bogus"`, 1),
-			"invalid format":     strings.Replace(validBundle, `"quality":80`, `"quality":80,"output_format":"bmp"`, 1),
-			"conflicting resize": strings.Replace(validBundle, `"quality":80`, `"quality":80,"max_dimension":1000,"max_width":800`, 1),
-			"invalid target":     strings.Replace(validBundle, `"quality":80`, `"quality":80,"target_size_bytes":-1`, 1),
-			"name too long":      strings.Replace(validBundle, "均衡", longName, 1),
-			"name leading space": strings.Replace(validBundle, "均衡", " 均衡", 1),
-			"duplicate preset":   `{"version":1,"presets":[{"name":"重复","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"重复","quality":70,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}}]}`,
-			"relative fixed dir": strings.Replace(validBundle, `"quality":80`, `"quality":80,"output":{"mode":"fixed","directory":"relative/dir"}`, 1),
+			"fractional quality":   strings.Replace(validBundle, `"quality":80`, `"quality":80.5`, 1),
+			"missing png":          `{"version":1,"presets":[{"name":"均衡","quality":80}]}`,
+			"invalid png colors":   strings.Replace(validBundle, `"Colors":256`, `"Colors":1`, 1),
+			"invalid metadata":     strings.Replace(validBundle, `"quality":80`, `"quality":80,"metadata":"bogus"`, 1),
+			"invalid format":       strings.Replace(validBundle, `"quality":80`, `"quality":80,"output_format":"bmp"`, 1),
+			"conflicting resize":   strings.Replace(validBundle, `"quality":80`, `"quality":80,"max_dimension":1000,"max_width":800`, 1),
+			"invalid target":       strings.Replace(validBundle, `"quality":80`, `"quality":80,"target_size_bytes":-1`, 1),
+			"name too long":        strings.Replace(validBundle, "均衡", longName, 1),
+			"name leading space":   strings.Replace(validBundle, "均衡", " 均衡", 1),
+			"duplicate preset":     `{"version":1,"presets":[{"name":"重复","quality":80,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}},{"name":"重复","quality":70,"png":{"MinQuality":65,"MaxQuality":85,"Colors":256,"Speed":3}}]}`,
+			"relative fixed dir":   strings.Replace(validBundle, `"quality":80`, `"quality":80,"output":{"mode":"fixed","directory":"relative/dir"}`, 1),
 		} {
 			t.Run(name, func(t *testing.T) {
 				if _, err := unmarshalPresetBundle([]byte(raw)); err == nil {

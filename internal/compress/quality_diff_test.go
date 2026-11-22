@@ -246,3 +246,63 @@ func TestAnalyzeVisualDiffBytesEnforcesInspectLimits(t *testing.T) {
 		t.Fatal("AnalyzeVisualDiffBytes must reject unsupported GIF input")
 	}
 }
+
+func TestDiffHeatmapLUTMatchesExactFormula(t *testing.T) {
+	samples := []struct {
+		r1, g1, b1, a1, a2 uint8
+	}{
+		{0, 0, 0, 255, 255},
+		{255, 255, 255, 255, 255},
+		{123, 45, 200, 255, 255},
+		{255, 128, 64, 0, 0},
+		{255, 128, 64, 0, 128},
+	}
+	for _, sample := range samples {
+		luma := (299*int(sample.r1) + 587*int(sample.g1) + 114*int(sample.b1)) / 1000
+		base := uint8(18 + (luma*44)/255)
+		if sample.a1 == 0 && sample.a2 == 0 {
+			base = 22
+		}
+		for diff := 0; diff <= 255; diff++ {
+			gotR, gotG, gotB := diffHeatmapPixel(sample.r1, sample.g1, sample.b1, sample.a1, sample.a2, uint8(diff))
+			var wantR, wantG, wantB uint8
+			if diff == 0 {
+				wantR, wantG, wantB = base, base, base
+			} else {
+				level := math.Pow(float64(diff)/255.0, 0.52)
+				if level < 0.08 {
+					level = 0.08
+				}
+				if level > 1 {
+					level = 1
+				}
+				hr, hg, hb := heatmapColor(level)
+				const mix = 0.86
+				wantR = uint8(math.Round(float64(base)*(1-mix) + float64(hr)*mix))
+				wantG = uint8(math.Round(float64(base)*(1-mix) + float64(hg)*mix))
+				wantB = uint8(math.Round(float64(base)*(1-mix) + float64(hb)*mix))
+			}
+			if gotR != wantR || gotG != wantG || gotB != wantB {
+				t.Fatalf("sample=%+v diff=%d: got (%d,%d,%d), want (%d,%d,%d)", sample, diff, gotR, gotG, gotB, wantR, wantG, wantB)
+			}
+		}
+	}
+}
+
+func BenchmarkAnalyzeVisualDiff(b *testing.B) {
+	orig := syntheticGradientImage(1024, 768)
+	comp := image.NewNRGBA(orig.Bounds())
+	copy(comp.Pix, orig.Pix)
+	for idx := 0; idx < len(comp.Pix); idx += 4 {
+		comp.Pix[idx] ^= 0x07
+		comp.Pix[idx+1] ^= 0x03
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, _, err := AnalyzeVisualDiff(ctx, orig, comp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
