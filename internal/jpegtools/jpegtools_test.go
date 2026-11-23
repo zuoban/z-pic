@@ -230,3 +230,35 @@ func TestWritePNMYCbCrSubsamplingMatchesOffsets(t *testing.T) {
 		}
 	}
 }
+
+func TestWritePNMPalettedFastPath(t *testing.T) {
+	pal := color.Palette{
+		color.NRGBA{R: 12, G: 34, B: 56, A: 255},
+		color.NRGBA{R: 200, G: 150, B: 100, A: 255},
+		nil, // unused nil palette slot must not panic
+		color.NRGBA{R: 45, G: 210, B: 90, A: 255},
+	}
+	src := image.NewPaletted(image.Rect(2, 3, 10, 9), pal)
+	used := []uint8{0, 1, 3}
+	for i := range src.Pix {
+		src.Pix[i] = used[i%len(used)]
+	}
+	for _, img := range []image.Image{src, src.SubImage(image.Rect(3, 4, 9, 8))} {
+		var got bytes.Buffer
+		if err := writePNM(context.Background(), &got, img, false); err != nil {
+			t.Fatalf("writePNM(Paletted) failed: %v", err)
+		}
+		b := img.Bounds()
+		var want bytes.Buffer
+		fmt.Fprintf(&want, "P6\n%d %d\n255\n", b.Dx(), b.Dy())
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				r, g, bl, _ := img.At(x, y).RGBA()
+				want.Write([]byte{uint8(r >> 8), uint8(g >> 8), uint8(bl >> 8)})
+			}
+		}
+		if !bytes.Equal(got.Bytes(), want.Bytes()) {
+			t.Fatalf("writePNM Paletted bounds=%v mismatch", b)
+		}
+	}
+}

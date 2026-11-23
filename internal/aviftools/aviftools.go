@@ -215,27 +215,8 @@ func ycbcrToNRGBA(src *image.YCbCr) *image.NRGBA {
 
 func nycbcraToNRGBA(src *image.NYCbCrA) *image.NRGBA {
 	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
 	dst := image.NewNRGBA(b)
-	minX, minY := b.Min.X, b.Min.Y
-	for y := 0; y < h; y++ {
-		sy := minY + y
-		yRow := src.YOffset(minX, sy)
-		aRow := src.AOffset(minX, sy)
-		dOff := y * dst.Stride
-		for x := 0; x < w; x++ {
-			a := src.A[aRow+x]
-			if a != 0 {
-				ci := src.COffset(minX+x, sy)
-				r, g, bl := color.YCbCrToRGB(src.Y[yRow+x], src.Cb[ci], src.Cr[ci])
-				dst.Pix[dOff] = r
-				dst.Pix[dOff+1] = g
-				dst.Pix[dOff+2] = bl
-				dst.Pix[dOff+3] = a
-			}
-			dOff += 4
-		}
-	}
+	ycbcr.NYCbCrAToNRGBAInto(dst, src, b)
 	return dst
 }
 

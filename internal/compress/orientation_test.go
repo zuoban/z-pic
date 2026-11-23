@@ -572,3 +572,191 @@ func TestOrientedYCbCrPreservesSamplesAndJPEG(test *testing.T) {
 		})
 	}
 }
+
+func TestOrientImageFastPathsAnd16BitFallback(t *testing.T) {
+	parent := image.Rect(-3, -2, 71, 69)
+	sub := image.Rect(2, 3, 68, 66)
+
+	rgba := image.NewRGBA(parent)
+	nrgba := image.NewNRGBA(parent)
+	pal := color.Palette{
+		color.NRGBA{R: 0, G: 0, B: 0, A: 0},
+		color.NRGBA{R: 200, G: 80, B: 40, A: 128},
+		color.NRGBA{R: 30, G: 190, B: 230, A: 255},
+	}
+	paletted := image.NewPaletted(parent, pal)
+	for y := parent.Min.Y; y < parent.Max.Y; y++ {
+		for x := parent.Min.X; x < parent.Max.X; x++ {
+			c := color.NRGBA{
+				R: uint8((x * 13) & 0xff),
+				G: uint8((y * 19) & 0xff),
+				B: uint8(((x ^ y) * 23) & 0xff),
+				A: uint8(((x + y) * 31) & 0xff),
+			}
+			nrgba.SetNRGBA(x, y, c)
+			rgba.Set(x, y, c)
+			paletted.SetColorIndex(x, y, uint8(((x-parent.Min.X)+(y-parent.Min.Y))%len(pal)))
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		src  image.Image
+	}{
+		{"RGBA-sub", rgba.SubImage(sub)},
+		{"NRGBA-sub", nrgba.SubImage(sub)},
+		{"Paletted-sub", paletted.SubImage(sub)},
+	} {
+		for orient := 2; orient <= 8; orient++ {
+			got, err := orientImage(context.Background(), tc.src, orient)
+			if err != nil {
+				t.Fatalf("orientImage(%s, %d) failed: %v", tc.name, orient, err)
+			}
+			switch tc.src.(type) {
+			case *image.RGBA:
+				if _, ok := got.(*image.RGBA); !ok {
+					t.Fatalf("expected *image.RGBA, got %T", got)
+				}
+			case *image.NRGBA:
+				if _, ok := got.(*image.NRGBA); !ok {
+					t.Fatalf("expected *image.NRGBA, got %T", got)
+				}
+			case *image.Paletted:
+				if _, ok := got.(*image.Paletted); !ok {
+					t.Fatalf("expected *image.Paletted, got %T", got)
+				}
+			}
+			want := normalizeOrientation(tc.src, orient)
+			if got.Bounds() != want.Bounds() {
+				t.Fatalf("%s orient %d bounds %v != %v", tc.name, orient, got.Bounds(), want.Bounds())
+			}
+			for y := range want.Bounds().Dy() {
+				for x := range want.Bounds().Dx() {
+					if got.At(x, y) != want.At(x, y) {
+						t.Fatalf("%s orient %d pixel (%d,%d) = %+v, want %+v", tc.name, orient, x, y, got.At(x, y), want.At(x, y))
+					}
+				}
+			}
+		}
+	}
+
+	// 16-bit images must fall back to orientedImage to avoid 8-bit truncation.
+	gray16 := image.NewGray16(image.Rect(0, 0, 8, 6))
+	gray16.SetGray16(2, 1, color.Gray16{Y: 0x1234})
+	got16, err := orientImage(context.Background(), gray16, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got16.(orientedImage); !ok {
+		t.Fatalf("expected orientedImage fallback for *image.Gray16, got %T", got16)
+	}
+	if c := got16.At(4, 2).(color.Gray16); c.Y != 0x1234 {
+		t.Fatalf("16-bit value lost: got 0x%04x, want 0x1234", c.Y)
+	}
+}
+
+func TestDecodeOrientedPixelsReleasesUnrotatedBuffer(t *testing.T) {
+	srcImg := image.NewNRGBA(image.Rect(0, 0, 12, 8))
+	srcImg.SetNRGBA(1, 2, color.NRGBA{R: 210, G: 80, B: 40, A: 255})
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, srcImg); err != nil {
+		t.Fatal(err)
+	}
+	source := compressionSource{
+		data:         pngBuf.Bytes(),
+		pixelSource:  pngBuf.Bytes(),
+		format:       "png",
+		targetFormat: "png",
+		orientation:  6,
+	}
+	oriented, err := source.decodeOrientedPixels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oriented.Bounds() != image.Rect(0, 0, 8, 12) {
+		t.Fatalf("unexpected oriented bounds %v", oriented.Bounds())
+	}
+	if source.pixels != nil {
+		t.Fatalf("expected unrotated source.pixels to be released after orienting, still holds %T", source.pixels)
+	}
+	// Subsequent calls must reuse the cached orientedPixels without re-decoding.
+	again, err := source.decodeOrientedPixels(context.Background())
+	if err != nil || again != oriented {
+		t.Fatalf("expected cached orientedPixels reuse, err=%v same=%v", err, again == oriented)
+	}
+}
+
+func TestPrepareForStdlibJPEGAdaptsNRGBAAndPaletted(t *testing.T) {
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 4, 3))
+	nrgba.SetNRGBA(2, 1, color.NRGBA{R: 120, G: 200, B: 60, A: 255})
+	gotNRGBA, err := prepareForStdlibJPEG(context.Background(), nrgba)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rgbaView, ok := gotNRGBA.(*image.RGBA)
+	if !ok {
+		t.Fatalf("expected *image.RGBA view for *image.NRGBA, got %T", gotNRGBA)
+	}
+	if &rgbaView.Pix[0] != &nrgba.Pix[0] {
+		t.Fatal("expected zero-copy *image.RGBA backing slice for *image.NRGBA")
+	}
+
+	pal := color.Palette{
+		color.NRGBA{R: 10, G: 20, B: 30, A: 255},
+		nil, // unused nil palette slot must not panic
+		color.NRGBA{R: 220, G: 110, B: 55, A: 255},
+	}
+	palImg := image.NewPaletted(image.Rect(1, 2, 5, 5), pal)
+	for i := range palImg.Pix {
+		if i%2 == 0 {
+			palImg.Pix[i] = 0
+		} else {
+			palImg.Pix[i] = 2
+		}
+	}
+	gotPal, err := prepareForStdlibJPEG(context.Background(), palImg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	palRGBA, ok := gotPal.(*image.RGBA)
+	if !ok {
+		t.Fatalf("expected *image.RGBA for *image.Paletted, got %T", gotPal)
+	}
+	if palRGBA.Bounds() != image.Rect(0, 0, 4, 3) {
+		t.Fatalf("unexpected bounds %v", palRGBA.Bounds())
+	}
+	for y := range 3 {
+		for x := range 4 {
+			wr, wg, wb, _ := palImg.At(1+x, 2+y).RGBA()
+			got := palRGBA.RGBAAt(x, y)
+			if got != (color.RGBA{R: uint8(wr >> 8), G: uint8(wg >> 8), B: uint8(wb >> 8), A: 0xff}) {
+				t.Fatalf("pixel (%d,%d) = %+v, want (%d,%d,%d,255)", x, y, got, wr>>8, wg>>8, wb>>8)
+			}
+		}
+	}
+}
+
+func BenchmarkOrientImage(b *testing.B) {
+	ctx := context.Background()
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 2000, 1500))
+	y444 := image.NewYCbCr(image.Rect(0, 0, 2000, 1500), image.YCbCrSubsampleRatio444)
+	for _, tc := range []struct {
+		name   string
+		img    image.Image
+		orient int
+	}{
+		{"NRGBA_Rotated", nrgba, 6},
+		{"NRGBA_FlipV", nrgba, 4},
+		{"YCbCr444_Rotated", y444, 6},
+	} {
+		b.Run(tc.name, func(sub *testing.B) {
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for range sub.N {
+				if _, err := orientImage(ctx, tc.img, tc.orient); err != nil {
+					sub.Fatal(err)
+				}
+			}
+		})
+	}
+}

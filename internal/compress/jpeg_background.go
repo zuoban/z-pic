@@ -91,23 +91,181 @@ func flattenAlphaForJPEG(ctx context.Context, img image.Image, bg color.RGBA) (i
 	bgR := uint32(bg.R) * 0x101
 	bgG := uint32(bg.G) * 0x101
 	bgB := uint32(bg.B) * 0x101
-	for y := range h {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+
+	switch src := img.(type) {
+	case *image.NRGBA:
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sOff := src.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+			dOff := y * out.Stride
+			for range w {
+				r8, g8, b8, a8 := src.Pix[sOff], src.Pix[sOff+1], src.Pix[sOff+2], src.Pix[sOff+3]
+				sOff += 4
+				switch a8 {
+				case 0xff:
+					out.Pix[dOff] = r8
+					out.Pix[dOff+1] = g8
+					out.Pix[dOff+2] = b8
+					out.Pix[dOff+3] = 0xff
+				case 0:
+					out.Pix[dOff] = bg.R
+					out.Pix[dOff+1] = bg.G
+					out.Pix[dOff+2] = bg.B
+					out.Pix[dOff+3] = 0xff
+				default:
+					a32 := uint32(a8)
+					a := a32 * 0x101
+					invA := 0xffff - a
+					r := (uint32(r8) * 0x101 * a32) / 0xff
+					g := (uint32(g8) * 0x101 * a32) / 0xff
+					b := (uint32(b8) * 0x101 * a32) / 0xff
+					out.Pix[dOff] = uint8((r + (invA*bgR+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+1] = uint8((g + (invA*bgG+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+2] = uint8((b + (invA*bgB+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+3] = 0xff
+				}
+				dOff += 4
+			}
 		}
-		sy := bounds.Min.Y + y
-		rowBase := y * out.Stride
-		for x := range w {
-			r, g, b, a := img.At(bounds.Min.X+x, sy).RGBA()
-			off := rowBase + x*4
-			// RGBA returns premultiplied channels. Clamp them to alpha so the
-			// composite over bg cannot exceed 0xffff.
+	case *image.RGBA:
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sOff := src.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+			dOff := y * out.Stride
+			for range w {
+				r8, g8, b8, a8 := src.Pix[sOff], src.Pix[sOff+1], src.Pix[sOff+2], src.Pix[sOff+3]
+				sOff += 4
+				switch a8 {
+				case 0xff:
+					out.Pix[dOff] = r8
+					out.Pix[dOff+1] = g8
+					out.Pix[dOff+2] = b8
+					out.Pix[dOff+3] = 0xff
+				case 0:
+					out.Pix[dOff] = bg.R
+					out.Pix[dOff+1] = bg.G
+					out.Pix[dOff+2] = bg.B
+					out.Pix[dOff+3] = 0xff
+				default:
+					a := uint32(a8) * 0x101
+					invA := 0xffff - a
+					r := min(uint32(r8)*0x101, a)
+					g := min(uint32(g8)*0x101, a)
+					b := min(uint32(b8)*0x101, a)
+					out.Pix[dOff] = uint8((r + (invA*bgR+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+1] = uint8((g + (invA*bgG+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+2] = uint8((b + (invA*bgB+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+3] = 0xff
+				}
+				dOff += 4
+			}
+		}
+	case *image.Paletted:
+		var flatPalette [256][3]byte
+		for i := range flatPalette {
+			flatPalette[i] = [3]byte{bg.R, bg.G, bg.B}
+		}
+		for i, c := range src.Palette {
+			if i >= len(flatPalette) {
+				break
+			}
+			if c == nil {
+				continue
+			}
+			r, g, b, a := c.RGBA()
 			a = min(a, 0xffff)
 			invA := 0xffff - a
-			out.Pix[off] = uint8((min(r, a) + (invA*bgR+0x7fff)/0xffff) >> 8)
-			out.Pix[off+1] = uint8((min(g, a) + (invA*bgG+0x7fff)/0xffff) >> 8)
-			out.Pix[off+2] = uint8((min(b, a) + (invA*bgB+0x7fff)/0xffff) >> 8)
-			out.Pix[off+3] = 0xff
+			flatPalette[i] = [3]byte{
+				uint8((min(r, a) + (invA*bgR+0x7fff)/0xffff) >> 8),
+				uint8((min(g, a) + (invA*bgG+0x7fff)/0xffff) >> 8),
+				uint8((min(b, a) + (invA*bgB+0x7fff)/0xffff) >> 8),
+			}
+		}
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sOff := src.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+			dOff := y * out.Stride
+			for x := range w {
+				p := flatPalette[src.Pix[sOff+x]]
+				out.Pix[dOff] = p[0]
+				out.Pix[dOff+1] = p[1]
+				out.Pix[dOff+2] = p[2]
+				out.Pix[dOff+3] = 0xff
+				dOff += 4
+			}
+		}
+	case *image.NYCbCrA:
+		minX, minY := bounds.Min.X, bounds.Min.Y
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sy := minY + y
+			yRow := src.YOffset(minX, sy)
+			aRow := src.AOffset(minX, sy)
+			dOff := y * out.Stride
+			for x := range w {
+				a8 := src.A[aRow+x]
+				switch a8 {
+				case 0:
+					out.Pix[dOff] = bg.R
+					out.Pix[dOff+1] = bg.G
+					out.Pix[dOff+2] = bg.B
+					out.Pix[dOff+3] = 0xff
+				case 0xff:
+					ci := src.COffset(minX+x, sy)
+					r, g, b, _ := (color.YCbCr{Y: src.Y[yRow+x], Cb: src.Cb[ci], Cr: src.Cr[ci]}).RGBA()
+					out.Pix[dOff] = uint8(r >> 8)
+					out.Pix[dOff+1] = uint8(g >> 8)
+					out.Pix[dOff+2] = uint8(b >> 8)
+					out.Pix[dOff+3] = 0xff
+				default:
+					ci := src.COffset(minX+x, sy)
+					r, g, b, a := (color.NYCbCrA{
+						YCbCr: color.YCbCr{Y: src.Y[yRow+x], Cb: src.Cb[ci], Cr: src.Cr[ci]},
+						A:     a8,
+					}).RGBA()
+					invA := 0xffff - a
+					out.Pix[dOff] = uint8((min(r, a) + (invA*bgR+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+1] = uint8((min(g, a) + (invA*bgG+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+2] = uint8((min(b, a) + (invA*bgB+0x7fff)/0xffff) >> 8)
+					out.Pix[dOff+3] = 0xff
+				}
+				dOff += 4
+			}
+		}
+	default:
+		rgba64Img, hasRGBA64 := img.(image.RGBA64Image)
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sy := bounds.Min.Y + y
+			rowBase := y * out.Stride
+			for x := range w {
+				var r, g, b, a uint32
+				if hasRGBA64 {
+					p := rgba64Img.RGBA64At(bounds.Min.X+x, sy)
+					r, g, b, a = uint32(p.R), uint32(p.G), uint32(p.B), uint32(p.A)
+				} else {
+					r, g, b, a = img.At(bounds.Min.X+x, sy).RGBA()
+				}
+				off := rowBase + x*4
+				// RGBA returns premultiplied channels. Clamp them to alpha so the
+				// composite over bg cannot exceed 0xffff.
+				a = min(a, 0xffff)
+				invA := 0xffff - a
+				out.Pix[off] = uint8((min(r, a) + (invA*bgR+0x7fff)/0xffff) >> 8)
+				out.Pix[off+1] = uint8((min(g, a) + (invA*bgG+0x7fff)/0xffff) >> 8)
+				out.Pix[off+2] = uint8((min(b, a) + (invA*bgB+0x7fff)/0xffff) >> 8)
+				out.Pix[off+3] = 0xff
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

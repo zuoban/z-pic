@@ -287,3 +287,23 @@ func TestNormalizeBMFFClipboardPNGEnforcesSizeLimit(t *testing.T) {
 		t.Fatalf("expected error when AVIF clipboard PNG cannot fit within limit, got len=%d err=%v", len(out), err)
 	}
 }
+
+func TestClipboardPNGWriterClampsCapacityToLimit(t *testing.T) {
+	const limit = 4096
+	w := clipboardPNGWriter{ctx: context.Background(), limit: limit}
+	chunk := bytes.Repeat([]byte("a"), 300)
+	for total := 0; total+len(chunk) <= limit; total += len(chunk) {
+		if _, err := w.Write(chunk); err != nil {
+			t.Fatalf("Write failed at %d bytes: %v", total, err)
+		}
+		if w.buffer.Cap() > limit {
+			t.Fatalf("clipboardPNGWriter cap = %d, exceeds limit %d", w.buffer.Cap(), limit)
+		}
+	}
+	if _, err := w.Write(chunk); !errors.Is(err, errClipboardLimit) {
+		t.Fatalf("expected errClipboardLimit, got %v", err)
+	}
+	if w.buffer.Len() != 0 {
+		t.Fatalf("expected buffer reset after limit error, len=%d", w.buffer.Len())
+	}
+}

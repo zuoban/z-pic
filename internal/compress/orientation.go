@@ -157,6 +157,73 @@ func normalizeOrientation(img image.Image, orientation int) image.Image {
 	return orientedImage{Image: img, orientation: orientation}
 }
 
+// orientImage materializes concrete upright buffers for common 8-bit image types
+// so downstream scalers and encoders stay on their typed fast paths instead of
+// falling back to per-pixel interface dispatch on orientedImage. Higher bit-depth
+// or uncommon color models fall back to normalizeOrientation to preserve precision.
+func orientImage(ctx context.Context, img image.Image, orientation int) (image.Image, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if orientation < 2 || orientation > 8 {
+		return img, nil
+	}
+	if oriented, ok, err := orientConcreteLossless(ctx, img, orientation); ok || err != nil {
+		return oriented, err
+	}
+	return normalizeOrientation(img, orientation), nil
+}
+
+func orientConcreteLossless(ctx context.Context, img image.Image, orientation int) (image.Image, bool, error) {
+	oriented := orientedImage{Image: img, orientation: orientation}
+	bounds := oriented.Bounds()
+	switch source := img.(type) {
+	case *image.YCbCr:
+		ratio := orientedYCbCrRatio(source)
+		output := image.NewYCbCr(bounds, ratio)
+		if err := copyOrientedYCbCrPlanes(ctx, output, source, oriented, ratio); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	case *image.NYCbCrA:
+		ratio := orientedYCbCrRatio(&source.YCbCr)
+		output := image.NewNYCbCrA(bounds, ratio)
+		if err := copyOrientedYCbCrPlanes(ctx, &output.YCbCr, &source.YCbCr, oriented, ratio); err != nil {
+			return nil, true, err
+		}
+		if err := copyOrientedPlane(ctx, output.A, output.AStride, source.A, source.AStride, oriented, 0); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	case *image.Gray:
+		output := image.NewGray(bounds)
+		if err := copyOrientedPlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	case *image.Paletted:
+		output := image.NewPaletted(bounds, source.Palette)
+		if err := copyOrientedPlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	case *image.RGBA:
+		output := image.NewRGBA(bounds)
+		if err := copyOriented4BytePlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	case *image.NRGBA:
+		output := image.NewNRGBA(bounds)
+		if err := copyOriented4BytePlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented); err != nil {
+			return nil, true, err
+		}
+		return output, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func orientForJPEGEncode(ctx context.Context, img image.Image, orientation int) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -164,54 +231,31 @@ func orientForJPEGEncode(ctx context.Context, img image.Image, orientation int) 
 	if orientation < 2 || orientation > 8 {
 		return img, nil
 	}
+	if oriented, ok, err := orientConcreteLossless(ctx, img, orientation); ok || err != nil {
+		return oriented, err
+	}
 	oriented := orientedImage{Image: img, orientation: orientation}
 	bounds := oriented.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
-	switch source := img.(type) {
-	case *image.YCbCr:
-		ratio := orientedYCbCrRatio(source)
-		output := image.NewYCbCr(bounds, ratio)
-		if err := copyOrientedYCbCrPlanes(ctx, output, source, oriented, ratio); err != nil {
-			return nil, err
-		}
-		return output, nil
-	case *image.NYCbCrA:
-		ratio := orientedYCbCrRatio(&source.YCbCr)
-		output := image.NewNYCbCrA(bounds, ratio)
-		if err := copyOrientedYCbCrPlanes(ctx, &output.YCbCr, &source.YCbCr, oriented, ratio); err != nil {
-			return nil, err
-		}
-		if err := copyOrientedPlane(ctx, output.A, output.AStride, source.A, source.AStride, oriented, 0); err != nil {
-			return nil, err
-		}
-		return output, nil
-	case *image.Gray:
-		output := image.NewGray(bounds)
-		if err := copyOrientedPlane(ctx, output.Pix, output.Stride, source.Pix, source.Stride, oriented, 0); err != nil {
-			return nil, err
-		}
-		return output, nil
-	default:
-		output := image.NewRGBA(bounds)
-		for row := 0; row < height; row++ {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			rowBase := row * output.Stride
-			for column := 0; column < width; column++ {
-				pixel := oriented.RGBA64At(column, row)
-				offset := rowBase + column*4
-				output.Pix[offset] = uint8(pixel.R >> 8)
-				output.Pix[offset+1] = uint8(pixel.G >> 8)
-				output.Pix[offset+2] = uint8(pixel.B >> 8)
-				output.Pix[offset+3] = uint8(pixel.A >> 8)
-			}
-		}
+	output := image.NewRGBA(bounds)
+	for row := 0; row < height; row++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return output, nil
+		rowBase := row * output.Stride
+		for column := 0; column < width; column++ {
+			pixel := oriented.RGBA64At(column, row)
+			offset := rowBase + column*4
+			output.Pix[offset] = uint8(pixel.R >> 8)
+			output.Pix[offset+1] = uint8(pixel.G >> 8)
+			output.Pix[offset+2] = uint8(pixel.B >> 8)
+			output.Pix[offset+3] = uint8(pixel.A >> 8)
+		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return output, nil
 }
 
 func orientedYCbCrRatio(source *image.YCbCr) image.YCbCrSubsampleRatio {
@@ -233,6 +277,12 @@ func copyOrientedYCbCrPlanes(ctx context.Context, output, source *image.YCbCr, o
 		}
 		return copyOrientedPlane(ctx, output.Cr, output.CStride, source.Cr, source.CStride, oriented, 1)
 	}
+	if source.SubsampleRatio == image.YCbCrSubsampleRatio444 {
+		if err := copyOrientedPlane(ctx, output.Cb, output.CStride, source.Cb, source.CStride, oriented, 0); err != nil {
+			return err
+		}
+		return copyOrientedPlane(ctx, output.Cr, output.CStride, source.Cr, source.CStride, oriented, 0)
+	}
 	bounds := oriented.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	originX, originY := oriented.mapCoords(0, 0)
@@ -250,6 +300,59 @@ func copyOrientedYCbCrPlanes(ctx context.Context, output, source *image.YCbCr, o
 			output.Cr[rowBase+column] = source.Cr[sourceIndex]
 			mappedX += stepX
 			mappedY += stepY
+		}
+	}
+	return ctx.Err()
+}
+
+func copyOriented4BytePlane(ctx context.Context, output []byte, outputStride int, source []byte, sourceStride int, oriented orientedImage) error {
+	bounds := oriented.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return ctx.Err()
+	}
+	sourceBounds := oriented.Image.Bounds()
+	originX, originY := oriented.mapCoords(0, 0)
+	nextX, nextY := oriented.mapCoords(1, 0)
+	nextRowX, nextRowY := oriented.mapCoords(0, 1)
+	columnStep := (nextX-originX)*4 + (nextY-originY)*sourceStride
+	rowStep := (nextRowX-originX)*4 + (nextRowY-originY)*sourceStride
+	origin := (originX-sourceBounds.Min.X)*4 + (originY-sourceBounds.Min.Y)*sourceStride
+	if columnStep == 4 {
+		rowBytes := width * 4
+		for row := range height {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			dstOff := row * outputStride
+			srcOff := origin + row*rowStep
+			copy(output[dstOff:dstOff+rowBytes], source[srcOff:srcOff+rowBytes])
+		}
+		return ctx.Err()
+	}
+	blockWidth, blockHeight := max(1, width), max(1, height)
+	if nextY != originY {
+		blockWidth, blockHeight = 32, 32
+	}
+	for top := 0; top < height; top += blockHeight {
+		bottom := min(top+blockHeight, height)
+		for left := 0; left < width; left += blockWidth {
+			right := min(left+blockWidth, width)
+			for row := top; row < bottom; row++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				dstOff := row*outputStride + left*4
+				srcOff := origin + row*rowStep + left*columnStep
+				for range right - left {
+					output[dstOff] = source[srcOff]
+					output[dstOff+1] = source[srcOff+1]
+					output[dstOff+2] = source[srcOff+2]
+					output[dstOff+3] = source[srcOff+3]
+					dstOff += 4
+					srcOff += columnStep
+				}
+			}
 		}
 	}
 	return ctx.Err()

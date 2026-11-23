@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"image"
 	"image/color"
 
 	"zpic/internal/aviftools"
@@ -72,11 +73,11 @@ func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize
 		}
 	}
 
-	decoded, err := source.decodePixels(ctx)
+	oriented, err := source.decodeOrientedPixels(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	resized, err := resizeImage(ctx, normalizeOrientation(decoded, source.orientation), options)
+	resized, err := resizeImage(ctx, oriented, options)
 	if err != nil {
 		return nil, nil, fmt.Errorf("缩放图片已取消：%w", err)
 	}
@@ -100,7 +101,15 @@ func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize
 	if options.Metadata == MetadataKeepAll {
 		chunks = append(chunks, avifSourceMetadataChunks(pixelSource, sourceFormat)...)
 	}
-	pngData, err := encodeResizedPNG(ctx, aviftools.ConvertYCbCrToNRGBA(resized), chunks)
+	encodeTarget := resized
+	switch resized.(type) {
+	case *image.YCbCr, *image.NYCbCrA:
+		// encodeResizedPNG streams 8-bit RGB/RGBA directly from planar YCbCr/NYCbCrA
+		// without allocating a full-resolution intermediate *image.NRGBA buffer.
+	default:
+		encodeTarget = aviftools.ConvertYCbCrToNRGBA(resized)
+	}
+	pngData, err := encodeResizedPNG(ctx, encodeTarget, chunks)
 	if err == nil && needsResize {
 		bounds := resized.Bounds()
 		source.storePreparedPNG(bounds.Dx(), bounds.Dy(), pngData, icc)

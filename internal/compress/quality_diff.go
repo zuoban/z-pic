@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"math"
 	"reflect"
@@ -166,13 +167,17 @@ func decodeUprightImage(ctx context.Context, data []byte) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	orient := 1
 	switch format {
 	case "jpeg":
-		img = normalizeOrientation(img, jpegOrientation(data))
+		orient = jpegOrientation(data)
 	case "webp":
-		img = normalizeOrientation(img, webpOrientation(data))
+		orient = webpOrientation(data)
 	case "png":
-		img = normalizeOrientation(img, pngOrientation(data))
+		orient = pngOrientation(data)
+	}
+	if orient >= 2 && orient <= 8 {
+		return orientImage(ctx, img, orient)
 	}
 	return img, nil
 }
@@ -609,6 +614,33 @@ func toNRGBA(src image.Image) *image.NRGBA {
 		return dst
 	case *image.YCbCr:
 		ycbcr.ToNRGBAInto(dst, s, b)
+		return dst
+	case *image.NYCbCrA:
+		ycbcr.NYCbCrAToNRGBAInto(dst, s, b)
+		return dst
+	case *image.Paletted:
+		var lut [256]color.NRGBA
+		for i, c := range s.Palette {
+			if i >= len(lut) {
+				break
+			}
+			if c == nil {
+				continue
+			}
+			lut[i] = color.NRGBAModel.Convert(c).(color.NRGBA)
+		}
+		for y := 0; y < h; y++ {
+			sOff := s.PixOffset(b.Min.X, b.Min.Y+y)
+			dOff := y * dst.Stride
+			for x := 0; x < w; x++ {
+				c := lut[s.Pix[sOff+x]]
+				dst.Pix[dOff] = c.R
+				dst.Pix[dOff+1] = c.G
+				dst.Pix[dOff+2] = c.B
+				dst.Pix[dOff+3] = c.A
+				dOff += 4
+			}
+		}
 		return dst
 	case *image.Gray:
 		for y := 0; y < h; y++ {

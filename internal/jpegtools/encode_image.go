@@ -141,6 +141,33 @@ func writeRGBScanlines(ctx context.Context, w *bufio.Writer, img image.Image, bo
 				return err
 			}
 		}
+	case *image.Paletted:
+		var lut [256][3]byte
+		for i, c := range src.Palette {
+			if i >= len(lut) {
+				break
+			}
+			if c == nil {
+				continue
+			}
+			r, g, b, _ := c.RGBA()
+			lut[i] = [3]byte{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}
+		}
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			off := src.PixOffset(bounds.Min.X, y)
+			for x := range width {
+				rgb := lut[src.Pix[off+x]]
+				rowBuf[x*3] = rgb[0]
+				rowBuf[x*3+1] = rgb[1]
+				rowBuf[x*3+2] = rgb[2]
+			}
+			if _, err := w.Write(rowBuf); err != nil {
+				return err
+			}
+		}
 	case *image.CMYK:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			if err := ctx.Err(); err != nil {
@@ -159,15 +186,23 @@ func writeRGBScanlines(ctx context.Context, w *bufio.Writer, img image.Image, bo
 			}
 		}
 	default:
+		rgba64Img, hasRGBA64 := img.(image.RGBA64Image)
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			for x := range width {
-				r, g, b, _ := img.At(bounds.Min.X+x, y).RGBA()
-				rowBuf[x*3] = uint8(r >> 8)
-				rowBuf[x*3+1] = uint8(g >> 8)
-				rowBuf[x*3+2] = uint8(b >> 8)
+				var r, g, b uint8
+				if hasRGBA64 {
+					px := rgba64Img.RGBA64At(bounds.Min.X+x, y)
+					r, g, b = uint8(px.R>>8), uint8(px.G>>8), uint8(px.B>>8)
+				} else {
+					rr, gg, bb, _ := img.At(bounds.Min.X+x, y).RGBA()
+					r, g, b = uint8(rr>>8), uint8(gg>>8), uint8(bb>>8)
+				}
+				rowBuf[x*3] = r
+				rowBuf[x*3+1] = g
+				rowBuf[x*3+2] = b
 			}
 			if _, err := w.Write(rowBuf); err != nil {
 				return err

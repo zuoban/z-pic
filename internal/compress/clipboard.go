@@ -9,13 +9,14 @@ import (
 	"fmt"
 	"hash/crc32"
 	"image"
-	"image/color"
 	"image/png"
 	"io"
 	"sync"
 
 	"zpic/internal/aviftools"
 	"zpic/internal/contextio"
+	"zpic/internal/toolio"
+	"zpic/internal/ycbcr"
 )
 
 type pngEncoderPool struct {
@@ -42,6 +43,7 @@ var (
 		},
 	}
 	pngIENDChunk = [12]byte{0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82}
+	idatTagCRC   = crc32.ChecksumIEEE([]byte("IDAT"))
 )
 
 // CompressClipboardPNG compresses a static PNG snapshot using the preset's
@@ -167,74 +169,49 @@ func encodeClipboardPNG(ctx context.Context, decoded image.Image, limit int) ([]
 // YCbCr samples without boxing pixels through image.Image.At() or allocating a
 // full-resolution intermediate buffer.
 func encodeYCbCrClipboardPNG(ctx context.Context, src *image.YCbCr, limit int) ([]byte, error) {
-	bounds := src.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-	if width <= 0 || height <= 0 {
-		return nil, fmt.Errorf("无法生成剪贴板图片：尺寸无效")
+	out, err := encodeYCbCrPNG(ctx, src, limit, errClipboardLimit, nil)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
 	}
-	const bpp = 3
-	return stream8BitPNG(ctx, width, height, 2, bpp, limit, func(row int, raw []byte) {
-		if src.SubsampleRatio == image.YCbCrSubsampleRatio420 && bounds.Min.X == 0 && bounds.Min.Y == 0 {
-			yRow := src.Y[row*src.YStride : row*src.YStride+width]
-			cOff := (row >> 1) * src.CStride
-			cbRow := src.Cb[cOff:]
-			crRow := src.Cr[cOff:]
-			col := 0
-			for ; col+1 < width; col += 2 {
-				ci := col >> 1
-				cb, cr := cbRow[ci], crRow[ci]
-				r0, g0, b0 := color.YCbCrToRGB(yRow[col], cb, cr)
-				r1, g1, b1 := color.YCbCrToRGB(yRow[col+1], cb, cr)
-				p := raw[col*3 : col*3+6 : col*3+6]
-				p[0], p[1], p[2] = r0, g0, b0
-				p[3], p[4], p[5] = r1, g1, b1
-			}
-			if col < width {
-				ci := col >> 1
-				r0, g0, b0 := color.YCbCrToRGB(yRow[col], cbRow[ci], crRow[ci])
-				p := raw[col*3 : col*3+3 : col*3+3]
-				p[0], p[1], p[2] = r0, g0, b0
-			}
-			return
-		}
-		sy := bounds.Min.Y + row
-		for col := range width {
-			sx := bounds.Min.X + col
-			yi := src.YOffset(sx, sy)
-			ci := src.COffset(sx, sy)
-			r, g, b := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
-			p := raw[col*3 : col*3+3 : col*3+3]
-			p[0], p[1], p[2] = r, g, b
-		}
-	})
+	return out, nil
 }
 
 func encodeNYCbCrAClipboardPNG(ctx context.Context, src *image.NYCbCrA, limit int) ([]byte, error) {
+	out, err := encodeNYCbCrAPNG(ctx, src, limit, errClipboardLimit, nil)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+	}
+	return out, nil
+}
+
+func encodeYCbCrPNG(ctx context.Context, src *image.YCbCr, limit int, limitErr error, extraChunks [][]byte) ([]byte, error) {
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	if width <= 0 || height <= 0 {
-		return nil, fmt.Errorf("无法生成剪贴板图片：尺寸无效")
+		return nil, errors.New("尺寸无效")
+	}
+	return stream8BitPNG(ctx, width, height, 2, 3, limit, limitErr, extraChunks, func(row int, raw []byte) {
+		ycbcr.FillRGBRow(raw, src, bounds, row)
+	})
+}
+
+func encodeNYCbCrAPNG(ctx context.Context, src *image.NYCbCrA, limit int, limitErr error, extraChunks [][]byte) ([]byte, error) {
+	bounds := src.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, errors.New("尺寸无效")
 	}
 	if src.Opaque() {
-		return encodeYCbCrClipboardPNG(ctx, &src.YCbCr, limit)
+		return encodeYCbCrPNG(ctx, &src.YCbCr, limit, limitErr, extraChunks)
 	}
-	const bpp = 4
-	return stream8BitPNG(ctx, width, height, 6, bpp, limit, func(row int, raw []byte) {
-		sy := bounds.Min.Y + row
-		for col := range width {
-			sx := bounds.Min.X + col
-			ai := src.AOffset(sx, sy)
-			a := src.A[ai]
-			p := raw[col*4 : col*4+4 : col*4+4]
-			if a == 0 {
-				p[0], p[1], p[2], p[3] = 0, 0, 0, 0
-				continue
-			}
-			yi := src.YOffset(sx, sy)
-			ci := src.COffset(sx, sy)
-			r, g, b := color.YCbCrToRGB(src.Y[yi], src.Cb[ci], src.Cr[ci])
-			p[0], p[1], p[2], p[3] = r, g, b, a
-		}
+	return stream8BitPNG(ctx, width, height, 6, 4, limit, limitErr, extraChunks, func(row int, raw []byte) {
+		ycbcr.FillNYCbCrARow(raw, src, bounds, row)
 	})
 }
 
@@ -244,11 +221,13 @@ func stream8BitPNG(
 	colorType byte,
 	bpp int,
 	limit int,
+	limitErr error,
+	extraChunks [][]byte,
 	fillRow func(row int, raw []byte),
 ) ([]byte, error) {
-	output := clipboardPNGWriter{ctx: ctx, limit: limit}
+	output := clipboardPNGWriter{ctx: ctx, limit: limit, limitErr: limitErr}
 	if _, err := output.Write(pngSignature[:]); err != nil {
-		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+		return nil, err
 	}
 	var ihdr [25]byte
 	binary.BigEndian.PutUint32(ihdr[0:4], 13)
@@ -259,7 +238,12 @@ func stream8BitPNG(
 	ihdr[17] = colorType
 	binary.BigEndian.PutUint32(ihdr[21:25], crc32.ChecksumIEEE(ihdr[4:21]))
 	if _, err := output.Write(ihdr[:]); err != nil {
-		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+		return nil, err
+	}
+	for _, chunk := range extraChunks {
+		if _, err := output.Write(chunk); err != nil {
+			return nil, err
+		}
 	}
 	idat := idatChunkWriter{dst: &output}
 	zw := clipboardZlibWriters.Get().(*zlib.Writer)
@@ -284,17 +268,17 @@ func stream8BitPNG(
 			filteredRow[1+i] = rawRow[i] - rawRow[i-bpp]
 		}
 		if _, err := zw.Write(filteredRow); err != nil {
-			return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+			return nil, err
 		}
 	}
 	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+		return nil, err
 	}
 	if err := idat.Flush(); err != nil {
-		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+		return nil, err
 	}
 	if _, err := output.Write(pngIENDChunk[:]); err != nil {
-		return nil, fmt.Errorf("无法生成剪贴板图片：%w", err)
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -341,11 +325,8 @@ func (w *idatChunkWriter) Flush() error {
 	if _, err := w.dst.Write(payload); err != nil {
 		return err
 	}
-	crc := crc32.NewIEEE()
-	_, _ = crc.Write(header[4:8])
-	_, _ = crc.Write(payload)
 	var trailer [4]byte
-	binary.BigEndian.PutUint32(trailer[:], crc.Sum32())
+	binary.BigEndian.PutUint32(trailer[:], crc32.Update(idatTagCRC, crc32.IEEETable, payload))
 	_, err := w.dst.Write(trailer[:])
 	return err
 }
@@ -355,19 +336,24 @@ var errClipboardLimit = errors.New("剪贴板 PNG 图片超过 64 MiB 限制")
 // Check each encoder write so cancellation and expansion limits apply during
 // encoding, including when a small JPEG expands into a much larger PNG.
 type clipboardPNGWriter struct {
-	ctx    context.Context
-	limit  int
-	buffer bytes.Buffer
+	ctx      context.Context
+	limit    int
+	limitErr error
+	buffer   toolio.BoundedBuffer
 }
 
 func (w *clipboardPNGWriter) Write(data []byte) (int, error) {
 	if err := w.ctx.Err(); err != nil {
-		w.buffer = bytes.Buffer{}
+		w.buffer.Reset()
 		return 0, err
 	}
 	if len(data) > w.limit-w.buffer.Len() {
-		w.buffer = bytes.Buffer{}
+		w.buffer.Reset()
+		if w.limitErr != nil {
+			return 0, w.limitErr
+		}
 		return 0, errClipboardLimit
 	}
-	return w.buffer.Write(data)
+	w.buffer.AppendBounded(nil, data, w.limit)
+	return len(data), nil
 }

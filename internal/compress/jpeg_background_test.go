@@ -338,3 +338,164 @@ func TestJPEGBackgroundValidationRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestFlattenAlphaForJPEGFastPathsMatchGeneric(t *testing.T) {
+	parent := image.Rect(-2, -3, 26, 20)
+	sub := image.Rect(3, 2, 21, 16)
+
+	nrgba := image.NewNRGBA(parent)
+	rgba := image.NewRGBA(parent)
+	nrgba64 := image.NewNRGBA64(parent)
+	pal := color.Palette{
+		color.NRGBA{R: 0, G: 0, B: 0, A: 0},
+		color.NRGBA{R: 220, G: 60, B: 40, A: 64},
+		color.NRGBA{R: 40, G: 180, B: 230, A: 128},
+		color.NRGBA{R: 120, G: 200, B: 80, A: 200},
+		color.NRGBA{R: 15, G: 90, B: 240, A: 255},
+	}
+	paletted := image.NewPaletted(parent, pal)
+	for y := parent.Min.Y; y < parent.Max.Y; y++ {
+		for x := parent.Min.X; x < parent.Max.X; x++ {
+			a := uint8(((x-parent.Min.X)*37 + (y-parent.Min.Y)*19) % 256)
+			if (x+y)%5 == 0 {
+				a = 0
+			} else if (x+y)%7 == 0 {
+				a = 255
+			}
+			r := uint8((x * 13) & 0xff)
+			g := uint8((y * 29) & 0xff)
+			b := uint8(((x ^ y) * 17) & 0xff)
+			c := color.NRGBA{R: r, G: g, B: b, A: a}
+			nrgba.SetNRGBA(x, y, c)
+			if x == sub.Min.X+1 && y == sub.Min.Y+1 {
+				// Out-of-gamut premultiplied RGBA pixel (channel > alpha) to verify clamping.
+				rgba.SetRGBA(x, y, color.RGBA{R: 250, G: 200, B: 180, A: 100})
+			} else {
+				rgba.Set(x, y, c)
+			}
+			nrgba64.SetNRGBA64(x, y, color.NRGBA64{
+				R: uint16(r)*257 + 13,
+				G: uint16(g)*257 + 29,
+				B: uint16(b)*257 + 41,
+				A: uint16(a) * 257,
+			})
+			paletted.SetColorIndex(x, y, uint8(((x-parent.Min.X)+(y-parent.Min.Y))%len(pal)))
+		}
+	}
+	ny := image.NewNYCbCrA(parent, image.YCbCrSubsampleRatio420)
+	for i := range ny.Y {
+		ny.Y[i] = uint8((i*23 + 11) % 256)
+		switch i % 6 {
+		case 0:
+			ny.A[i] = 0
+		case 1:
+			ny.A[i] = 255
+		default:
+			ny.A[i] = uint8((i*41 + 17) % 256)
+		}
+	}
+	for i := range ny.Cb {
+		ny.Cb[i] = uint8((i*17 + 63) % 256)
+		ny.Cr[i] = uint8((i*31 + 97) % 256)
+	}
+
+	bgs := []color.RGBA{
+		{R: 0xff, G: 0xff, B: 0xff, A: 0xff},
+		{R: 0x00, G: 0x00, B: 0x00, A: 0xff},
+		{R: 0x34, G: 0x78, B: 0xbc, A: 0xff},
+	}
+	cases := []struct {
+		name string
+		img  image.Image
+	}{
+		{"nrgba", nrgba},
+		{"nrgba-sub", nrgba.SubImage(sub)},
+		{"rgba", rgba},
+		{"rgba-sub", rgba.SubImage(sub)},
+		{"paletted", paletted},
+		{"paletted-sub", paletted.SubImage(sub)},
+		{"nycbcra", ny},
+		{"nycbcra-sub", ny.SubImage(sub)},
+		{"nrgba64-sub", nrgba64.SubImage(sub)},
+	}
+	for _, bg := range bgs {
+		bgR := uint32(bg.R) * 0x101
+		bgG := uint32(bg.G) * 0x101
+		bgB := uint32(bg.B) * 0x101
+		for _, tc := range cases {
+			gotImg, err := flattenAlphaForJPEG(t.Context(), tc.img, bg)
+			if err != nil {
+				t.Fatalf("flattenAlphaForJPEG(%s) failed: %v", tc.name, err)
+			}
+			got, ok := gotImg.(*image.RGBA)
+			if !ok {
+				t.Fatalf("flattenAlphaForJPEG(%s) returned %T, want *image.RGBA", tc.name, gotImg)
+			}
+			b := tc.img.Bounds()
+			if got.Bounds() != image.Rect(0, 0, b.Dx(), b.Dy()) {
+				t.Fatalf("flattenAlphaForJPEG(%s) bounds = %v, want 0..%dx%d", tc.name, got.Bounds(), b.Dx(), b.Dy())
+			}
+			for y := range b.Dy() {
+				for x := range b.Dx() {
+					r, g, bl, a := tc.img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+					a = min(a, 0xffff)
+					invA := 0xffff - a
+					want := color.RGBA{
+						R: uint8((min(r, a) + (invA*bgR+0x7fff)/0xffff) >> 8),
+						G: uint8((min(g, a) + (invA*bgG+0x7fff)/0xffff) >> 8),
+						B: uint8((min(bl, a) + (invA*bgB+0x7fff)/0xffff) >> 8),
+						A: 0xff,
+					}
+					if actual := got.RGBAAt(x, y); actual != want {
+						t.Fatalf("flattenAlphaForJPEG(%s, bg=%+v) at (%d,%d): got %+v, want %+v",
+							tc.name, bg, x, y, actual, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkFlattenAlphaForJPEG(b *testing.B) {
+	const w, h = 1920, 1080
+	nrgba := image.NewNRGBA(image.Rect(0, 0, w, h))
+	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+	pal := color.Palette{
+		color.NRGBA{R: 0, G: 0, B: 0, A: 0},
+		color.NRGBA{R: 200, G: 100, B: 50, A: 128},
+		color.NRGBA{R: 40, G: 180, B: 220, A: 255},
+	}
+	paletted := image.NewPaletted(image.Rect(0, 0, w, h), pal)
+	for i := 0; i < w*h; i++ {
+		a := uint8(i % 256)
+		nrgba.Pix[i*4] = uint8(i)
+		nrgba.Pix[i*4+1] = uint8(i >> 2)
+		nrgba.Pix[i*4+2] = uint8(i >> 4)
+		nrgba.Pix[i*4+3] = a
+		rgba.Pix[i*4] = uint8(uint16(nrgba.Pix[i*4]) * uint16(a) / 255)
+		rgba.Pix[i*4+1] = uint8(uint16(nrgba.Pix[i*4+1]) * uint16(a) / 255)
+		rgba.Pix[i*4+2] = uint8(uint16(nrgba.Pix[i*4+2]) * uint16(a) / 255)
+		rgba.Pix[i*4+3] = a
+		paletted.Pix[i] = uint8(i % len(pal))
+	}
+	bg := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		img  image.Image
+	}{
+		{"NRGBA", nrgba},
+		{"RGBA", rgba},
+		{"Paletted", paletted},
+	} {
+		b.Run(tc.name, func(sub *testing.B) {
+			sub.ReportAllocs()
+			sub.ResetTimer()
+			for range sub.N {
+				if _, err := flattenAlphaForJPEG(ctx, tc.img, bg); err != nil {
+					sub.Fatal(err)
+				}
+			}
+		})
+	}
+}

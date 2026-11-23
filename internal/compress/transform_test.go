@@ -483,6 +483,143 @@ func TestLosslessJPEGWithoutMozJPEGMustStripFails(t *testing.T) {
 	}
 }
 
+func TestEncodeResizedPNGFastPathsAndInlineChunks(t *testing.T) {
+	icc := syntheticRGBICC()
+	iccp := buildPNGICCPChunk(icc, 3)
+	if len(iccp) == 0 {
+		t.Fatal("failed to build iCCP chunk")
+	}
+
+	ycbcrImg := image.NewYCbCr(image.Rect(0, 0, 35, 23), image.YCbCrSubsampleRatio420)
+	for i := range ycbcrImg.Y {
+		ycbcrImg.Y[i] = uint8((i*17 + 29) % 256)
+	}
+	for i := range ycbcrImg.Cb {
+		ycbcrImg.Cb[i] = uint8((i*23 + 71) % 256)
+		ycbcrImg.Cr[i] = uint8((i*31 + 109) % 256)
+	}
+
+	ny := image.NewNYCbCrA(image.Rect(0, 0, 24, 18), image.YCbCrSubsampleRatio420)
+	for i := range ny.Y {
+		ny.Y[i] = uint8((i*13 + 41) % 256)
+		if i%5 == 0 {
+			ny.A[i] = 0
+		} else {
+			ny.A[i] = uint8((i*37 + 19) % 256)
+		}
+	}
+	for i := range ny.Cb {
+		ny.Cb[i] = uint8((i*11 + 83) % 256)
+		ny.Cr[i] = uint8((i*7 + 113) % 256)
+	}
+
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 32, 24))
+	for y := range 24 {
+		for x := range 32 {
+			nrgba.SetNRGBA(x, y, color.NRGBA{
+				R: uint8(x * 7),
+				G: uint8(y * 10),
+				B: uint8((x + y) * 4),
+				A: 255,
+			})
+		}
+	}
+	nrgba.SetNRGBA(2, 3, color.NRGBA{R: 120, G: 80, B: 200, A: 140})
+
+	for _, tc := range []struct {
+		name string
+		img  image.Image
+	}{
+		{"YCbCr", ycbcrImg},
+		{"NYCbCrA", ny},
+		{"NRGBA", nrgba},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := encodeResizedPNG(context.Background(), tc.img, [][]byte{iccp})
+			if err != nil {
+				t.Fatalf("encodeResizedPNG(%s) failed: %v", tc.name, err)
+			}
+			if !bytes.Equal(extractPNGICCProfile(encoded), icc) {
+				t.Fatalf("encodeResizedPNG(%s) lost injected iCCP chunk", tc.name)
+			}
+			// Verify the injected chunk sits immediately after signature + IHDR (byte 33).
+			if len(encoded) < 33+len(iccp) || !bytes.Equal(encoded[33:33+len(iccp)], iccp) {
+				t.Fatalf("encodeResizedPNG(%s) did not inject chunk immediately after IHDR", tc.name)
+			}
+			decoded, err := png.Decode(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatalf("png.Decode(%s) failed: %v", tc.name, err)
+			}
+			if decoded.Bounds().Size() != tc.img.Bounds().Size() {
+				t.Fatalf("decoded size %v != %v", decoded.Bounds().Size(), tc.img.Bounds().Size())
+			}
+			switch src := tc.img.(type) {
+			case *image.YCbCr:
+				for y := range src.Bounds().Dy() {
+					for x := range src.Bounds().Dx() {
+						c := src.YCbCrAt(x, y)
+						r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+						got := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)
+						if got != (color.NRGBA{R: r, G: g, B: b, A: 0xff}) {
+							t.Fatalf("YCbCr pixel (%d,%d) got %+v want (%d,%d,%d,255)", x, y, got, r, g, b)
+						}
+					}
+				}
+			case *image.NYCbCrA:
+				for y := range src.Bounds().Dy() {
+					for x := range src.Bounds().Dx() {
+						c := src.NYCbCrAAt(x, y)
+						var want color.NRGBA
+						if c.A != 0 {
+							r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+							want = color.NRGBA{R: r, G: g, B: b, A: c.A}
+						}
+						got := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)
+						if got != want {
+							t.Fatalf("NYCbCrA pixel (%d,%d) got %+v want %+v", x, y, got, want)
+						}
+					}
+				}
+			default:
+				assertImagesEqual(t, tc.img, decoded)
+			}
+		})
+	}
+}
+
+func BenchmarkEncodeResizedPNG(b *testing.B) {
+	iccp := buildPNGICCPChunk(syntheticRGBICC(), 3)
+	chunks := [][]byte{iccp}
+	ctx := context.Background()
+
+	b.Run("YCbCr420_2MP", func(sub *testing.B) {
+		src := image.NewYCbCr(image.Rect(0, 0, 1920, 1080), image.YCbCrSubsampleRatio420)
+		for i := range src.Y {
+			src.Y[i] = uint8((i*17 + 13) % 256)
+		}
+		sub.ReportAllocs()
+		sub.ResetTimer()
+		for range sub.N {
+			if _, err := encodeResizedPNG(ctx, src, chunks); err != nil {
+				sub.Fatal(err)
+			}
+		}
+	})
+	b.Run("RGBA_2MP_WithChunks", func(sub *testing.B) {
+		src := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+		for i := range src.Pix {
+			src.Pix[i] = uint8((i*13 + 7) % 256)
+		}
+		sub.ReportAllocs()
+		sub.ResetTimer()
+		for range sub.N {
+			if _, err := encodeResizedPNG(ctx, src, chunks); err != nil {
+				sub.Fatal(err)
+			}
+		}
+	})
+}
+
 func assertImagesEqual(t *testing.T, want, got image.Image) {
 	t.Helper()
 	assertImagesNear(t, want, got, 0)

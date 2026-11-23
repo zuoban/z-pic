@@ -531,6 +531,47 @@ func TestToNRGBAMatchesDraw(t *testing.T) {
 		checkExact(t, "ycbcr-"+ratio.String(), ycbcr)
 		checkExact(t, "ycbcr-sub-"+ratio.String(), ycbcr.SubImage(image.Rect(6, 8, 29, 24)))
 	}
+
+	pal := color.Palette{
+		color.NRGBA{R: 0, G: 0, B: 0, A: 0},
+		color.NRGBA{R: 200, G: 90, B: 30, A: 140},
+		color.NRGBA{R: 30, G: 180, B: 240, A: 255},
+	}
+	palImg := image.NewPaletted(image.Rect(2, 3, 24, 19), pal)
+	for i := range palImg.Pix {
+		palImg.Pix[i] = uint8(i % len(pal))
+	}
+	checkExact(t, "paletted", palImg)
+	checkExact(t, "paletted-sub", palImg.SubImage(image.Rect(5, 6, 20, 15)))
+
+	ny := image.NewNYCbCrA(image.Rect(2, 3, 24, 19), image.YCbCrSubsampleRatio420)
+	for i := range ny.Y {
+		ny.Y[i] = uint8((i*17 + 19) % 256)
+		if i%5 == 0 {
+			ny.A[i] = 0
+		} else {
+			ny.A[i] = uint8((i*29 + 7) % 256)
+		}
+	}
+	for i := range ny.Cb {
+		ny.Cb[i] = uint8((i*13 + 71) % 256)
+		ny.Cr[i] = uint8((i*19 + 101) % 256)
+	}
+	gotNY := toNRGBA(ny.SubImage(image.Rect(5, 6, 20, 15)))
+	subNY := ny.SubImage(image.Rect(5, 6, 20, 15)).(*image.NYCbCrA)
+	for y := range subNY.Bounds().Dy() {
+		for x := range subNY.Bounds().Dx() {
+			c := subNY.NYCbCrAAt(subNY.Bounds().Min.X+x, subNY.Bounds().Min.Y+y)
+			var want color.NRGBA
+			if c.A != 0 {
+				r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+				want = color.NRGBA{R: r, G: g, B: b, A: c.A}
+			}
+			if actual := gotNY.NRGBAAt(x, y); actual != want {
+				t.Fatalf("toNRGBA(nycbcra-sub) at (%d,%d): got %+v want %+v", x, y, actual, want)
+			}
+		}
+	}
 }
 
 func BenchmarkAnalyzeVisualDiff(b *testing.B) {

@@ -340,7 +340,17 @@ func clockwiseConversionImage(source image.Image) *image.NRGBA {
 	upright := image.NewNRGBA(image.Rect(0, 0, bounds.Dy(), bounds.Dx()))
 	for y := range bounds.Dy() {
 		for x := range bounds.Dx() {
-			upright.Set(bounds.Dy()-1-y, x, source.At(bounds.Min.X+x, bounds.Min.Y+y))
+			c := source.At(bounds.Min.X+x, bounds.Min.Y+y)
+			if ny, ok := c.(color.NYCbCrA); ok {
+				if ny.A == 0 {
+					upright.SetNRGBA(bounds.Dy()-1-y, x, color.NRGBA{})
+				} else {
+					r, g, b := color.YCbCrToRGB(ny.Y, ny.Cb, ny.Cr)
+					upright.SetNRGBA(bounds.Dy()-1-y, x, color.NRGBA{R: r, G: g, B: b, A: ny.A})
+				}
+				continue
+			}
+			upright.Set(bounds.Dy()-1-y, x, c)
 		}
 	}
 	return upright

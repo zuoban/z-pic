@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"image"
@@ -168,42 +169,92 @@ func resizeImage(ctx context.Context, img image.Image, options Options) (image.I
 	return dst, nil
 }
 
+var errIntermediatePNGLimit = errors.New("中间 PNG 超过 128 MiB 限制")
+
 func encodeResizedPNG(ctx context.Context, img image.Image, chunks [][]byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	output := pngTransformOutput{ctx: ctx, limit: maxIntermediatePNGSize}
+	extraBytes := 0
 	for _, chunk := range chunks {
-		output.limit -= len(chunk)
+		extraBytes += len(chunk)
+		if extraBytes >= maxIntermediatePNGSize {
+			return nil, errIntermediatePNGLimit
+		}
 	}
-	if output.limit <= 0 {
-		return nil, fmt.Errorf("中间 PNG 超过 128 MiB 限制")
+	switch src := img.(type) {
+	case *image.YCbCr:
+		return encodeYCbCrPNG(ctx, src, maxIntermediatePNGSize, errIntermediatePNGLimit, chunks)
+	case *image.NYCbCrA:
+		return encodeNYCbCrAPNG(ctx, src, maxIntermediatePNGSize, errIntermediatePNGLimit, chunks)
 	}
-	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+	output := pngTransformOutput{
+		ctx:    ctx,
+		limit:  maxIntermediatePNGSize,
+		chunks: chunks,
+	}
+	encoder := png.Encoder{
+		CompressionLevel: png.BestSpeed,
+		BufferPool:       &clipboardEncoderBuffers,
+	}
 	if err := encoder.Encode(&output, img); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return injectPNGChunksAfterIHDR(output.buf.Bytes(), chunks), nil
+	if len(chunks) > 0 && !output.injected {
+		if extraBytes > maxIntermediatePNGSize-output.buf.Len() {
+			return nil, errIntermediatePNGLimit
+		}
+		return injectPNGChunksAfterIHDR(output.buf.Bytes(), chunks), nil
+	}
+	return output.buf.Bytes(), nil
 }
 
 type pngTransformOutput struct {
-	ctx   context.Context
-	buf   toolio.BoundedBuffer
-	limit int
+	ctx      context.Context
+	buf      toolio.BoundedBuffer
+	limit    int
+	chunks   [][]byte
+	injected bool
 }
 
 func (out *pngTransformOutput) Write(data []byte) (int, error) {
 	if err := out.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if len(data) > out.limit-out.buf.Len() {
-		return 0, fmt.Errorf("中间 PNG 超过 128 MiB 限制")
+	written := len(data)
+	if len(out.chunks) > 0 && !out.injected && out.buf.Len() < 33 {
+		need := 33 - out.buf.Len()
+		head := data[:min(len(data), need)]
+		if len(head) > out.limit-out.buf.Len() {
+			return 0, errIntermediatePNGLimit
+		}
+		out.buf.AppendBounded(nil, head, out.limit)
+		data = data[len(head):]
+		if out.buf.Len() == 33 {
+			b := out.buf.Bytes()
+			if [8]byte(b[:8]) == pngSignature &&
+				string(b[12:16]) == "IHDR" &&
+				binary.BigEndian.Uint32(b[8:12]) == 13 {
+				for _, chunk := range out.chunks {
+					if len(chunk) > out.limit-out.buf.Len() {
+						return 0, errIntermediatePNGLimit
+					}
+					out.buf.AppendBounded(nil, chunk, out.limit)
+				}
+				out.injected = true
+			}
+		}
 	}
-	out.buf.AppendBounded(nil, data, out.limit)
-	return len(data), nil
+	if len(data) > 0 {
+		if len(data) > out.limit-out.buf.Len() {
+			return 0, errIntermediatePNGLimit
+		}
+		out.buf.AppendBounded(nil, data, out.limit)
+	}
+	return written, nil
 }
 
 // extractPNGColorChunks returns raw display/color chunks (iCCP, sRGB, cICP, pHYs)

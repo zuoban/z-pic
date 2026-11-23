@@ -401,6 +401,8 @@ type compressionSource struct {
 	orientation          int
 	jpegBackground       color.RGBA
 	pixels               image.Image
+	orientedPixels       image.Image
+	orientedPixelsOrient int
 
 	// cachePrepared reuses the winning probe's resized raster / intermediate PNG
 	// during target-resize refinement so CatmullRom scaling and PNG encoding are
@@ -519,6 +521,33 @@ func (source *compressionSource) decodePixels(ctx context.Context) (image.Image,
 	return img, nil
 }
 
+// decodeOrientedPixels returns an upright image for non-JPEG targets,
+// materializing concrete buffers for common 8-bit formats so CatmullRom
+// scaling and native encoders stay on typed fast paths instead of boxing
+// pixels through orientedImage.
+func (source *compressionSource) decodeOrientedPixels(ctx context.Context) (image.Image, error) {
+	if source.orientation < 2 || source.orientation > 8 {
+		return source.decodePixels(ctx)
+	}
+	if source.orientedPixels != nil && source.orientedPixelsOrient == source.orientation {
+		return source.orientedPixels, nil
+	}
+	decoded, err := source.decodePixels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	oriented, err := orientImage(ctx, decoded, source.orientation)
+	if err != nil {
+		return nil, fmt.Errorf("调整图片方向已取消：%w", err)
+	}
+	source.orientedPixels = oriented
+	source.orientedPixelsOrient = source.orientation
+	// Release the unrotated raster once the upright copy is materialized so
+	// large rotated non-JPEG images do not keep two full-res buffers alive.
+	source.pixels = nil
+	return oriented, nil
+}
+
 type encodedImage struct {
 	data           []byte
 	width, height  int
@@ -587,11 +616,10 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				resized = source.cachedResizedImage(resizedWidth, resizedHeight)
 			}
 			if resized == nil {
-				decoded, decodeErr := source.decodePixels(ctx)
+				oriented, decodeErr := source.decodeOrientedPixels(ctx)
 				if decodeErr != nil {
 					return nil, decodeErr
 				}
-				oriented := normalizeOrientation(decoded, sourceOrient)
 				var resizeErr error
 				resized, resizeErr = resizeImage(ctx, oriented, options)
 				if resizeErr != nil {
@@ -780,8 +808,15 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 			}
 			mustStrip := !converting && options.Metadata != MetadataKeepAll && jpegHasStrippableMetadata(data, options.Metadata)
 			forcedOutput = transforming || mustStrip
+			encodeImg := img
+			if !jpegtools.Available() {
+				encodeImg, err = prepareForStdlibJPEG(ctx, img)
+				if err != nil {
+					return nil, fmt.Errorf("压缩已取消：%w", err)
+				}
+			}
 			encoded, appliedQuality, err = encodeWithTargetSize(ctx, options, func(quality int) ([]byte, error) {
-				return encodePreparedJPEG(ctx, img, data, iccSegments, iccBytes, quality, forcedOutput)
+				return encodePreparedJPEG(ctx, encodeImg, data, iccSegments, iccBytes, quality, forcedOutput)
 			})
 		}
 	default: // png
@@ -804,11 +839,10 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				pngConfig = image.Config{Width: width, Height: height}
 				forcedOutput = true
 			} else {
-				decoded, decodeErr := source.decodePixels(ctx)
+				oriented, decodeErr := source.decodeOrientedPixels(ctx)
 				if decodeErr != nil {
 					return nil, decodeErr
 				}
-				oriented := normalizeOrientation(decoded, sourceOrient)
 				resized, resizeErr := resizeImage(ctx, oriented, options)
 				if resizeErr != nil {
 					return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
@@ -960,6 +994,51 @@ func encodePreparedJPEG(ctx context.Context, img image.Image, data []byte, iccSe
 		raw = output.buf.Bytes()
 	}
 	return injectJPEGICCSegments(raw, iccSegments, iccBytes), nil
+}
+
+// prepareForStdlibJPEG adapts opaque *image.NRGBA and *image.Paletted inputs to
+// *image.RGBA so Go's image/jpeg.Encode stays on its typed RGBA fast path across
+// all quality probes when MozJPEG is unavailable.
+func prepareForStdlibJPEG(ctx context.Context, img image.Image) (image.Image, error) {
+	switch src := img.(type) {
+	case *image.NRGBA:
+		// Non-JPEG sources have already passed through flattenAlphaForJPEG, so
+		// any remaining *image.NRGBA is opaque and shares RGBA's RGB byte layout.
+		return &image.RGBA{Pix: src.Pix, Stride: src.Stride, Rect: src.Rect}, nil
+	case *image.Paletted:
+		bounds := src.Bounds()
+		w, h := bounds.Dx(), bounds.Dy()
+		out := image.NewRGBA(image.Rect(0, 0, w, h))
+		var lut [256][3]byte
+		for i, c := range src.Palette {
+			if i >= len(lut) {
+				break
+			}
+			if c == nil {
+				continue
+			}
+			r, g, b, _ := c.RGBA()
+			lut[i] = [3]byte{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}
+		}
+		for y := range h {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sOff := src.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+			dOff := y * out.Stride
+			for x := range w {
+				rgb := lut[src.Pix[sOff+x]]
+				out.Pix[dOff] = rgb[0]
+				out.Pix[dOff+1] = rgb[1]
+				out.Pix[dOff+2] = rgb[2]
+				out.Pix[dOff+3] = 0xff
+				dOff += 4
+			}
+		}
+		return out, nil
+	default:
+		return img, nil
+	}
 }
 
 var pngTargetSizeTiers = [...]PNGOptions{

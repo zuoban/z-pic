@@ -225,13 +225,10 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 
 				c00 := ycbcrSource.COffset(sample.left, topY)
 				r00, g00, b00, _ := (color.YCbCr{Y: ycbcrSource.Y[topYRow+lx], Cb: ycbcrSource.Cb[c00], Cr: ycbcrSource.Cr[c00]}).RGBA()
-
 				c10 := ycbcrSource.COffset(sample.right, topY)
 				r10, g10, b10, _ := (color.YCbCr{Y: ycbcrSource.Y[topYRow+rx], Cb: ycbcrSource.Cb[c10], Cr: ycbcrSource.Cr[c10]}).RGBA()
-
 				c01 := ycbcrSource.COffset(sample.left, bottomY)
 				r01, g01, b01, _ := (color.YCbCr{Y: ycbcrSource.Y[botYRow+lx], Cb: ycbcrSource.Cb[c01], Cr: ycbcrSource.Cr[c01]}).RGBA()
-
 				c11 := ycbcrSource.COffset(sample.right, bottomY)
 				r11, g11, b11, _ := (color.YCbCr{Y: ycbcrSource.Y[botYRow+rx], Cb: ycbcrSource.Cb[c11], Cr: ycbcrSource.Cr[c11]}).RGBA()
 
@@ -487,23 +484,7 @@ func orientRGBA(src *image.RGBA, orientation int) *image.RGBA {
 		return src
 	}
 	oriented := orientedImage{Image: src, orientation: orientation}
-	bounds := oriented.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-	dst := image.NewRGBA(image.Rect(0, 0, width, height))
-	originX, originY := oriented.mapCoords(0, 0)
-	nextX, nextY := oriented.mapCoords(1, 0)
-	stepX, stepY := nextX-originX, nextY-originY
-	minX, minY := src.Rect.Min.X, src.Rect.Min.Y
-	for row := range height {
-		mx, my := oriented.mapCoords(0, row)
-		dstRow := row * dst.Stride
-		for col := range width {
-			srcOff := (my-minY)*src.Stride + (mx-minX)*4
-			dstOff := dstRow + col*4
-			copy(dst.Pix[dstOff:dstOff+4], src.Pix[srcOff:srcOff+4])
-			mx += stepX
-			my += stepY
-		}
-	}
+	dst := image.NewRGBA(oriented.Bounds())
+	_ = copyOriented4BytePlane(context.Background(), dst.Pix, dst.Stride, src.Pix, src.Stride, oriented)
 	return dst
 }
