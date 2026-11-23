@@ -248,6 +248,56 @@ func TestAnalyzeVisualDiffBytesEnforcesInspectLimits(t *testing.T) {
 	}
 }
 
+func TestAnalyzeVisualDiffTransparentHiddenRGBWithTinyAlpha(t *testing.T) {
+	orig := image.NewNRGBA(image.Rect(0, 0, 16, 16))
+	comp := image.NewNRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			orig.SetNRGBA(x, y, color.NRGBA{R: 255, G: 0, B: 0, A: 0})
+			comp.SetNRGBA(x, y, color.NRGBA{R: 0, G: 0, B: 0, A: 0})
+		}
+	}
+	// Introduce 1-level alpha noise on a single pixel where original had hidden (255, 0, 0, 0).
+	comp.SetNRGBA(4, 4, color.NRGBA{R: 0, G: 0, B: 0, A: 1})
+
+	metrics, heatmap, err := AnalyzeVisualDiff(context.Background(), orig, comp)
+	if err != nil {
+		t.Fatalf("AnalyzeVisualDiff failed: %v", err)
+	}
+	if metrics.Identical {
+		t.Fatalf("expected non-identical due to alpha noise, got %+v", metrics)
+	}
+	if metrics.MaxChannelDiff != 1 {
+		t.Fatalf("hidden RGB under A=0 must not inflate MaxChannelDiff: got %d, want 1", metrics.MaxChannelDiff)
+	}
+	if metrics.PSNR < 60 {
+		t.Fatalf("tiny 1-level alpha noise must not wreck PSNR: got %.2f dB", metrics.PSNR)
+	}
+	// Heatmap pixel at (4,4) should reflect low diff (blue-dominant), not hot crimson.
+	px := heatmap.NRGBAAt(4, 4)
+	if px.B <= px.R {
+		t.Fatalf("tiny alpha delta should render cool blue, not hot red: got %+v", px)
+	}
+}
+
+type nonComparableImage struct {
+	*image.NRGBA
+	tags []string // makes the struct type non-comparable for ==
+}
+
+func TestAnalyzeVisualDiffNonComparableImageDoesNotPanic(t *testing.T) {
+	base := syntheticGradientImage(16, 16)
+	a := nonComparableImage{NRGBA: base, tags: []string{"a"}}
+	b := nonComparableImage{NRGBA: base, tags: []string{"b"}}
+	metrics, heatmap, err := AnalyzeVisualDiff(context.Background(), a, b)
+	if err != nil {
+		t.Fatalf("AnalyzeVisualDiff on non-comparable image failed: %v", err)
+	}
+	if !metrics.Identical || heatmap == nil {
+		t.Fatalf("expected identical metrics and heatmap, got %+v heatmap=%v", metrics, heatmap != nil)
+	}
+}
+
 func TestDiffHeatmapLUTMatchesExactFormula(t *testing.T) {
 	samples := []struct {
 		r1, g1, b1, a1, a2 uint8
@@ -257,12 +307,18 @@ func TestDiffHeatmapLUTMatchesExactFormula(t *testing.T) {
 		{123, 45, 200, 255, 255},
 		{255, 128, 64, 0, 0},
 		{255, 128, 64, 0, 128},
+		{255, 128, 64, 128, 128},
 	}
 	for _, sample := range samples {
-		luma := (299*int(sample.r1) + 587*int(sample.g1) + 114*int(sample.b1)) / 1000
-		base := uint8(18 + (luma*44)/255)
-		if sample.a1 == 0 && sample.a2 == 0 {
+		var base uint8
+		if sample.a1 == 0 {
 			base = 22
+		} else {
+			luma := (299*int(sample.r1) + 587*int(sample.g1) + 114*int(sample.b1)) / 1000
+			if sample.a1 < 255 {
+				luma = (luma*int(sample.a1) + 127) / 255
+			}
+			base = uint8(18 + (luma*44)/255)
 		}
 		for diff := 0; diff <= 255; diff++ {
 			gotR, gotG, gotB := diffHeatmapPixel(sample.r1, sample.g1, sample.b1, sample.a1, sample.a2, uint8(diff))

@@ -731,13 +731,16 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 			return []netip.Addr{netip.MustParseAddr("198.18.1.212")}, nil
 		case "dualstack.example.com":
 			return []netip.Addr{netip.MustParseAddr("fc00::1234"), netip.MustParseAddr("198.18.1.213")}, nil
+		case "mixed-public.example.com":
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("198.18.1.217")}, nil
 		case "mixed-loopback.example.com":
 			return []netip.Addr{netip.MustParseAddr("198.18.1.214"), netip.MustParseAddr("127.0.0.1")}, nil
 		case "mixed-ula.example.com":
 			return []netip.Addr{netip.MustParseAddr("198.18.1.215"), netip.MustParseAddr("fd00::1")}, nil
 		case "only-fc00.example.com":
 			return []netip.Addr{netip.MustParseAddr("fc00::1")}, nil
-		case "printer.local", "router.home.arpa", "service.internal", "intranet":
+		case "printer.local", "router.home.arpa", "service.internal", "intranet",
+			"nas.lan", "box.localdomain", "wiki.corp", "cam.home", "hr.intranet", "1.0.0.127.in-addr.arpa":
 			return []netip.Addr{netip.MustParseAddr("198.18.1.216")}, nil
 		default:
 			return nil, fmt.Errorf("unexpected host %s", host)
@@ -750,26 +753,30 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 		if addr == "198.18.1.212:80" || addr == "198.18.1.213:80" {
 			return (&net.Dialer{}).DialContext(ctx, network, originAddr)
 		}
-		if addr == "[fc00::1234]:80" {
-			return nil, errors.New("ipv6 fake-ip unreachable")
-		}
 		return nil, fmt.Errorf("unexpected dial %s", addr)
 	}
 
-	transport := newTransport(lookup, baseDial)
+	transport := newTransportWithFakeIPRoute(lookup, baseDial, func(netip.Addr) bool { return true })
 	defer transport.CloseIdleConnections()
 
-	// 1. Public domain resolved to 198.18.0.0/15 Fake-IP succeeds.
+	// 1. Public domain resolved to 198.18.0.0/15 Fake-IP succeeds when a local TUN Fake-IP route is active.
 	dir := t.TempDir()
 	path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://img.example.com/wallpaper.png"}, dir, transport)
 	if err != nil || !saved || path == "" {
 		t.Fatalf("public domain via IPv4 Fake-IP must succeed: path=%q saved=%v err=%v", path, saved, err)
 	}
 
-	// 2. Public domain resolved to dual-stack Fake-IP (fc00::/18 + 198.18.0.0/15) succeeds and falls back to IPv4.
+	// 2. Public domain resolved to dual-stack Fake-IP (fc00::/18 + 198.18.0.0/15) succeeds
+	//    via IPv4 Fake-IP and NEVER dials IPv6 ULA fc00::/18 directly.
+	beforeDualDial := len(dialed)
 	path, saved, err = ResolveWithTransport(context.Background(), Item{URL: "http://dualstack.example.com/wallpaper.png"}, dir, transport)
 	if err != nil || !saved || path == "" {
 		t.Fatalf("public domain via dual-stack Fake-IP must succeed: path=%q saved=%v err=%v", path, saved, err)
+	}
+	for _, addr := range dialed[beforeDualDial:] {
+		if strings.Contains(addr, "fc00::") {
+			t.Fatalf("dual-stack Fake-IP must never dial IPv6 ULA directly, dialed: %v", dialed[beforeDualDial:])
+		}
 	}
 
 	// 3. Redirect from public domain to literal 198.18.x.x remains blocked.
@@ -777,7 +784,8 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 		t.Fatalf("redirect to literal Fake-IP must be blocked: path=%q saved=%v err=%v", path, saved, err)
 	}
 
-	// 4. Literal Fake-IPs, local/single-label hostnames, standalone fc00::/18, and mixed private records remain blocked.
+	// 4. Literal Fake-IPs, local/private-suffix/single-label hostnames, standalone fc00::/18,
+	//    and mixed public/private + fake records remain blocked.
 	beforeDials := len(dialed)
 	for _, blocked := range []string{
 		"http://198.18.1.212/secret.png",
@@ -787,6 +795,13 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 		"http://router.home.arpa/secret.png",
 		"http://service.internal/secret.png",
 		"http://intranet/secret.png",
+		"http://nas.lan/secret.png",
+		"http://box.localdomain/secret.png",
+		"http://wiki.corp/secret.png",
+		"http://cam.home/secret.png",
+		"http://hr.intranet/secret.png",
+		"http://1.0.0.127.in-addr.arpa/secret.png",
+		"http://mixed-public.example.com/secret.png",
 		"http://mixed-loopback.example.com/secret.png",
 		"http://mixed-ula.example.com/secret.png",
 		"http://only-fc00.example.com/secret.png",
@@ -798,5 +813,16 @@ func TestResolveAllowsFakeIPForPublicDomainsOnly(t *testing.T) {
 	}
 	if len(dialed) != beforeDials {
 		t.Fatalf("blocked URLs still attempted dial: %v", dialed[beforeDials:])
+	}
+
+	// 5. Without an active local TUN Fake-IP route, even public domains resolving to 198.18.0.0/15 are blocked.
+	noRouteTransport := newTransportWithFakeIPRoute(lookup, baseDial, func(netip.Addr) bool { return false })
+	defer noRouteTransport.CloseIdleConnections()
+	beforeNoRoute := len(dialed)
+	if path, saved, err := ResolveWithTransport(context.Background(), Item{URL: "http://img.example.com/wallpaper.png"}, dir, noRouteTransport); err == nil || saved || path != "" || !strings.Contains(err.Error(), "本地或内网") {
+		t.Fatalf("Fake-IP without active local TUN route must be blocked: path=%q saved=%v err=%v", path, saved, err)
+	}
+	if len(dialed) != beforeNoRoute {
+		t.Fatalf("blocked Fake-IP without TUN route still attempted dial: %v", dialed[beforeNoRoute:])
 	}
 }

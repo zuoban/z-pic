@@ -59,6 +59,7 @@ type (
 	lookupNetIPFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 	dialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 	proxyLookupFunc func(req *http.Request) (*url.URL, error)
+	fakeIPRouteFunc func(addr netip.Addr) bool
 )
 
 type proxyDialContextKey struct{}
@@ -97,6 +98,14 @@ func newTransport(lookup lookupNetIPFunc, baseDial dialContextFunc) *http.Transp
 }
 
 func newTransportWithProxy(lookup lookupNetIPFunc, baseDial dialContextFunc, proxyLookup proxyLookupFunc) *http.Transport {
+	return newTransportWithOptions(lookup, baseDial, proxyLookup, hasLocalFakeIPv4Route)
+}
+
+func newTransportWithFakeIPRoute(lookup lookupNetIPFunc, baseDial dialContextFunc, hasFakeIPRoute fakeIPRouteFunc) *http.Transport {
+	return newTransportWithOptions(lookup, baseDial, http.ProxyFromEnvironment, hasFakeIPRoute)
+}
+
+func newTransportWithOptions(lookup lookupNetIPFunc, baseDial dialContextFunc, proxyLookup proxyLookupFunc, hasFakeIPRoute fakeIPRouteFunc) *http.Transport {
 	var proxyMu sync.RWMutex
 	var allowedProxyAddrs map[string]struct{}
 
@@ -127,7 +136,7 @@ func newTransportWithProxy(lookup lookupNetIPFunc, baseDial dialContextFunc, pro
 		if proxyURL == nil {
 			if !hasTarget {
 				if reqAddr := urlDialAddr(req.URL); reqAddr != "" && isAllowedProxy(reqAddr) {
-					if _, err := resolveAllowedIPs(req.Context(), lookup, host); err != nil {
+					if _, err := resolveAllowedIPs(req.Context(), lookup, host, hasFakeIPRoute); err != nil {
 						return nil, err
 					}
 				}
@@ -136,7 +145,7 @@ func newTransportWithProxy(lookup lookupNetIPFunc, baseDial dialContextFunc, pro
 		}
 		// DialContext connects to the proxy rather than the origin when a proxy is active,
 		// so resolve and validate the target host here for both first-hop and redirects.
-		if _, err := resolveAllowedIPs(req.Context(), lookup, host); err != nil {
+		if _, err := resolveAllowedIPs(req.Context(), lookup, host, hasFakeIPRoute); err != nil {
 			return nil, err
 		}
 		proxyAddr := urlDialAddr(proxyURL)
@@ -156,7 +165,7 @@ func newTransportWithProxy(lookup lookupNetIPFunc, baseDial dialContextFunc, pro
 	return &http.Transport{
 		Proxy:                  proxyFunc,
 		DisableCompression:     true,
-		DialContext:            newSafeDialContext(lookup, baseDial, isAllowedProxy),
+		DialContext:            newSafeDialContext(lookup, baseDial, isAllowedProxy, hasFakeIPRoute),
 		ForceAttemptHTTP2:      true,
 		MaxIdleConns:           16,
 		MaxIdleConnsPerHost:    2,
@@ -188,7 +197,7 @@ func urlDialAddr(u *url.URL) string {
 	return net.JoinHostPort(host, port)
 }
 
-func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string) ([]netip.Addr, error) {
+func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string, hasFakeIPRoute fakeIPRouteFunc) ([]netip.Addr, error) {
 	trimmed := strings.TrimSuffix(host, ".")
 	if isLocalHostName(trimmed) {
 		return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
@@ -216,12 +225,40 @@ func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string)
 			}
 		}
 	}
+	if allowFakeIP && hasFakeIPv4 {
+		// A legitimate TUN Fake-IP DNS interceptor only returns Fake-IPs for a
+		// public domain, never mixing public or other private/internal records.
+		// Never dial IPv6 ULA (fc00::/18) directly: keep only verified IPv4
+		// Fake-IPs routed to a local TUN interface so the proxy handles upstream
+		// IPv4/IPv6 resolution safely.
+		routeCheck := hasFakeIPRoute
+		if routeCheck == nil {
+			routeCheck = hasLocalFakeIPv4Route
+		}
+		fakeIPv4s := make([]netip.Addr, 0, len(ips))
+		for _, ip := range ips {
+			switch {
+			case isFakeIPv4(ip):
+				unmapped := ip.Unmap()
+				if !routeCheck(unmapped) {
+					return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+				}
+				fakeIPv4s = append(fakeIPv4s, unmapped)
+			case isFakeIPv6(ip):
+				// Ignore paired dual-stack Fake-IPv6 answers rather than dialing
+				// IPv6 ULA addresses directly.
+				continue
+			default:
+				return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+			}
+		}
+		if len(fakeIPv4s) == 0 {
+			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
+		}
+		return fakeIPv4s, nil
+	}
 	allowed := make([]netip.Addr, 0, len(ips))
 	for _, ip := range ips {
-		if allowFakeIP && (isFakeIPv4(ip) || (hasFakeIPv4 && isFakeIPv6(ip))) {
-			allowed = append(allowed, ip.Unmap())
-			continue
-		}
 		if isDisallowedIP(ip) {
 			return nil, fmt.Errorf("拒绝连接本地或内网地址：%s", host)
 		}
@@ -230,7 +267,7 @@ func resolveAllowedIPs(ctx context.Context, lookup lookupNetIPFunc, host string)
 	return allowed, nil
 }
 
-func newSafeDialContext(lookup lookupNetIPFunc, baseDial dialContextFunc, isAllowedProxy func(string) bool) dialContextFunc {
+func newSafeDialContext(lookup lookupNetIPFunc, baseDial dialContextFunc, isAllowedProxy func(string) bool, hasFakeIPRoute fakeIPRouteFunc) dialContextFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if target, hasTarget := ctx.Value(proxyDialContextKey{}).(*proxyDialTarget); hasTarget {
 			if target.matches(strings.ToLower(addr)) {
@@ -243,7 +280,7 @@ func newSafeDialContext(lookup lookupNetIPFunc, baseDial dialContextFunc, isAllo
 		if err != nil {
 			return nil, err
 		}
-		allowed, err := resolveAllowedIPs(ctx, lookup, host)
+		allowed, err := resolveAllowedIPs(ctx, lookup, host, hasFakeIPRoute)
 		if err != nil {
 			return nil, err
 		}
@@ -670,14 +707,96 @@ func isFakeIPv6(addr netip.Addr) bool {
 	return unmapped.Is6() && fakeIPv6Prefix.Contains(unmapped)
 }
 
+func hasLocalFakeIPv4Route(addr netip.Addr) bool {
+	if !isFakeIPv4(addr) {
+		return false
+	}
+	unmapped := addr.Unmap()
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: unmapped.AsSlice(), Port: 80})
+	if err != nil {
+		return false
+	}
+	localUDP, ok := conn.LocalAddr().(*net.UDPAddr)
+	_ = conn.Close()
+	if !ok || localUDP == nil {
+		return false
+	}
+	localIP, ok := netip.AddrFromSlice(localUDP.IP)
+	if !ok {
+		return false
+	}
+	localIP = localIP.Unmap()
+	if !localIP.Is4() {
+		return false
+	}
+	if isFakeIPv4(localIP) {
+		return true
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, ifAddr := range addrs {
+			ipNet, ok := ifAddr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ifIP, ok := netip.AddrFromSlice(ipNet.IP)
+			if !ok || ifIP.Unmap() != localIP {
+				continue
+			}
+			return isFakeIPTUNInterface(iface)
+		}
+	}
+	return false
+}
+
+func isFakeIPTUNInterface(iface net.Interface) bool {
+	if iface.Flags&net.FlagPointToPoint != 0 {
+		return true
+	}
+	name := strings.ToLower(iface.Name)
+	for _, prefix := range []string{"utun", "tun", "wintun", "mihomo", "clash", "sing-box", "surge", "stash"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+var fakeIPDisallowedHostSuffixes = []string{
+	".local",
+	".localhost",
+	".localdomain",
+	".arpa",
+	".lan",
+	".home",
+	".corp",
+	".internal",
+	".intranet",
+	".private",
+	".invalid",
+}
+
 func isFakeIPCandidateHost(host string) bool {
 	lower := strings.ToLower(strings.TrimSuffix(host, "."))
 	if lower == "" || isLocalHostName(lower) || !strings.Contains(lower, ".") {
 		return false
 	}
-	return !strings.HasSuffix(lower, ".local") &&
-		!strings.HasSuffix(lower, ".home.arpa") &&
-		!strings.HasSuffix(lower, ".internal")
+	for _, suffix := range fakeIPDisallowedHostSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return false
+		}
+	}
+	return true
 }
 
 func isLocalHostName(host string) bool {

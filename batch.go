@@ -819,9 +819,6 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 	var tasks []batchTask
 	usedPaths := make(map[string]bool)
 	for i, item := range s.batch.items {
-		if item.savedPath != "" {
-			usedPaths[item.savedPath] = true
-		}
 		if match(i, item) {
 			tasks = append(tasks, batchTask{
 				index:        i,
@@ -832,6 +829,10 @@ func (s *application) collectBatchTasksWhere(match func(i int, item batchItem) b
 				lossless:     s.lossless,
 				output:       s.output,
 			})
+			continue
+		}
+		if item.savedPath != "" {
+			usedPaths[item.savedPath] = true
 		}
 	}
 	return tasks, usedPaths

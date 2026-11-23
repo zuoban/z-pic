@@ -327,3 +327,67 @@ func TestAVIFCorruptPayloadRejectedByPixelDecoders(t *testing.T) {
 		t.Error("DecodePreviewImage accepted corrupt image data")
 	}
 }
+
+func TestAVIFWithEXIFOrientationNotDoubleRotated(t *testing.T) {
+	requireAVIF(t)
+	// Encode an asymmetric 96x64 image with EXIF metadata, then patch the raw
+	// Exif item's TIFF Orientation tag from 1 to 6. Per AVIF/MIAF, avifdec
+	// already applies container irot/imir transforms so its decoded PNG pixels
+	// are upright while still carrying the raw Exif Orientation tag in eXIf.
+	src := samplePhotoImage(96, 64)
+	exifOrient1 := exifTIFF(binary.LittleEndian, 1)
+	exifOrient6 := exifTIFF(binary.LittleEndian, 6)
+	basePNG := avifTestPNG(t, src, nil, 1)
+	avifData, err := aviftools.EncodePNG(t.Context(), basePNG, aviftools.EncodeOptions{
+		Quality:  90,
+		Lossless: true,
+		Metadata: aviftools.MetadataAll,
+		Threads:  1,
+	})
+	if err != nil {
+		t.Fatalf("aviftools.EncodePNG failed: %v", err)
+	}
+	idx := bytes.Index(avifData, exifOrient1)
+	if idx < 0 {
+		t.Fatal("encoded AVIF did not embed expected raw EXIF TIFF bytes")
+	}
+	patchedAVIF := bytes.Clone(avifData)
+	copy(patchedAVIF[idx:idx+len(exifOrient6)], exifOrient6)
+	if !bytes.Contains(patchedAVIF, exifOrient6) {
+		t.Fatal("patched AVIF missing EXIF Orientation 6 payload")
+	}
+
+	wantSize := image.Pt(96, 64)
+	preview, err := DecodePreviewImage(t.Context(), patchedAVIF)
+	if err != nil {
+		t.Fatalf("DecodePreviewImage failed: %v", err)
+	}
+	if preview.Bounds().Size() != wantSize {
+		t.Fatalf("expected DecodePreviewImage size %v, got %v", wantSize, preview.Bounds().Size())
+	}
+
+	// Compressing the AVIF must NOT apply EXIF Orientation 6 a second time.
+	for _, outFmt := range []OutputFormat{OutputFormatJPEG, OutputFormatAVIF} {
+		t.Run(string(outFmt), func(t *testing.T) {
+			res, resPreview, err := BytesWithPreview(t.Context(), patchedAVIF, "oriented.avif", Options{
+				Quality:      60,
+				OutputFormat: outFmt,
+				Threads:      1,
+			})
+			if err != nil {
+				t.Fatalf("BytesWithPreview(%s) failed: %v", outFmt, err)
+			}
+			if image.Pt(res.Width, res.Height) != wantSize {
+				t.Fatalf("AVIF -> %s double-rotated dimensions: got %dx%d, want %dx%d",
+					outFmt, res.Width, res.Height, wantSize.X, wantSize.Y)
+			}
+			if resPreview == nil {
+				t.Fatalf("AVIF -> %s expected non-nil preview (unchanged=%v)", outFmt, res.Unchanged)
+			}
+			if resPreview.Bounds().Size() != wantSize {
+				t.Fatalf("AVIF -> %s preview dimensions mismatch: got %v, want %v",
+					outFmt, resPreview.Bounds().Size(), wantSize)
+			}
+		})
+	}
+}

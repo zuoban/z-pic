@@ -922,3 +922,41 @@ func TestFolderWatchDirectoryQuickOpenButton(t *testing.T) {
 		t.Fatalf("expected watchMessage to clear after successful openDir, got %q", app.editor.watchMessage)
 	}
 }
+
+func TestSettingsSaveFiltersBlankExtraWatchRules(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	inDir := t.TempDir()
+	outDir := t.TempDir()
+
+	app := newApplication()
+	app.settingsFile = settingsPath
+	app.setSettingsOpen(true)
+	app.editor.watch = folderWatchSettings{
+		InputDir:  inDir,
+		OutputDir: outDir,
+		Preset:    app.scheme,
+	}
+	// Include an empty extra rule draft alongside a valid rule; saving must not persist blank entries.
+	app.editor.watchRules = []folderWatchRule{
+		{},
+	}
+	app.saveSettingsEdits()
+	if app.editor != nil && app.editor.message != "" {
+		t.Fatalf("saveSettingsEdits failed unexpectedly: %s", app.editor.message)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read saved settings: %v", err)
+	}
+	if strings.Contains(string(raw), `"watch_rules"`) {
+		t.Fatalf("blank extra watch rules must not be persisted to settings.json, got:\n%s", string(raw))
+	}
+	reloaded, err := loadFullSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("reload saved settings: %v", err)
+	}
+	if len(reloaded.watchRules) != 0 {
+		t.Fatalf("expected 0 persisted extra watch rules, got %+v", reloaded.watchRules)
+	}
+}

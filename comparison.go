@@ -749,6 +749,13 @@ func (s *application) previewCanvas(c *ui.Context) {
 				})
 			}
 			p.Image(bitmap, imageBounds, ui.FillBox)
+			if diffMode && s.comparison.diffBitmap == nil && s.comparison.diffLoading {
+				scrim := ui.RGBA(255, 255, 255, 0.38)
+				if t.Dark {
+					scrim = ui.RGBA(12, 16, 22, 0.48)
+				}
+				p.Fill(imageBounds, scrim, 0)
+			}
 			p.Stroke(imageBounds, glassBorder(c), 0, 1)
 			return
 		}
@@ -867,6 +874,13 @@ func (s *application) previewCanvas(c *ui.Context) {
 						if retryBtn.Hovered() {
 							retryBtn.Background(t.Danger.Alpha(0.12))
 						}
+					})
+				case s.comparison.diffReady && s.comparison.diffLoading && !s.comparison.diffHasHeatmap:
+					ui.Row(c).AlignItems(ui.Center).Gap(6).MinWidth(0).Children(func() {
+						styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5).Shrink(0)).Children(func() {
+							ui.Text(c, "正在生成热力图…").FontSize(11).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+						})
+						renderQualityBadge(false)
 					})
 				case s.comparison.diffReady:
 					renderQualityBadge(false)

@@ -1045,3 +1045,36 @@ func TestCLICompressSkipOverwriteSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestCLIPresetsExportDashWritesStdout(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := saveFullSettings(settingsPath, appSettings{
+		presets:  defaultPresets(),
+		selected: defaultPresets()[0].name,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+
+	var stdout, stderr bytes.Buffer
+	code := runCLIContext(t.Context(), []string{"presets", "export", "--settings", settingsPath, "-o", "-"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("presets export -o - failed: code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "-")); !os.IsNotExist(err) {
+		t.Fatalf("presets export -o - must not create literal '-' file, stat err=%v", err)
+	}
+	presets, err := unmarshalPresetBundle(stdout.Bytes())
+	if err != nil || len(presets) == 0 {
+		t.Fatalf("expected valid preset bundle on stdout, got len=%d err=%v out=%q", len(presets), err, stdout.String())
+	}
+}

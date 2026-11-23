@@ -246,7 +246,9 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		if err != nil {
 			return nil, fmt.Errorf("%s 解码输出无效：%w", strings.ToUpper(format), err)
 		}
-		sourceOrient = pngOrientation(pixelSource)
+		if format == "heic" {
+			sourceOrient = pngOrientation(pixelSource)
+		}
 	} else {
 		config, format, err = image.DecodeConfig(contextio.NewReader(ctx, bytes.NewReader(data)))
 		if err != nil {
@@ -839,7 +841,7 @@ func pngTargetSizeTiersFor(options PNGOptions) []PNGOptions {
 	}
 	tiers := make([]PNGOptions, 0, len(pngTargetSizeTiers))
 	for _, tier := range pngTargetSizeTiers {
-		if tier == baseline || (tier.MaxQuality > baseline.MaxQuality && tier.Colors > baseline.Colors) {
+		if tier == baseline || tier.MaxQuality > baseline.MaxQuality || tier.Colors > baseline.Colors {
 			continue
 		}
 		tiers = append(tiers, tier)

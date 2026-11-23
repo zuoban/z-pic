@@ -508,3 +508,35 @@ func TestCompressPNGTargetSizeRecoversFromOutputLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestPNGTargetSizeTiersRespectQualityAndColorBounds(t *testing.T) {
+	// Baseline below the lowest predefined tier (4 colors) must yield no tiers,
+	// so lowestQualityOptions does not probe at a higher color count.
+	strictLow := PNGOptions{MinQuality: 0, MaxQuality: 1, Colors: 2, Speed: 6}
+	if tiers := pngTargetSizeTiersFor(strictLow); len(tiers) != 0 {
+		t.Fatalf("expected no tiers for %+v, got %+v", strictLow, tiers)
+	}
+	if _, hasLower := lowestQualityOptions(Options{Quality: 1, PNG: strictLow}, "png"); hasLower {
+		t.Fatal("lowestQualityOptions must report no lower tier when baseline Colors=2")
+	}
+
+	// Low MaxQuality with high Colors must never include tiers exceeding MaxQuality.
+	lowQuality := PNGOptions{MinQuality: 0, MaxQuality: 10, Colors: 256, Speed: 3}
+	for _, tier := range pngTargetSizeTiersFor(lowQuality) {
+		if tier.MaxQuality > lowQuality.MaxQuality || tier.Colors > lowQuality.Colors {
+			t.Fatalf("tier %+v exceeds baseline %+v", tier, lowQuality)
+		}
+	}
+
+	// High MaxQuality with low Colors must never include tiers exceeding Colors.
+	lowColors := PNGOptions{MinQuality: 0, MaxQuality: 100, Colors: 8, Speed: 3}
+	tiers := pngTargetSizeTiersFor(lowColors)
+	if len(tiers) == 0 {
+		t.Fatalf("expected at least one lower tier for %+v", lowColors)
+	}
+	for _, tier := range tiers {
+		if tier.MaxQuality > lowColors.MaxQuality || tier.Colors > lowColors.Colors {
+			t.Fatalf("tier %+v exceeds baseline %+v", tier, lowColors)
+		}
+	}
+}

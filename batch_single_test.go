@@ -219,3 +219,31 @@ func TestBatchSinglePendingActionGuardsAndLayout(t *testing.T) {
 		})
 	}
 }
+
+func TestBatchSingleRecompressDoesNotReserveOwnSavedPath(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.jpg")
+	bPath := filepath.Join(dir, "b.jpg")
+	writeTestJPEG(t, aPath, 100, 80, 95)
+	writeTestJPEG(t, bPath, 100, 80, 95)
+
+	aOut := filepath.Join(dir, "a-zpic.jpg")
+	bOut := filepath.Join(dir, "b-zpic.jpg")
+
+	app := newApplication()
+	app.batch = newBatchState([]batchItem{
+		{path: aPath, absPath: aPath, relPath: "a.jpg", format: "jpeg", status: batchDone, savedPath: aOut},
+		{path: bPath, absPath: bPath, relPath: "b.jpg", format: "jpeg", status: batchDone, savedPath: bOut},
+	})
+
+	tasks, usedPaths := app.prepareBatchTasks(batchRunSingle, 0)
+	if len(tasks) != 1 || tasks[0].index != 0 {
+		t.Fatalf("expected single task for index 0, got %+v", tasks)
+	}
+	if usedPaths[aOut] {
+		t.Fatalf("recompressing item 0 must not reserve its own old savedPath %q in usedPaths", aOut)
+	}
+	if !usedPaths[bOut] {
+		t.Fatalf("other untouched item savedPath %q must remain reserved in usedPaths", bOut)
+	}
+}

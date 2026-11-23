@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -361,4 +362,86 @@ func TestFolderWatchApplyProcessResultSkipsStaleVersion(t *testing.T) {
 			t.Fatalf("expected V2 outcome to be reported, got %+v", reported)
 		}
 	})
+}
+
+func TestFolderWatchNonRecursiveSkipsHiddenSubdirectories(t *testing.T) {
+	inputDir := t.TempDir()
+	outputDir := t.TempDir()
+	// Hidden subdirectories like .git / .Trash must not fail non-recursive scans.
+	if err := os.Mkdir(filepath.Join(inputDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(inputDir, ".Trash"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestJPEG(t, filepath.Join(inputDir, ".git", "hidden.jpg"), 80, 60, 90)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan folderWatchReady, 1)
+	outcomes := make(chan folderWatchOutcome, 4)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- runFolderWatch(ctx, folderWatchRequest{
+			InputDir:    inputDir,
+			OutputDir:   outputDir,
+			Options:     compress.Options{Quality: 60},
+			Recursive:   false,
+			Concurrency: 1,
+		}, folderWatchNotifications{
+			Ready: func(info folderWatchReady) { ready <- info },
+			Image: func(outcome folderWatchOutcome) { outcomes <- outcome },
+		})
+	}()
+
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("non-recursive folder watch exited before ready (hidden subdir bug): %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for non-recursive folder watch ready")
+	}
+
+	writeTestJPEG(t, filepath.Join(inputDir, "fresh.jpg"), 100, 80, 95)
+	select {
+	case outcome := <-outcomes:
+		if outcome.Err != nil {
+			t.Fatalf("unexpected compression error: %v", outcome.Err)
+		}
+		if filepath.Base(outcome.Output) != "fresh.jpg" {
+			t.Fatalf("unexpected output path: %q", outcome.Output)
+		}
+	case err := <-done:
+		t.Fatalf("folder watch stopped unexpectedly: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for fresh.jpg outcome")
+	}
+
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected shutdown error: %v", err)
+	}
+}
+
+func TestFolderWatchRecursiveRejectsInputInsideOutput(t *testing.T) {
+	parent := t.TempDir()
+	inbox := filepath.Join(parent, "inbox")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runFolderWatch(context.Background(), folderWatchRequest{
+		InputDir:  inbox,
+		OutputDir: parent,
+		Options:   compress.Options{Quality: 75},
+		Recursive: true,
+	}, folderWatchNotifications{})
+	if err == nil || !strings.Contains(err.Error(), "输入目录不能位于输出目录之内") {
+		t.Fatalf("recursive watch with input inside output must be rejected, got: %v", err)
+	}
+	var pathErr folderWatchPathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("expected folderWatchPathError, got %T: %v", err, err)
+	}
 }

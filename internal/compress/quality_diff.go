@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/draw"
 	"math"
+	"reflect"
 	"runtime"
 	"sync"
 
@@ -173,12 +174,24 @@ func analyzeVisualDiff(ctx context.Context, original, compressed image.Image, bu
 	var origNRGBA *image.NRGBA
 	if resized {
 		origNRGBA = scaleToAlignedNRGBA(original, w, h)
-	} else if original == compressed {
+	} else if sameImagePointer(original, compressed) {
 		origNRGBA = compNRGBA
 	} else {
 		origNRGBA = toNRGBA(original)
 	}
 	return analyzeVisualDiffNRGBA(ctx, origNRGBA, compNRGBA, resized, buildHeatmap)
+}
+
+func sameImagePointer(a, b image.Image) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	return va.Kind() == reflect.Pointer && va.Type() == vb.Type() && va.Pointer() == vb.Pointer()
+}
+
+func premultiplyChannel(v, a uint8) uint8 {
+	return uint8((uint16(v)*uint16(a) + 127) / 255)
 }
 
 const (
@@ -232,10 +245,14 @@ func analyzeVisualDiffStripe(ctx context.Context, origNRGBA, compNRGBA, heatmap 
 			r2, g2, b2, a2 := compNRGBA.Pix[ci], compNRGBA.Pix[ci+1], compNRGBA.Pix[ci+2], compNRGBA.Pix[ci+3]
 
 			var dr, dg, db, da uint8
-			if a1 != 0 || a2 != 0 {
+			if a1 == 255 && a2 == 255 {
 				dr = absDiffUint8(r1, r2)
 				dg = absDiffUint8(g1, g2)
 				db = absDiffUint8(b1, b2)
+			} else if a1 != 0 || a2 != 0 {
+				dr = absDiffUint8(premultiplyChannel(r1, a1), premultiplyChannel(r2, a2))
+				dg = absDiffUint8(premultiplyChannel(g1, a1), premultiplyChannel(g2, a2))
+				db = absDiffUint8(premultiplyChannel(b1, a1), premultiplyChannel(b2, a2))
 				da = absDiffUint8(a1, a2)
 			}
 
@@ -384,14 +401,11 @@ const (
 	diffHeatmapBaseMax = 62
 )
 
-var (
-	diffHeatmapLUT      [256][3]uint8
-	diffHeatmapBlendLUT [diffHeatmapBaseMax - diffHeatmapBaseMin + 1][256][3]uint8
-)
+var diffHeatmapBlendLUT [diffHeatmapBaseMax - diffHeatmapBaseMin + 1][256][3]uint8
 
 func init() {
 	const mix = 0.86
-	for diff := 1; diff < len(diffHeatmapLUT); diff++ {
+	for diff := 1; diff < 256; diff++ {
 		level := math.Pow(float64(diff)/255.0, 0.52)
 		if level < 0.08 {
 			level = 0.08
@@ -400,7 +414,6 @@ func init() {
 			level = 1
 		}
 		hr, hg, hb := heatmapColor(level)
-		diffHeatmapLUT[diff] = [3]uint8{hr, hg, hb}
 		// Precompute the exact blended RGB for every possible muted base value
 		// [18..62] so per-pixel rendering avoids float/math.Round work while
 		// preserving bit-exact output.
@@ -421,10 +434,13 @@ func init() {
 // subtle compression artifacts stand out clearly.
 func diffHeatmapPixel(r1, g1, b1, a1, a2, maxDiff uint8) (uint8, uint8, uint8) {
 	var base uint8
-	if a1 == 0 && a2 == 0 {
+	if a1 == 0 {
 		base = 22
 	} else {
 		luma := (299*int(r1) + 587*int(g1) + 114*int(b1)) / 1000
+		if a1 < 255 {
+			luma = (luma*int(a1) + 127) / 255
+		}
 		base = uint8(diffHeatmapBaseMin + (luma*44)/255)
 	}
 	if maxDiff == 0 {

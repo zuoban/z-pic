@@ -1122,6 +1122,10 @@ func TestComparisonProactiveQualityMetricsInCompareMode(t *testing.T) {
 		t.Fatalf("upgrading to diff mode must preserve metrics badge without flicker: ready=%v texts=%v",
 			s.comparison.diffReady, tester.Texts())
 	}
+	if !tester.HasText("正在生成热力图…") {
+		t.Fatalf("upgrading to diff mode must show heatmap loading indicator while diffBitmap is pending: texts=%v",
+			tester.Texts())
+	}
 	awaitComparisonDiff(t, updates, func() bool {
 		return s.comparison.diffReady && s.comparison.diffHasHeatmap
 	})
@@ -1129,6 +1133,9 @@ func TestComparisonProactiveQualityMetricsInCompareMode(t *testing.T) {
 	if s.comparison.diffBitmap == nil || !s.comparison.diffHasHeatmap {
 		t.Fatalf("diff mode must populate diffBitmap after upgrade: bitmap=%v hasHeatmap=%v",
 			s.comparison.diffBitmap != nil, s.comparison.diffHasHeatmap)
+	}
+	if tester.HasText("正在生成热力图…") {
+		t.Fatalf("heatmap loading indicator must clear once diffBitmap is ready: texts=%v", tester.Texts())
 	}
 
 	// Switching away and back to diff mode reuses the cached heatmap without starting another job.

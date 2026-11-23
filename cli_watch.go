@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"zpic/internal/compress"
 )
 
 func printWatchCLIHelp(w io.Writer) {
@@ -102,12 +104,16 @@ func runCLIWatch(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	if ctx.Err() != nil {
 		return 0
 	}
+	budget := newImageMemoryBudget(imageMemoryLimit)
 	request := folderWatchRequest{
 		InputDir:    flags.Arg(0),
 		OutputDir:   *outputDir,
 		Options:     options,
 		Recursive:   recursive,
 		Concurrency: jobs,
+		AcquireMemory: func(ctx context.Context, info compress.ImageInfo) (func(), error) {
+			return budget.acquire(ctx, imageMemoryEstimate(info, false))
+		},
 	}
 	emitJSON := func(event cliWatchEvent) {
 		data, err := json.Marshal(event)

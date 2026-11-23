@@ -947,7 +947,7 @@ func (s *application) saveSettingsSnapshotFull(presets []compressionPreset, sele
 		keepInMenuBar:  keepInMenuBar,
 		downloadDir:    normalizeDownloadDir(downloadDir),
 		watch:          watch,
-		watchRules:     watchRules,
+		watchRules:     persistedFolderWatchRules(watchRules),
 	})
 }
 

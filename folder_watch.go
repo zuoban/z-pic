@@ -80,7 +80,7 @@ func runFolderWatch(ctx context.Context, request folderWatchRequest, notify fold
 		return folderWatchPathError{fmt.Errorf("无法打开输入目录：%w", err)}
 	}
 	defer input.Close()
-	resolvedOutput, err := resolveWatchOutputDir(ctx, request.OutputDir, input.identity)
+	resolvedOutput, err := resolveWatchOutputDir(ctx, request.OutputDir, input.Name(), input.identity, request.Recursive)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -97,6 +97,9 @@ func runFolderWatch(ctx context.Context, request folderWatchRequest, notify fold
 	defer output.Close()
 	if os.SameFile(input.identity, output.identity) {
 		return folderWatchPathError{errors.New("输出目录必须位于输入目录之外。")}
+	}
+	if request.Recursive && isWatchDirAncestor(output.identity, input.Name()) {
+		return folderWatchPathError{errors.New("开启包含子目录时，输入目录不能位于输出目录之内。")}
 	}
 
 	concurrency := request.Concurrency
@@ -159,7 +162,7 @@ func (dir watchDirectory) checkPath() error {
 	return nil
 }
 
-func resolveWatchOutputDir(ctx context.Context, dirPath string, inputInfo os.FileInfo) (string, error) {
+func resolveWatchOutputDir(ctx context.Context, dirPath, inputDir string, inputInfo os.FileInfo, recursive bool) (string, error) {
 	resolved, err := resolveOutputDirectory(ctx, dirPath)
 	if err != nil {
 		return "", err
@@ -175,9 +178,42 @@ func resolveWatchOutputDir(ctx context.Context, dirPath string, inputInfo os.Fil
 			return "", errors.New("输出目录必须位于输入目录之外")
 		}
 		if filepath.Dir(dir) == dir {
-			return resolved, nil
+			break
 		}
 	}
+	if recursive {
+		if outInfo, err := os.Stat(resolved); err == nil && isWatchDirAncestor(outInfo, inputDir) {
+			return "", errors.New("开启包含子目录时，输入目录不能位于输出目录之内")
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return resolved, nil
+}
+
+func isWatchDirAncestor(candidate os.FileInfo, targetPath string) bool {
+	if candidate == nil || targetPath == "" {
+		return false
+	}
+	checkPath := func(path string) bool {
+		for dir := path; ; {
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				return false
+			}
+			dir = parent
+			if info, err := os.Stat(dir); err == nil && os.SameFile(candidate, info) {
+				return true
+			}
+		}
+	}
+	if checkPath(targetPath) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(targetPath); err == nil && resolved != targetPath {
+		return checkPath(resolved)
+	}
+	return false
 }
 
 type folderWatch struct {
@@ -419,7 +455,10 @@ func (watch *folderWatch) scan(ctx context.Context, baseline bool) ([]string, ti
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
 			if d.IsDir() && relPath != "." {
-				return fs.SkipDir
+				if watch.recursive {
+					return fs.SkipDir
+				}
+				return nil
 			}
 			return nil
 		}
@@ -503,7 +542,7 @@ func (watch *folderWatch) scan(ctx context.Context, baseline bool) ([]string, ti
 			return nil, 0, err
 		}
 		for _, entry := range entries {
-			if err := inspectEntry(entry.Name(), entry); err != nil {
+			if err := inspectEntry(entry.Name(), entry); err != nil && !errors.Is(err, fs.SkipDir) {
 				return nil, 0, err
 			}
 		}

@@ -187,7 +187,7 @@ func printPresetsCLIHelp(w io.Writer) {
   --json              以 JSON 格式输出
 
 导出选项:
-  -o, --output <path> 导出到指定 JSON 文件（不指定则输出到标准输出）
+  -o, --output <path> 导出到指定 JSON 文件（不指定或使用 - 则输出到标准输出）
 
 导入选项:
   --overwrite         导入同名预设时覆盖已有预设（默认自动重命名保留已有预设）
@@ -419,7 +419,7 @@ func runCLIPresetsExport(args []string, stdout, stderr io.Writer) int {
 			selected = append(selected, preset)
 		}
 	}
-	if outputPath == "" {
+	if outputPath == "" || outputPath == "-" {
 		data, err := marshalPresetBundle(selected)
 		if err != nil {
 			fmt.Fprintf(stderr, "导出预设失败：%v\n", err)
