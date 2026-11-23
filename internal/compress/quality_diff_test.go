@@ -6,10 +6,12 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"image/png"
 	"math"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +97,42 @@ func TestAnalyzeVisualDiffBytesQualityOrdering(t *testing.T) {
 	}
 	if !sameMetrics.Identical || !math.IsInf(sameMetrics.PSNR, 1) || sameMetrics.SSIM != 1 {
 		t.Fatalf("unexpected identical metrics: %+v", sameMetrics)
+	}
+}
+
+func TestAnalyzeVisualDiffBytesDecodeErrorPrecedence(t *testing.T) {
+	// Use a sizable valid PNG so the valid side takes longer to decode than the
+	// invalid bytes, exercising cancelDecode() racing against the valid decode.
+	large := syntheticGradientImage(1024, 768)
+	var validBuf bytes.Buffer
+	if err := png.Encode(&validBuf, large); err != nil {
+		t.Fatal(err)
+	}
+	validPNG := validBuf.Bytes()
+	invalidData := []byte("not-an-image")
+
+	for range 5 {
+		_, _, err := AnalyzeVisualDiffBytes(context.Background(), invalidData, validPNG)
+		if err == nil {
+			t.Fatal("expected error for invalid originalData")
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("invalid originalData should not report context.Canceled: %v", err)
+		}
+		if !strings.Contains(err.Error(), "原图") {
+			t.Fatalf("expected original-image decode error, got: %v", err)
+		}
+
+		_, _, err = AnalyzeVisualDiffBytes(context.Background(), validPNG, invalidData)
+		if err == nil {
+			t.Fatal("expected error for invalid compressedData")
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("invalid compressedData should not report context.Canceled: %v", err)
+		}
+		if !strings.Contains(err.Error(), "压缩结果") {
+			t.Fatalf("expected compressed-image decode error, got: %v", err)
+		}
 	}
 }
 
@@ -428,6 +466,73 @@ func TestAnalyzeVisualDiffParallelMatchesSerial(t *testing.T) {
 	}
 }
 
+func TestToNRGBAMatchesDraw(t *testing.T) {
+	checkExact := func(t *testing.T, name string, src image.Image) {
+		t.Helper()
+		b := src.Bounds()
+		want := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+		draw.Draw(want, want.Bounds(), src, b.Min, draw.Src)
+		got := toNRGBA(src)
+		if got.Bounds() != want.Bounds() {
+			t.Fatalf("%s bounds mismatch: got %v want %v", name, got.Bounds(), want.Bounds())
+		}
+		if !bytes.Equal(got.Pix, want.Pix) {
+			t.Fatalf("%s pixels diverged from draw.Draw", name)
+		}
+	}
+
+	// Non-zero-origin NRGBA
+	fullNRGBA := syntheticGradientImage(24, 20)
+	checkExact(t, "nrgba-subimage", fullNRGBA.SubImage(image.Rect(3, 5, 19, 17)))
+
+	// RGBA covering opaque, transparent, and semi-transparent alpha values
+	rgba := image.NewRGBA(image.Rect(5, 7, 37, 23))
+	for y := rgba.Rect.Min.Y; y < rgba.Rect.Max.Y; y++ {
+		for x := rgba.Rect.Min.X; x < rgba.Rect.Max.X; x++ {
+			a := uint8(((x*13 + y*29) * 7) % 256)
+			if (x+y)%7 == 0 {
+				a = 0
+			} else if (x+y)%5 == 0 {
+				a = 255
+			}
+			r := uint8((int(x*17%256) * int(a)) / 255)
+			g := uint8((int(y*23%256) * int(a)) / 255)
+			b := uint8((int((x+y)*11%256) * int(a)) / 255)
+			rgba.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: a})
+		}
+	}
+	checkExact(t, "rgba-offset", rgba)
+
+	// Gray
+	gray := image.NewGray(image.Rect(2, 3, 21, 18))
+	for i := range gray.Pix {
+		gray.Pix[i] = uint8((i * 37) % 256)
+	}
+	checkExact(t, "gray-offset", gray)
+
+	// YCbCr across all subsampling ratios including odd non-zero Rect.Min
+	ratios := []image.YCbCrSubsampleRatio{
+		image.YCbCrSubsampleRatio444,
+		image.YCbCrSubsampleRatio422,
+		image.YCbCrSubsampleRatio420,
+		image.YCbCrSubsampleRatio440,
+		image.YCbCrSubsampleRatio411,
+		image.YCbCrSubsampleRatio410,
+	}
+	for _, ratio := range ratios {
+		ycbcr := image.NewYCbCr(image.Rect(3, 5, 36, 28), ratio)
+		for i := range ycbcr.Y {
+			ycbcr.Y[i] = uint8((i*17 + 19) % 256)
+		}
+		for i := range ycbcr.Cb {
+			ycbcr.Cb[i] = uint8((i*23 + 41) % 256)
+			ycbcr.Cr[i] = uint8((i*29 + 73) % 256)
+		}
+		checkExact(t, "ycbcr-"+ratio.String(), ycbcr)
+		checkExact(t, "ycbcr-sub-"+ratio.String(), ycbcr.SubImage(image.Rect(6, 8, 29, 24)))
+	}
+}
+
 func BenchmarkAnalyzeVisualDiff(b *testing.B) {
 	orig := syntheticGradientImage(1024, 768)
 	comp := image.NewNRGBA(orig.Bounds())
@@ -435,6 +540,30 @@ func BenchmarkAnalyzeVisualDiff(b *testing.B) {
 	for idx := 0; idx < len(comp.Pix); idx += 4 {
 		comp.Pix[idx] ^= 0x07
 		comp.Pix[idx+1] ^= 0x03
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, _, err := AnalyzeVisualDiff(ctx, orig, comp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkAnalyzeVisualDiffYCbCr(b *testing.B) {
+	orig := image.NewYCbCr(image.Rect(0, 0, 1024, 768), image.YCbCrSubsampleRatio420)
+	comp := image.NewYCbCr(image.Rect(0, 0, 1024, 768), image.YCbCrSubsampleRatio420)
+	for i := range orig.Y {
+		v := uint8((i*13 + 7) % 256)
+		orig.Y[i] = v
+		comp.Y[i] = v ^ 0x05
+	}
+	for i := range orig.Cb {
+		orig.Cb[i] = uint8((i*19 + 31) % 256)
+		orig.Cr[i] = uint8((i*29 + 53) % 256)
+		comp.Cb[i] = orig.Cb[i] ^ 0x03
+		comp.Cr[i] = orig.Cr[i] ^ 0x02
 	}
 	ctx := context.Background()
 	b.ReportAllocs()

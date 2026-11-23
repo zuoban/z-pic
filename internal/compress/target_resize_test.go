@@ -577,3 +577,59 @@ func targetResizeJPEGFixture(t *testing.T) []byte {
 	}
 	return data.Bytes()
 }
+
+func TestCompressionSourcePreparedDimCache(t *testing.T) {
+	imgA := image.NewRGBA(image.Rect(0, 0, 200, 120))
+	imgB := image.NewRGBA(image.Rect(0, 0, 240, 144))
+	src := compressionSource{orientation: 1, cachePrepared: true}
+
+	src.storeResizedImage(200, 120, imgA)
+	// Mismatched dimensions must not pin.
+	src.pinBestPrepared(199, 120)
+	src.storeResizedImage(240, 144, imgB)
+	if got := src.cachedResizedImage(200, 120); got != nil {
+		t.Fatalf("expected cache miss when pinBestPrepared dimensions mismatched, got %v", got)
+	}
+
+	src.storeResizedImage(200, 120, imgA)
+	src.pinBestPrepared(200, 120)
+	src.storeResizedImage(240, 144, imgB)
+
+	if got := src.cachedResizedImage(200, 120); got != imgA {
+		t.Fatalf("expected pinned bestPrepared image, got %v", got)
+	}
+	if got := src.cachedResizedImage(240, 144); got != imgB {
+		t.Fatalf("expected lastPrepared image, got %v", got)
+	}
+	// Changing orientation invalidates lookup.
+	src.orientation = 6
+	if got := src.cachedResizedImage(200, 120); got != nil {
+		t.Fatalf("expected cache miss on orientation mismatch, got %v", got)
+	}
+	src.orientation = 1
+
+	pngBytes := []byte("fake-png-bytes")
+	iccBytes := []byte("fake-icc")
+	src.storePreparedPNG(200, 120, pngBytes, iccBytes)
+	src.pinBestPrepared(200, 120)
+	src.storePreparedPNG(240, 144, []byte("other"), nil)
+
+	gotPNG, gotICC, ok := src.cachedPreparedPNG(200, 120)
+	if !ok || !bytes.Equal(gotPNG, pngBytes) || !bytes.Equal(gotICC, iccBytes) {
+		t.Fatalf("unexpected cached PNG hit: ok=%v png=%q icc=%q", ok, gotPNG, gotICC)
+	}
+
+	src.clearPreparedCache()
+	if src.cachedResizedImage(200, 120) != nil {
+		t.Fatal("expected cache miss after clearPreparedCache")
+	}
+	if _, _, ok := src.cachedPreparedPNG(200, 120); ok {
+		t.Fatal("expected PNG cache miss after clearPreparedCache")
+	}
+	// Storing/pinning while disabled must remain a no-op.
+	src.storeResizedImage(200, 120, imgA)
+	src.pinBestPrepared(200, 120)
+	if src.lastPrepared.img != nil || src.bestPrepared.img != nil {
+		t.Fatal("expected cache to stay empty when cachePrepared is false")
+	}
+}

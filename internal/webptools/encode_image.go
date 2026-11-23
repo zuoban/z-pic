@@ -5,8 +5,9 @@ import (
 	"context"
 	"fmt"
 	"image"
-	"image/color"
 	"io"
+
+	"zpic/internal/ycbcr"
 )
 
 const (
@@ -140,22 +141,7 @@ func writeRGBScanlines(ctx context.Context, w *bufio.Writer, img image.Image, bo
 			}
 		}
 	case *image.YCbCr:
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			yi := src.YOffset(bounds.Min.X, y)
-			for x := range width {
-				ci := src.COffset(bounds.Min.X+x, y)
-				r, g, b := color.YCbCrToRGB(src.Y[yi+x], src.Cb[ci], src.Cr[ci])
-				rowBuf[x*3] = r
-				rowBuf[x*3+1] = g
-				rowBuf[x*3+2] = b
-			}
-			if _, err := w.Write(rowBuf); err != nil {
-				return err
-			}
-		}
+		return ycbcr.WriteRGBScanlines(ctx, w, src, bounds, rowBuf)
 	case *image.Gray:
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			if err := ctx.Err(); err != nil {

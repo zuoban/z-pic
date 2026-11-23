@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -370,4 +371,81 @@ func TestIntermediatePNGLimit(t *testing.T) {
 	if _, err := buf.Write(make([]byte, (32<<20)+1)); err == nil || !strings.Contains(err.Error(), "128 MiB") {
 		t.Fatalf("pngBuffer should reject writes beyond 128 MiB, got %v", err)
 	}
+}
+
+func TestConvertYCbCrToNRGBAMatchesDraw(t *testing.T) {
+	ratios := []image.YCbCrSubsampleRatio{
+		image.YCbCrSubsampleRatio444,
+		image.YCbCrSubsampleRatio422,
+		image.YCbCrSubsampleRatio420,
+		image.YCbCrSubsampleRatio440,
+		image.YCbCrSubsampleRatio411,
+		image.YCbCrSubsampleRatio410,
+	}
+	for _, ratio := range ratios {
+		src := image.NewYCbCr(image.Rect(3, 5, 34, 26), ratio)
+		for i := range src.Y {
+			src.Y[i] = uint8((i*17 + 23) % 256)
+		}
+		for i := range src.Cb {
+			src.Cb[i] = uint8((i*31 + 11) % 256)
+			src.Cr[i] = uint8((i*13 + 71) % 256)
+		}
+		want := image.NewNRGBA(src.Bounds())
+		draw.Draw(want, want.Bounds(), src, src.Bounds().Min, draw.Src)
+		got, ok := ConvertYCbCrToNRGBA(src).(*image.NRGBA)
+		if !ok {
+			t.Fatalf("expected *image.NRGBA for %s, got %T", ratio, ConvertYCbCrToNRGBA(src))
+		}
+		if got.Bounds() != want.Bounds() || !bytes.Equal(got.Pix, want.Pix) {
+			t.Fatalf("ConvertYCbCrToNRGBA mismatch for %s", ratio)
+		}
+
+		sub := src.SubImage(image.Rect(6, 8, 29, 23))
+		wantSub := image.NewNRGBA(sub.Bounds())
+		draw.Draw(wantSub, wantSub.Bounds(), sub, sub.Bounds().Min, draw.Src)
+		gotSub, ok := ConvertYCbCrToNRGBA(sub).(*image.NRGBA)
+		if !ok {
+			t.Fatalf("expected *image.NRGBA for sub %s, got %T", ratio, ConvertYCbCrToNRGBA(sub))
+		}
+		if gotSub.Bounds() != wantSub.Bounds() || !bytes.Equal(gotSub.Pix, wantSub.Pix) {
+			t.Fatalf("ConvertYCbCrToNRGBA subimage mismatch for %s", ratio)
+		}
+	}
+
+	ny := image.NewNYCbCrA(image.Rect(2, 3, 22, 19), image.YCbCrSubsampleRatio420)
+	for i := range ny.Y {
+		ny.Y[i] = uint8((i*19 + 5) % 256)
+		if i%11 == 0 {
+			ny.A[i] = 0
+		} else {
+			ny.A[i] = uint8((i*29 + 3) % 256)
+		}
+	}
+	for i := range ny.Cb {
+		ny.Cb[i] = uint8((i*11 + 47) % 256)
+		ny.Cr[i] = uint8((i*7 + 89) % 256)
+	}
+	checkNYCbCrA := func(name string, src *image.NYCbCrA) {
+		t.Helper()
+		gotNY, ok := ConvertYCbCrToNRGBA(src).(*image.NRGBA)
+		if !ok || gotNY.Bounds() != src.Bounds() {
+			t.Fatalf("ConvertYCbCrToNRGBA %s unexpected NYCbCrA result: ok=%v", name, ok)
+		}
+		for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
+			for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
+				c := src.NYCbCrAAt(x, y)
+				var want color.NRGBA
+				if c.A != 0 {
+					r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+					want = color.NRGBA{R: r, G: g, B: b, A: c.A}
+				}
+				if got := gotNY.NRGBAAt(x, y); got != want {
+					t.Fatalf("ConvertYCbCrToNRGBA %s at (%d,%d): got %+v want %+v", name, x, y, got, want)
+				}
+			}
+		}
+	}
+	checkNYCbCrA("full", ny)
+	checkNYCbCrA("sub", ny.SubImage(image.Rect(5, 6, 19, 16)).(*image.NYCbCrA))
 }

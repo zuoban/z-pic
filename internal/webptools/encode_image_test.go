@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/color"
 	"os"
@@ -135,4 +136,46 @@ func absDiff(a, b uint8) uint8 {
 		return a - b
 	}
 	return b - a
+}
+
+func TestWritePNMYCbCrSubsamplingMatchesOffsets(t *testing.T) {
+	ratios := []image.YCbCrSubsampleRatio{
+		image.YCbCrSubsampleRatio444,
+		image.YCbCrSubsampleRatio422,
+		image.YCbCrSubsampleRatio420,
+		image.YCbCrSubsampleRatio440,
+		image.YCbCrSubsampleRatio411,
+		image.YCbCrSubsampleRatio410,
+	}
+	for _, ratio := range ratios {
+		src := image.NewYCbCr(image.Rect(3, 5, 28, 22), ratio)
+		for i := range src.Y {
+			src.Y[i] = uint8((i*17 + 13) % 256)
+		}
+		for i := range src.Cb {
+			src.Cb[i] = uint8((i*23 + 37) % 256)
+			src.Cr[i] = uint8((i*29 + 61) % 256)
+		}
+		for _, img := range []image.Image{src, src.SubImage(image.Rect(6, 8, 25, 19))} {
+			var got bytes.Buffer
+			if err := writePNM(context.Background(), &got, img, true); err != nil {
+				t.Fatalf("writePNM(%s) failed: %v", ratio, err)
+			}
+			b := img.Bounds()
+			var want bytes.Buffer
+			fmt.Fprintf(&want, "P6\n%d %d\n255\n", b.Dx(), b.Dy())
+			sub := img.(*image.YCbCr)
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					yi := sub.YOffset(x, y)
+					ci := sub.COffset(x, y)
+					r, g, bl := color.YCbCrToRGB(sub.Y[yi], sub.Cb[ci], sub.Cr[ci])
+					want.Write([]byte{r, g, bl})
+				}
+			}
+			if !bytes.Equal(got.Bytes(), want.Bytes()) {
+				t.Fatalf("writePNM YCbCr(%s) bounds=%v mismatch", ratio, b)
+			}
+		}
+	}
 }

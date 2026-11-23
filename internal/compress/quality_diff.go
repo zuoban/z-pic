@@ -15,6 +15,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 
 	"zpic/internal/contextio"
+	"zpic/internal/ycbcr"
 )
 
 // QualityMetrics reports objective pixel similarity between an original image
@@ -82,13 +83,50 @@ func analyzeVisualDiffBytes(ctx context.Context, originalData, compressedData []
 		}
 		return analyzeVisualDiffNRGBA(ctx, origNRGBA, origNRGBA, false, true)
 	}
-	compNRGBA, err := decodeUprightNRGBA(ctx, compressedData)
-	if err != nil {
-		return QualityMetrics{}, nil, fmt.Errorf("无法解码压缩结果用于画质对比：%w", err)
+	decodeCtx, cancelDecode := context.WithCancel(ctx)
+	defer cancelDecode()
+
+	var (
+		compImg, origImg image.Image
+		compErr, origErr error
+		wg               sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		origImg, origErr = decodeUprightImage(decodeCtx, originalData)
+		if origErr != nil {
+			cancelDecode()
+		}
+	}()
+	compImg, compErr = decodeUprightImage(decodeCtx, compressedData)
+	if compErr != nil {
+		cancelDecode()
 	}
-	origNRGBA, resized, err := decodeAlignedUprightNRGBA(ctx, originalData, compNRGBA.Bounds().Dx(), compNRGBA.Bounds().Dy())
-	if err != nil {
-		return QualityMetrics{}, nil, fmt.Errorf("无法解码原图用于画质对比：%w", err)
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return QualityMetrics{}, nil, err
+	}
+	if compErr != nil && (origErr == nil || !errors.Is(compErr, context.Canceled)) {
+		return QualityMetrics{}, nil, fmt.Errorf("无法解码压缩结果用于画质对比：%w", compErr)
+	}
+	if origErr != nil {
+		return QualityMetrics{}, nil, fmt.Errorf("无法解码原图用于画质对比：%w", origErr)
+	}
+	compBounds := compImg.Bounds()
+	origBounds := origImg.Bounds()
+	if compBounds.Empty() || origBounds.Empty() {
+		return QualityMetrics{}, nil, errors.New("图片尺寸为空，无法对比")
+	}
+	compNRGBA := toNRGBA(compImg)
+	w, h := compBounds.Dx(), compBounds.Dy()
+	resized := origBounds.Dx() != w || origBounds.Dy() != h
+	var origNRGBA *image.NRGBA
+	if resized {
+		origNRGBA = scaleToAlignedNRGBA(origImg, w, h)
+	} else {
+		origNRGBA = toNRGBA(origImg)
 	}
 	return analyzeVisualDiffNRGBA(ctx, origNRGBA, compNRGBA, resized, buildHeatmap)
 }
@@ -99,21 +137,6 @@ func decodeUprightNRGBA(ctx context.Context, data []byte) (*image.NRGBA, error) 
 		return nil, err
 	}
 	return toNRGBA(img), nil
-}
-
-func decodeAlignedUprightNRGBA(ctx context.Context, data []byte, targetW, targetH int) (*image.NRGBA, bool, error) {
-	img, err := decodeUprightImage(ctx, data)
-	if err != nil {
-		return nil, false, err
-	}
-	bounds := img.Bounds()
-	if bounds.Empty() {
-		return nil, false, errors.New("图片尺寸为空，无法对比")
-	}
-	if bounds.Dx() == targetW && bounds.Dy() == targetH {
-		return toNRGBA(img), false, nil
-	}
-	return scaleToAlignedNRGBA(img, targetW, targetH), true, nil
 }
 
 func scaleToAlignedNRGBA(src image.Image, targetW, targetH int) *image.NRGBA {
@@ -207,6 +230,11 @@ type pixelDiffStripeStats struct {
 	hasAlphaDiff   bool
 }
 
+const (
+	ssimC1 = 6.5025  // (0.01 * 255)^2
+	ssimC2 = 58.5225 // (0.03 * 255)^2
+)
+
 func parallelDiffWorkers(w, h int) int {
 	if uint64(w)*uint64(h) < parallelDiffMinPixels {
 		return 1
@@ -222,63 +250,161 @@ func parallelDiffWorkers(w, h int) int {
 	return min(workers, blockRows)
 }
 
-func analyzeVisualDiffStripe(ctx context.Context, origNRGBA, compNRGBA, heatmap *image.NRGBA, yStart, yEnd, w int) (pixelDiffStripeStats, error) {
-	var stats pixelDiffStripeStats
-	buildHeatmap := heatmap != nil
+func renderIdenticalHeatmapStripe(ctx context.Context, origNRGBA, heatmap *image.NRGBA, yStart, yEnd, w int) error {
 	for y := yStart; y < yEnd; y++ {
 		if (y-yStart)&127 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		oRow := y * origNRGBA.Stride
+		hRow := y * heatmap.Stride
+		for x := 0; x < w; x++ {
+			oi := oRow + x*4
+			hi := hRow + x*4
+			base := diffHeatmapBase(origNRGBA.Pix[oi], origNRGBA.Pix[oi+1], origNRGBA.Pix[oi+2], origNRGBA.Pix[oi+3])
+			heatmap.Pix[hi] = base
+			heatmap.Pix[hi+1] = base
+			heatmap.Pix[hi+2] = base
+			heatmap.Pix[hi+3] = 255
+		}
+	}
+	return nil
+}
+
+func computeBlockAlphaSSIM(orig, comp *image.NRGBA, bx, by, bw, bh int, n float64) float64 {
+	var sumAX, sumAY, sumAXX, sumAYY, sumAXY float64
+	for y := by; y < by+bh; y++ {
+		oRow := y * orig.Stride
+		cRow := y * comp.Stride
+		for x := bx; x < bx+bw; x++ {
+			ax := float64(orig.Pix[oRow+x*4+3])
+			ay := float64(comp.Pix[cRow+x*4+3])
+			sumAX += ax
+			sumAY += ay
+			sumAXX += ax * ax
+			sumAYY += ay * ay
+			sumAXY += ax * ay
+		}
+	}
+	return ssimFromSums(n, sumAX, sumAY, sumAXX, sumAYY, sumAXY, ssimC1, ssimC2)
+}
+
+// analyzeVisualDiffBlockRange fuses pixel diff metrics, optional heatmap
+// rendering, and 8x8 block SSIM into a single pass over origNRGBA and compNRGBA
+// so image buffers are streamed through CPU cache only once.
+func analyzeVisualDiffBlockRange(
+	ctx context.Context,
+	origNRGBA, compNRGBA, heatmap *image.NRGBA,
+	startBlockRow, endBlockRow, w, h int,
+	rowLumaSSIM, rowAlphaWeightedSSIM []float64,
+) (pixelDiffStripeStats, error) {
+	var stats pixelDiffStripeStats
+	buildHeatmap := heatmap != nil
+	origPix := origNRGBA.Pix
+	compPix := compNRGBA.Pix
+	origStride := origNRGBA.Stride
+	compStride := compNRGBA.Stride
+	var heatPix []byte
+	var heatStride int
+	if buildHeatmap {
+		heatPix = heatmap.Pix
+		heatStride = heatmap.Stride
+	}
+
+	for br := startBlockRow; br < endBlockRow; br++ {
+		if (br-startBlockRow)&15 == 0 {
 			if err := ctx.Err(); err != nil {
 				return stats, err
 			}
 		}
-		oRow := y * origNRGBA.Stride
-		cRow := y * compNRGBA.Stride
-		hRow := 0
-		if buildHeatmap {
-			hRow = y * heatmap.Stride
-		}
-		for x := 0; x < w; x++ {
-			oi := oRow + x*4
-			ci := cRow + x*4
+		by := br * diffBlockSize
+		bh := min(diffBlockSize, h-by)
+		var blockRowLuma, blockRowAlphaWeighted float64
 
-			r1, g1, b1, a1 := origNRGBA.Pix[oi], origNRGBA.Pix[oi+1], origNRGBA.Pix[oi+2], origNRGBA.Pix[oi+3]
-			r2, g2, b2, a2 := compNRGBA.Pix[ci], compNRGBA.Pix[ci+1], compNRGBA.Pix[ci+2], compNRGBA.Pix[ci+3]
+		for bx := 0; bx < w; bx += diffBlockSize {
+			bw := min(diffBlockSize, w-bx)
+			n := float64(bw * bh)
+			var sumX, sumY, sumXX, sumYY, sumXY float64
+			blockHasAlphaDiff := false
 
-			var dr, dg, db, da uint8
-			if a1 == 255 && a2 == 255 {
-				dr = absDiffUint8(r1, r2)
-				dg = absDiffUint8(g1, g2)
-				db = absDiffUint8(b1, b2)
-			} else if a1 != 0 || a2 != 0 {
-				dr = absDiffUint8(premultiplyChannel(r1, a1), premultiplyChannel(r2, a2))
-				dg = absDiffUint8(premultiplyChannel(g1, a1), premultiplyChannel(g2, a2))
-				db = absDiffUint8(premultiplyChannel(b1, a1), premultiplyChannel(b2, a2))
-				da = absDiffUint8(a1, a2)
-			}
+			for y := by; y < by+bh; y++ {
+				oRow := y * origStride
+				cRow := y * compStride
+				hRow := 0
+				if buildHeatmap {
+					hRow = y * heatStride
+				}
+				for x := bx; x < bx+bw; x++ {
+					oi := oRow + x*4
+					ci := cRow + x*4
 
-			stats.sqErrRGB += uint64(dr)*uint64(dr) + uint64(dg)*uint64(dg) + uint64(db)*uint64(db)
-			if da > 0 {
-				stats.hasAlphaDiff = true
-				stats.sqErrAlpha += uint64(da) * uint64(da)
-			}
+					r1, g1, b1, a1 := origPix[oi], origPix[oi+1], origPix[oi+2], origPix[oi+3]
+					r2, g2, b2, a2 := compPix[ci], compPix[ci+1], compPix[ci+2], compPix[ci+3]
 
-			maxD := max(max(dr, dg), max(db, da))
-			if maxD > 0 {
-				stats.changedPixels++
-				if maxD > stats.maxChannelDiff {
-					stats.maxChannelDiff = maxD
+					var dr, dg, db, da uint8
+					var lx, ly float64
+					if a1 == 255 && a2 == 255 {
+						dr = absDiffUint8(r1, r2)
+						dg = absDiffUint8(g1, g2)
+						db = absDiffUint8(b1, b2)
+						lx = ssimLumaRLUT[r1] + ssimLumaGLUT[g1] + ssimLumaBLUT[b1]
+						ly = ssimLumaRLUT[r2] + ssimLumaGLUT[g2] + ssimLumaBLUT[b2]
+					} else {
+						if a1 != 0 || a2 != 0 {
+							dr = absDiffUint8(premultiplyChannel(r1, a1), premultiplyChannel(r2, a2))
+							dg = absDiffUint8(premultiplyChannel(g1, a1), premultiplyChannel(g2, a2))
+							db = absDiffUint8(premultiplyChannel(b1, a1), premultiplyChannel(b2, a2))
+							da = absDiffUint8(a1, a2)
+						}
+						lx = (ssimLumaRLUT[r1] + ssimLumaGLUT[g1] + ssimLumaBLUT[b1]) * ssimAlphaNormLUT[a1]
+						ly = (ssimLumaRLUT[r2] + ssimLumaGLUT[g2] + ssimLumaBLUT[b2]) * ssimAlphaNormLUT[a2]
+					}
+
+					sumX += lx
+					sumY += ly
+					sumXX += lx * lx
+					sumYY += ly * ly
+					sumXY += lx * ly
+
+					stats.sqErrRGB += uint64(dr)*uint64(dr) + uint64(dg)*uint64(dg) + uint64(db)*uint64(db)
+					if da > 0 {
+						blockHasAlphaDiff = true
+						stats.hasAlphaDiff = true
+						stats.sqErrAlpha += uint64(da) * uint64(da)
+					}
+
+					maxD := max(max(dr, dg), max(db, da))
+					if maxD > 0 {
+						stats.changedPixels++
+						if maxD > stats.maxChannelDiff {
+							stats.maxChannelDiff = maxD
+						}
+					}
+
+					if buildHeatmap {
+						hi := hRow + x*4
+						hr, hg, hb := diffHeatmapPixel(r1, g1, b1, a1, a2, maxD)
+						heatPix[hi] = hr
+						heatPix[hi+1] = hg
+						heatPix[hi+2] = hb
+						heatPix[hi+3] = 255
+					}
 				}
 			}
 
-			if buildHeatmap {
-				hi := hRow + x*4
-				hr, hg, hb := diffHeatmapPixel(r1, g1, b1, a1, a2, maxD)
-				heatmap.Pix[hi] = hr
-				heatmap.Pix[hi+1] = hg
-				heatmap.Pix[hi+2] = hb
-				heatmap.Pix[hi+3] = 255
+			lumaSSIM := ssimFromSums(n, sumX, sumY, sumXX, sumYY, sumXY, ssimC1, ssimC2)
+			blockRowLuma += lumaSSIM
+			if blockHasAlphaDiff {
+				alphaSSIM := computeBlockAlphaSSIM(origNRGBA, compNRGBA, bx, by, bw, bh, n)
+				blockRowAlphaWeighted += 0.75*lumaSSIM + 0.25*alphaSSIM
+			} else {
+				blockRowAlphaWeighted += 0.75*lumaSSIM + 0.25
 			}
 		}
+
+		rowLumaSSIM[br] = blockRowLuma
+		rowAlphaWeightedSSIM[br] = blockRowAlphaWeighted
 	}
 	return stats, nil
 }
@@ -297,33 +423,74 @@ func analyzeVisualDiffNRGBA(ctx context.Context, origNRGBA, compNRGBA *image.NRG
 		heatmap = image.NewNRGBA(image.Rect(0, 0, w, h))
 	}
 
-	totalPixels := uint64(w) * uint64(h)
 	workers := parallelDiffWorkers(w, h)
+	blockRows := (h + diffBlockSize - 1) / diffBlockSize
+
+	if origNRGBA == compNRGBA {
+		if buildHeatmap {
+			if workers == 1 {
+				if err := renderIdenticalHeatmapStripe(ctx, origNRGBA, heatmap, 0, h, w); err != nil {
+					return QualityMetrics{}, nil, err
+				}
+			} else {
+				stripeErrs := make([]error, workers)
+				var wg sync.WaitGroup
+				for i := 1; i < workers; i++ {
+					yStart := ((i * blockRows) / workers) * diffBlockSize
+					yEnd := min(h, (((i+1)*blockRows)/workers)*diffBlockSize)
+					wg.Add(1)
+					go func(idx, start, end int) {
+						defer wg.Done()
+						stripeErrs[idx] = renderIdenticalHeatmapStripe(ctx, origNRGBA, heatmap, start, end, w)
+					}(i, yStart, yEnd)
+				}
+				yEnd0 := min(h, (blockRows/workers)*diffBlockSize)
+				stripeErrs[0] = renderIdenticalHeatmapStripe(ctx, origNRGBA, heatmap, 0, yEnd0, w)
+				wg.Wait()
+				for _, err := range stripeErrs {
+					if err != nil {
+						return QualityMetrics{}, nil, err
+					}
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return QualityMetrics{}, nil, err
+			}
+		}
+		return QualityMetrics{
+			PSNR:      math.Inf(1),
+			SSIM:      1,
+			Identical: true,
+			Resized:   resized,
+		}, heatmap, nil
+	}
+
+	totalPixels := uint64(w) * uint64(h)
+	rowLumaSSIM := make([]float64, blockRows)
+	rowAlphaWeightedSSIM := make([]float64, blockRows)
 
 	var combined pixelDiffStripeStats
 	if workers == 1 {
-		stats, err := analyzeVisualDiffStripe(ctx, origNRGBA, compNRGBA, heatmap, 0, h, w)
+		stats, err := analyzeVisualDiffBlockRange(ctx, origNRGBA, compNRGBA, heatmap, 0, blockRows, w, h, rowLumaSSIM, rowAlphaWeightedSSIM)
 		if err != nil {
 			return QualityMetrics{}, nil, err
 		}
 		combined = stats
 	} else {
-		blockRows := (h + diffBlockSize - 1) / diffBlockSize
 		stripeStats := make([]pixelDiffStripeStats, workers)
 		stripeErrs := make([]error, workers)
 
 		var wg sync.WaitGroup
 		for i := 1; i < workers; i++ {
-			yStart := ((i * blockRows) / workers) * diffBlockSize
-			yEnd := min(h, (((i+1)*blockRows)/workers)*diffBlockSize)
+			startRow := (i * blockRows) / workers
+			endRow := ((i + 1) * blockRows) / workers
 			wg.Add(1)
 			go func(idx, start, end int) {
 				defer wg.Done()
-				stripeStats[idx], stripeErrs[idx] = analyzeVisualDiffStripe(ctx, origNRGBA, compNRGBA, heatmap, start, end, w)
-			}(i, yStart, yEnd)
+				stripeStats[idx], stripeErrs[idx] = analyzeVisualDiffBlockRange(ctx, origNRGBA, compNRGBA, heatmap, start, end, w, h, rowLumaSSIM, rowAlphaWeightedSSIM)
+			}(i, startRow, endRow)
 		}
-		yEnd0 := min(h, (blockRows/workers)*diffBlockSize)
-		stripeStats[0], stripeErrs[0] = analyzeVisualDiffStripe(ctx, origNRGBA, compNRGBA, heatmap, 0, yEnd0, w)
+		stripeStats[0], stripeErrs[0] = analyzeVisualDiffBlockRange(ctx, origNRGBA, compNRGBA, heatmap, 0, blockRows/workers, w, h, rowLumaSSIM, rowAlphaWeightedSSIM)
 		wg.Wait()
 
 		for _, err := range stripeErrs {
@@ -371,22 +538,96 @@ func analyzeVisualDiffNRGBA(ctx context.Context, origNRGBA, compNRGBA *image.NRG
 		metrics.PSNR = 10 * math.Log10((255.0*255.0)/mse)
 	}
 
-	ssim, err := computeBlockSSIM(ctx, origNRGBA, compNRGBA, combined.hasAlphaDiff)
-	if err != nil {
-		return QualityMetrics{}, nil, err
+	blocksPerRow := (w + diffBlockSize - 1) / diffBlockSize
+	totalBlocks := blocksPerRow * blockRows
+	if totalBlocks == 0 {
+		metrics.SSIM = 1
+		return metrics, heatmap, nil
 	}
-	metrics.SSIM = ssim
+	var sumSSIM float64
+	if combined.hasAlphaDiff {
+		for _, v := range rowAlphaWeightedSSIM {
+			sumSSIM += v
+		}
+	} else {
+		for _, v := range rowLumaSSIM {
+			sumSSIM += v
+		}
+	}
+	mean := sumSSIM / float64(totalBlocks)
+	if mean > 1 {
+		mean = 1
+	} else if mean < 0 {
+		mean = 0
+	}
+	metrics.SSIM = mean
 	return metrics, heatmap, nil
 }
 
 func toNRGBA(src image.Image) *image.NRGBA {
 	b := src.Bounds()
-	if nrgba, ok := src.(*image.NRGBA); ok && b.Min.X == 0 && b.Min.Y == 0 {
-		return nrgba
+	w, h := b.Dx(), b.Dy()
+	if nrgba, ok := src.(*image.NRGBA); ok {
+		if b.Min.X == 0 && b.Min.Y == 0 {
+			return nrgba
+		}
+		dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+		for y := 0; y < h; y++ {
+			srcOff := nrgba.PixOffset(b.Min.X, b.Min.Y+y)
+			dstOff := y * dst.Stride
+			copy(dst.Pix[dstOff:dstOff+w*4], nrgba.Pix[srcOff:srcOff+w*4])
+		}
+		return dst
 	}
-	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
-	return dst
+	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+	switch s := src.(type) {
+	case *image.RGBA:
+		for y := 0; y < h; y++ {
+			sOff := s.PixOffset(b.Min.X, b.Min.Y+y)
+			dOff := y * dst.Stride
+			for x := 0; x < w; x++ {
+				r, g, bl, a := s.Pix[sOff], s.Pix[sOff+1], s.Pix[sOff+2], s.Pix[sOff+3]
+				sOff += 4
+				switch a {
+				case 0xff:
+					dst.Pix[dOff] = r
+					dst.Pix[dOff+1] = g
+					dst.Pix[dOff+2] = bl
+					dst.Pix[dOff+3] = 0xff
+				case 0:
+					// dst.Pix is already zero-initialized.
+				default:
+					aa := uint32(a)
+					dst.Pix[dOff] = uint8(((uint32(r) * 0xffff) / aa) >> 8)
+					dst.Pix[dOff+1] = uint8(((uint32(g) * 0xffff) / aa) >> 8)
+					dst.Pix[dOff+2] = uint8(((uint32(bl) * 0xffff) / aa) >> 8)
+					dst.Pix[dOff+3] = a
+				}
+				dOff += 4
+			}
+		}
+		return dst
+	case *image.YCbCr:
+		ycbcr.ToNRGBAInto(dst, s, b)
+		return dst
+	case *image.Gray:
+		for y := 0; y < h; y++ {
+			sOff := s.PixOffset(b.Min.X, b.Min.Y+y)
+			dOff := y * dst.Stride
+			for x := 0; x < w; x++ {
+				v := s.Pix[sOff+x]
+				dst.Pix[dOff] = v
+				dst.Pix[dOff+1] = v
+				dst.Pix[dOff+2] = v
+				dst.Pix[dOff+3] = 0xff
+				dOff += 4
+			}
+		}
+		return dst
+	default:
+		draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+		return dst
+	}
 }
 
 func absDiffUint8(a, b uint8) uint8 {
@@ -401,9 +642,22 @@ const (
 	diffHeatmapBaseMax = 62
 )
 
-var diffHeatmapBlendLUT [diffHeatmapBaseMax - diffHeatmapBaseMin + 1][256][3]uint8
+var (
+	diffHeatmapBlendLUT [diffHeatmapBaseMax - diffHeatmapBaseMin + 1][256][3]uint8
+	ssimLumaRLUT        [256]float64
+	ssimLumaGLUT        [256]float64
+	ssimLumaBLUT        [256]float64
+	ssimAlphaNormLUT    [256]float64
+)
 
 func init() {
+	for i := range 256 {
+		f := float64(i)
+		ssimLumaRLUT[i] = 0.299 * f
+		ssimLumaGLUT[i] = 0.587 * f
+		ssimLumaBLUT[i] = 0.114 * f
+		ssimAlphaNormLUT[i] = f / 255.0
+	}
 	const mix = 0.86
 	for diff := 1; diff < 256; diff++ {
 		level := math.Pow(float64(diff)/255.0, 0.52)
@@ -428,21 +682,23 @@ func init() {
 	}
 }
 
+func diffHeatmapBase(r1, g1, b1, a1 uint8) uint8 {
+	if a1 == 0 {
+		return 22
+	}
+	luma := (299*int(r1) + 587*int(g1) + 114*int(b1)) / 1000
+	if a1 < 255 {
+		luma = (luma*int(a1) + 127) / 255
+	}
+	return uint8(diffHeatmapBaseMin + (luma*44)/255)
+}
+
 // diffHeatmapPixel renders identical regions as a dark desaturated reference
 // of the original image and maps nonzero pixel deltas onto a high-contrast
 // perceptual ramp (deep cyan -> emerald -> gold -> orange -> magenta) so even
 // subtle compression artifacts stand out clearly.
 func diffHeatmapPixel(r1, g1, b1, a1, a2, maxDiff uint8) (uint8, uint8, uint8) {
-	var base uint8
-	if a1 == 0 {
-		base = 22
-	} else {
-		luma := (299*int(r1) + 587*int(g1) + 114*int(b1)) / 1000
-		if a1 < 255 {
-			luma = (luma*int(a1) + 127) / 255
-		}
-		base = uint8(diffHeatmapBaseMin + (luma*44)/255)
-	}
+	base := diffHeatmapBase(r1, g1, b1, a1)
 	if maxDiff == 0 {
 		return base, base, base
 	}
@@ -474,132 +730,6 @@ func heatmapColor(t float64) (uint8, uint8, uint8) {
 	}
 	last := stops[len(stops)-1]
 	return uint8(last.r), uint8(last.g), uint8(last.b)
-}
-
-func computeBlockSSIMRow(orig, comp *image.NRGBA, includeAlpha bool, by, w, h int) (float64, int) {
-	const (
-		c1 = 6.5025  // (0.01 * 255)^2
-		c2 = 58.5225 // (0.03 * 255)^2
-	)
-	bh := min(diffBlockSize, h-by)
-	var (
-		sumSSIM float64
-		blocks  int
-	)
-	for bx := 0; bx < w; bx += diffBlockSize {
-		bw := min(diffBlockSize, w-bx)
-		n := float64(bw * bh)
-		var (
-			sumX, sumY     float64
-			sumXX, sumYY   float64
-			sumXY          float64
-			sumAX, sumAY   float64
-			sumAXX, sumAYY float64
-			sumAXY         float64
-		)
-		for y := by; y < by+bh; y++ {
-			oRow := y * orig.Stride
-			cRow := y * comp.Stride
-			for x := bx; x < bx+bw; x++ {
-				oi := oRow + x*4
-				ci := cRow + x*4
-				ax := float64(orig.Pix[oi+3])
-				ay := float64(comp.Pix[ci+3])
-				lx := (0.299*float64(orig.Pix[oi]) + 0.587*float64(orig.Pix[oi+1]) + 0.114*float64(orig.Pix[oi+2])) * (ax / 255.0)
-				ly := (0.299*float64(comp.Pix[ci]) + 0.587*float64(comp.Pix[ci+1]) + 0.114*float64(comp.Pix[ci+2])) * (ay / 255.0)
-				sumX += lx
-				sumY += ly
-				sumXX += lx * lx
-				sumYY += ly * ly
-				sumXY += lx * ly
-				if includeAlpha {
-					sumAX += ax
-					sumAY += ay
-					sumAXX += ax * ax
-					sumAYY += ay * ay
-					sumAXY += ax * ay
-				}
-			}
-		}
-		lumaSSIM := ssimFromSums(n, sumX, sumY, sumXX, sumYY, sumXY, c1, c2)
-		if includeAlpha {
-			alphaSSIM := ssimFromSums(n, sumAX, sumAY, sumAXX, sumAYY, sumAXY, c1, c2)
-			sumSSIM += 0.75*lumaSSIM + 0.25*alphaSSIM
-		} else {
-			sumSSIM += lumaSSIM
-		}
-		blocks++
-	}
-	return sumSSIM, blocks
-}
-
-func computeBlockSSIM(ctx context.Context, orig, comp *image.NRGBA, includeAlpha bool) (float64, error) {
-	w, h := orig.Bounds().Dx(), orig.Bounds().Dy()
-	blockRows := (h + diffBlockSize - 1) / diffBlockSize
-	if w <= 0 || blockRows == 0 {
-		return 1, nil
-	}
-	workers := parallelDiffWorkers(w, h)
-	rowSums := make([]float64, blockRows)
-	rowBlocks := make([]int, blockRows)
-	errs := make([]error, workers)
-
-	runRange := func(workerIdx, startRow, endRow int) {
-		for br := startRow; br < endRow; br++ {
-			if (br-startRow)&31 == 0 {
-				if err := ctx.Err(); err != nil {
-					errs[workerIdx] = err
-					return
-				}
-			}
-			rowSums[br], rowBlocks[br] = computeBlockSSIMRow(orig, comp, includeAlpha, br*diffBlockSize, w, h)
-		}
-	}
-
-	if workers == 1 {
-		runRange(0, 0, blockRows)
-	} else {
-		var wg sync.WaitGroup
-		for i := 1; i < workers; i++ {
-			startRow := (i * blockRows) / workers
-			endRow := ((i + 1) * blockRows) / workers
-			wg.Add(1)
-			go func(idx, start, end int) {
-				defer wg.Done()
-				runRange(idx, start, end)
-			}(i, startRow, endRow)
-		}
-		runRange(0, 0, blockRows/workers)
-		wg.Wait()
-	}
-
-	for _, err := range errs {
-		if err != nil {
-			return 0, err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-
-	var (
-		sumSSIM float64
-		blocks  int
-	)
-	for br := range blockRows {
-		sumSSIM += rowSums[br]
-		blocks += rowBlocks[br]
-	}
-	if blocks == 0 {
-		return 1, nil
-	}
-	mean := sumSSIM / float64(blocks)
-	if mean > 1 {
-		mean = 1
-	} else if mean < 0 {
-		mean = 0
-	}
-	return mean, nil
 }
 
 func ssimFromSums(n, sumX, sumY, sumXX, sumYY, sumXY, c1, c2 float64) float64 {

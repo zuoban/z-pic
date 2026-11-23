@@ -316,6 +316,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			source.orientation = pngOrientation(data)
 		}
 		probeBase, needsRefine := lowestQualityOptions(options, targetFormat)
+		source.cachePrepared = needsRefine
 		var refine func(int) (*encodedImage, error)
 		if needsRefine {
 			refine = func(longEdge int) (*encodedImage, error) {
@@ -325,6 +326,7 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 				return source.encodeAtDimension(ctx, refinedOptions, nil)
 			}
 		}
+		bestFitEdge := 0
 		selected, err = searchTargetResize(ctx, baseline, options.TargetSizeBytes, minDimension, func(longEdge int) (*encodedImage, error) {
 			// Probe feasibility once at lowest quality so dimension search does
 			// not run a nested target-size quality search at every candidate edge.
@@ -332,11 +334,18 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 			probe.MaxDimension = longEdge
 			probe.MaxWidth, probe.MaxHeight, probe.ScalePercent = 0, 0, 0
 			candidate, probeErr := source.encodeAtDimension(ctx, probe, nil)
-			if probeErr == nil && targetFormat != "png" {
-				candidate.appliedQuality = probe.Quality
+			if probeErr == nil {
+				if targetFormat != "png" {
+					candidate.appliedQuality = probe.Quality
+				}
+				if int64(len(candidate.data)) <= options.TargetSizeBytes && longEdge > bestFitEdge {
+					bestFitEdge = longEdge
+					source.pinBestPrepared(candidate.width, candidate.height)
+				}
 			}
 			return candidate, probeErr
 		}, refine)
+		source.clearPreparedCache()
 		if err != nil {
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
@@ -377,6 +386,14 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 	return result, nil
 }
 
+type cachedPreparedDim struct {
+	width, height int
+	orientation   int
+	img           image.Image
+	pngInput      []byte
+	icc           []byte
+}
+
 type compressionSource struct {
 	data, pixelSource    []byte
 	config               image.Config
@@ -384,6 +401,93 @@ type compressionSource struct {
 	orientation          int
 	jpegBackground       color.RGBA
 	pixels               image.Image
+
+	// cachePrepared reuses the winning probe's resized raster / intermediate PNG
+	// during target-resize refinement so CatmullRom scaling and PNG encoding are
+	// not repeated for the exact same dimensions.
+	cachePrepared bool
+	lastPrepared  cachedPreparedDim
+	bestPrepared  cachedPreparedDim
+}
+
+func (source *compressionSource) cachedResizedImage(width, height int) image.Image {
+	if !source.cachePrepared {
+		return nil
+	}
+	if source.bestPrepared.img != nil &&
+		source.bestPrepared.width == width &&
+		source.bestPrepared.height == height &&
+		source.bestPrepared.orientation == source.orientation {
+		return source.bestPrepared.img
+	}
+	if source.lastPrepared.img != nil &&
+		source.lastPrepared.width == width &&
+		source.lastPrepared.height == height &&
+		source.lastPrepared.orientation == source.orientation {
+		return source.lastPrepared.img
+	}
+	return nil
+}
+
+func (source *compressionSource) storeResizedImage(width, height int, img image.Image) {
+	if !source.cachePrepared {
+		return
+	}
+	source.lastPrepared = cachedPreparedDim{
+		width:       width,
+		height:      height,
+		orientation: source.orientation,
+		img:         img,
+	}
+}
+
+func (source *compressionSource) cachedPreparedPNG(width, height int) ([]byte, []byte, bool) {
+	if !source.cachePrepared {
+		return nil, nil, false
+	}
+	if len(source.bestPrepared.pngInput) > 0 &&
+		source.bestPrepared.width == width &&
+		source.bestPrepared.height == height &&
+		source.bestPrepared.orientation == source.orientation {
+		return source.bestPrepared.pngInput, source.bestPrepared.icc, true
+	}
+	if len(source.lastPrepared.pngInput) > 0 &&
+		source.lastPrepared.width == width &&
+		source.lastPrepared.height == height &&
+		source.lastPrepared.orientation == source.orientation {
+		return source.lastPrepared.pngInput, source.lastPrepared.icc, true
+	}
+	return nil, nil, false
+}
+
+func (source *compressionSource) storePreparedPNG(width, height int, pngInput, icc []byte) {
+	if !source.cachePrepared {
+		return
+	}
+	source.lastPrepared = cachedPreparedDim{
+		width:       width,
+		height:      height,
+		orientation: source.orientation,
+		pngInput:    pngInput,
+		icc:         icc,
+	}
+}
+
+func (source *compressionSource) pinBestPrepared(width, height int) {
+	if !source.cachePrepared {
+		return
+	}
+	if source.lastPrepared.width == width &&
+		source.lastPrepared.height == height &&
+		source.lastPrepared.orientation == source.orientation {
+		source.bestPrepared = source.lastPrepared
+	}
+}
+
+func (source *compressionSource) clearPreparedCache() {
+	source.cachePrepared = false
+	source.lastPrepared = cachedPreparedDim{}
+	source.bestPrepared = cachedPreparedDim{}
 }
 
 // decodePixels reuses the source pixels across all dimension probes. JPEG
@@ -478,14 +582,24 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 		needsWebPReencodeFromPixels := converting || needsResize ||
 			(sourceFormat == "webp" && sourceOrient > 1 && options.Metadata != MetadataKeepAll)
 		if needsWebPReencodeFromPixels {
-			decoded, decodeErr := source.decodePixels(ctx)
-			if decodeErr != nil {
-				return nil, decodeErr
+			var resized image.Image
+			if needsResize {
+				resized = source.cachedResizedImage(resizedWidth, resizedHeight)
 			}
-			oriented := normalizeOrientation(decoded, sourceOrient)
-			resized, resizeErr := resizeImage(ctx, oriented, options)
-			if resizeErr != nil {
-				return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
+			if resized == nil {
+				decoded, decodeErr := source.decodePixels(ctx)
+				if decodeErr != nil {
+					return nil, decodeErr
+				}
+				oriented := normalizeOrientation(decoded, sourceOrient)
+				var resizeErr error
+				resized, resizeErr = resizeImage(ctx, oriented, options)
+				if resizeErr != nil {
+					return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
+				}
+				if needsResize {
+					source.storeResizedImage(resizedWidth, resizedHeight, resized)
+				}
 			}
 			outBounds := resized.Bounds()
 			width, height = outBounds.Dx(), outBounds.Dy()
@@ -625,14 +739,22 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 				encoded = data
 			}
 		} else {
-			img, decodeErr := source.decodePixels(ctx)
-			if decodeErr != nil {
-				return nil, decodeErr
-			}
+			var img image.Image
 			if needsResize {
-				img, err = resizeImage(ctx, img, options)
-				if err != nil {
-					return nil, fmt.Errorf("缩放图片已取消：%w", err)
+				img = source.cachedResizedImage(resizedWidth, resizedHeight)
+			}
+			if img == nil {
+				var decodeErr error
+				img, decodeErr = source.decodePixels(ctx)
+				if decodeErr != nil {
+					return nil, decodeErr
+				}
+				if needsResize {
+					img, err = resizeImage(ctx, img, options)
+					if err != nil {
+						return nil, fmt.Errorf("缩放图片已取消：%w", err)
+					}
+					source.storeResizedImage(resizedWidth, resizedHeight, img)
 				}
 			}
 			if err := ctx.Err(); err != nil {
@@ -669,45 +791,62 @@ func (source *compressionSource) encodeAtDimension(ctx context.Context, options 
 		// optimization, which can remove the orientation tag.
 		needsPNGReencode := sourceFormat == "jpeg" || sourceFormat == "webp" || needsResize || sourceOrient > 1
 		if needsPNGReencode {
-			decoded, decodeErr := source.decodePixels(ctx)
-			if decodeErr != nil {
-				return nil, decodeErr
+			var (
+				cachedPNG []byte
+				cacheHit  bool
+			)
+			if needsResize {
+				cachedPNG, _, cacheHit = source.cachedPreparedPNG(resizedWidth, resizedHeight)
 			}
-			oriented := normalizeOrientation(decoded, sourceOrient)
-			resized, resizeErr := resizeImage(ctx, oriented, options)
-			if resizeErr != nil {
-				return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
-			}
-			var colorChunks [][]byte
-			if options.Metadata != MetadataStrip {
-				switch sourceFormat {
-				case "png", "heic", "avif":
-					colorChunks = extractPNGColorChunks(pixelSource)
-				case "jpeg", "webp":
-					components := 3
-					switch resized.ColorModel() {
-					case color.GrayModel, color.Gray16Model:
-						components = 1
-					}
-					var icc []byte
-					if sourceFormat == "jpeg" {
-						icc = extractJPEGICCProfile(data, components)
-					} else {
-						icc = extractWebPICCProfile(data)
-					}
-					if chunk := buildPNGICCPChunk(icc, components); len(chunk) > 0 {
-						colorChunks = [][]byte{chunk}
+			if cacheHit {
+				pngInput = cachedPNG
+				width, height = resizedWidth, resizedHeight
+				pngConfig = image.Config{Width: width, Height: height}
+				forcedOutput = true
+			} else {
+				decoded, decodeErr := source.decodePixels(ctx)
+				if decodeErr != nil {
+					return nil, decodeErr
+				}
+				oriented := normalizeOrientation(decoded, sourceOrient)
+				resized, resizeErr := resizeImage(ctx, oriented, options)
+				if resizeErr != nil {
+					return nil, fmt.Errorf("缩放图片已取消：%w", resizeErr)
+				}
+				var colorChunks [][]byte
+				if options.Metadata != MetadataStrip {
+					switch sourceFormat {
+					case "png", "heic", "avif":
+						colorChunks = extractPNGColorChunks(pixelSource)
+					case "jpeg", "webp":
+						components := 3
+						switch resized.ColorModel() {
+						case color.GrayModel, color.Gray16Model:
+							components = 1
+						}
+						var icc []byte
+						if sourceFormat == "jpeg" {
+							icc = extractJPEGICCProfile(data, components)
+						} else {
+							icc = extractWebPICCProfile(data)
+						}
+						if chunk := buildPNGICCPChunk(icc, components); len(chunk) > 0 {
+							colorChunks = [][]byte{chunk}
+						}
 					}
 				}
+				pngInput, err = encodeResizedPNG(ctx, resized, colorChunks)
+				if err != nil {
+					return nil, fmt.Errorf("图片编码失败：%w", err)
+				}
+				outBounds := resized.Bounds()
+				width, height = outBounds.Dx(), outBounds.Dy()
+				pngConfig = image.Config{Width: width, Height: height}
+				forcedOutput = true
+				if needsResize {
+					source.storePreparedPNG(width, height, pngInput, nil)
+				}
 			}
-			pngInput, err = encodeResizedPNG(ctx, resized, colorChunks)
-			if err != nil {
-				return nil, fmt.Errorf("图片编码失败：%w", err)
-			}
-			outBounds := resized.Bounds()
-			width, height = outBounds.Dx(), outBounds.Dy()
-			pngConfig = image.Config{Width: width, Height: height}
-			forcedOutput = true
 		}
 		if converting {
 			forcedOutput = true

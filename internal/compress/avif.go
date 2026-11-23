@@ -64,6 +64,13 @@ func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize
 	if pngSource && source.orientation == 1 && !needsResize {
 		return pixelSource, nil, nil
 	}
+	width, height := source.displayDimensions()
+	resizedWidth, resizedHeight, _ := resizeDimensionsForOptions(width, height, options)
+	if needsResize {
+		if cachedPNG, cachedICC, ok := source.cachedPreparedPNG(resizedWidth, resizedHeight); ok {
+			return cachedPNG, cachedICC, nil
+		}
+	}
 
 	decoded, err := source.decodePixels(ctx)
 	if err != nil {
@@ -94,6 +101,10 @@ func (source *compressionSource) prepareAVIFPNG(ctx context.Context, needsResize
 		chunks = append(chunks, avifSourceMetadataChunks(pixelSource, sourceFormat)...)
 	}
 	pngData, err := encodeResizedPNG(ctx, aviftools.ConvertYCbCrToNRGBA(resized), chunks)
+	if err == nil && needsResize {
+		bounds := resized.Bounds()
+		source.storePreparedPNG(bounds.Dx(), bounds.Dy(), pngData, icc)
+	}
 	return pngData, icc, err
 }
 

@@ -210,6 +210,9 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 			continue
 		}
 		if isYCbCr {
+			rectMinX, rectMinY := ycbcrSource.Rect.Min.X, ycbcrSource.Rect.Min.Y
+			topYRow := (topY - rectMinY) * ycbcrSource.YStride
+			botYRow := (bottomY - rectMinY) * ycbcrSource.YStride
 			outRow := row * output.Stride
 			for column := range width {
 				if column%256 == 0 {
@@ -218,21 +221,19 @@ func thumbnailRaster(ctx context.Context, source image.Image, maxEdge int) (*ima
 					}
 				}
 				sample := samplesX[column]
-				y00 := ycbcrSource.Y[ycbcrSource.YOffset(sample.left, topY)]
+				lx, rx := sample.left-rectMinX, sample.right-rectMinX
+
 				c00 := ycbcrSource.COffset(sample.left, topY)
-				r00, g00, b00, _ := (color.YCbCr{Y: y00, Cb: ycbcrSource.Cb[c00], Cr: ycbcrSource.Cr[c00]}).RGBA()
+				r00, g00, b00, _ := (color.YCbCr{Y: ycbcrSource.Y[topYRow+lx], Cb: ycbcrSource.Cb[c00], Cr: ycbcrSource.Cr[c00]}).RGBA()
 
-				y10 := ycbcrSource.Y[ycbcrSource.YOffset(sample.right, topY)]
 				c10 := ycbcrSource.COffset(sample.right, topY)
-				r10, g10, b10, _ := (color.YCbCr{Y: y10, Cb: ycbcrSource.Cb[c10], Cr: ycbcrSource.Cr[c10]}).RGBA()
+				r10, g10, b10, _ := (color.YCbCr{Y: ycbcrSource.Y[topYRow+rx], Cb: ycbcrSource.Cb[c10], Cr: ycbcrSource.Cr[c10]}).RGBA()
 
-				y01 := ycbcrSource.Y[ycbcrSource.YOffset(sample.left, bottomY)]
 				c01 := ycbcrSource.COffset(sample.left, bottomY)
-				r01, g01, b01, _ := (color.YCbCr{Y: y01, Cb: ycbcrSource.Cb[c01], Cr: ycbcrSource.Cr[c01]}).RGBA()
+				r01, g01, b01, _ := (color.YCbCr{Y: ycbcrSource.Y[botYRow+lx], Cb: ycbcrSource.Cb[c01], Cr: ycbcrSource.Cr[c01]}).RGBA()
 
-				y11 := ycbcrSource.Y[ycbcrSource.YOffset(sample.right, bottomY)]
 				c11 := ycbcrSource.COffset(sample.right, bottomY)
-				r11, g11, b11, _ := (color.YCbCr{Y: y11, Cb: ycbcrSource.Cb[c11], Cr: ycbcrSource.Cr[c11]}).RGBA()
+				r11, g11, b11, _ := (color.YCbCr{Y: ycbcrSource.Y[botYRow+rx], Cb: ycbcrSource.Cb[c11], Cr: ycbcrSource.Cr[c11]}).RGBA()
 
 				out := output.Pix[outRow+column*4 : outRow+column*4+4 : outRow+column*4+4]
 				out[0] = thumbnailChannel(r00, r10, r01, r11, sample.fractionX, fractionY)
@@ -348,27 +349,104 @@ func copyThumbnailRaster(ctx context.Context, output *image.RGBA, source image.I
 		return ctx.Err()
 	}
 	if ycbcr, ok := source.(*image.YCbCr); ok {
-		for row := range height {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			sy := bounds.Min.Y + row
-			dstRow := row * output.Stride
-			for column := range width {
-				if column%256 == 0 {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
+		minX, minY := bounds.Min.X, bounds.Min.Y
+		rectMinX, rectMinY := ycbcr.Rect.Min.X, ycbcr.Rect.Min.Y
+		switch ycbcr.SubsampleRatio {
+		case image.YCbCrSubsampleRatio444:
+			for row := range height {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
-				sx := bounds.Min.X + column
-				yi := ycbcr.YOffset(sx, sy)
-				ci := ycbcr.COffset(sx, sy)
-				r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yi], Cb: ycbcr.Cb[ci], Cr: ycbcr.Cr[ci]}).RGBA()
-				out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
-				out[0] = uint8((r + 128) / 257)
-				out[1] = uint8((g + 128) / 257)
-				out[2] = uint8((b + 128) / 257)
-				out[3] = 0xff
+				sy := minY + row
+				yRow := (sy-rectMinY)*ycbcr.YStride + (minX - rectMinX)
+				cRow := (sy-rectMinY)*ycbcr.CStride + (minX - rectMinX)
+				dstRow := row * output.Stride
+				for column := range width {
+					r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yRow+column], Cb: ycbcr.Cb[cRow+column], Cr: ycbcr.Cr[cRow+column]}).RGBA()
+					out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = 0xff
+				}
+			}
+		case image.YCbCrSubsampleRatio420:
+			xBias := rectMinX / 2
+			yBias := rectMinY / 2
+			for row := range height {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				sy := minY + row
+				yRow := (sy-rectMinY)*ycbcr.YStride + (minX - rectMinX)
+				cRow := (sy/2 - yBias) * ycbcr.CStride
+				dstRow := row * output.Stride
+				for column := range width {
+					ci := cRow + (minX+column)/2 - xBias
+					r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yRow+column], Cb: ycbcr.Cb[ci], Cr: ycbcr.Cr[ci]}).RGBA()
+					out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = 0xff
+				}
+			}
+		case image.YCbCrSubsampleRatio422:
+			xBias := rectMinX / 2
+			for row := range height {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				sy := minY + row
+				yRow := (sy-rectMinY)*ycbcr.YStride + (minX - rectMinX)
+				cRow := (sy - rectMinY) * ycbcr.CStride
+				dstRow := row * output.Stride
+				for column := range width {
+					ci := cRow + (minX+column)/2 - xBias
+					r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yRow+column], Cb: ycbcr.Cb[ci], Cr: ycbcr.Cr[ci]}).RGBA()
+					out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = 0xff
+				}
+			}
+		case image.YCbCrSubsampleRatio440:
+			yBias := rectMinY / 2
+			for row := range height {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				sy := minY + row
+				yRow := (sy-rectMinY)*ycbcr.YStride + (minX - rectMinX)
+				cRow := (sy/2-yBias)*ycbcr.CStride + (minX - rectMinX)
+				dstRow := row * output.Stride
+				for column := range width {
+					r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yRow+column], Cb: ycbcr.Cb[cRow+column], Cr: ycbcr.Cr[cRow+column]}).RGBA()
+					out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = 0xff
+				}
+			}
+		default:
+			for row := range height {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				sy := minY + row
+				yRow := (sy-rectMinY)*ycbcr.YStride + (minX - rectMinX)
+				dstRow := row * output.Stride
+				for column := range width {
+					ci := ycbcr.COffset(minX+column, sy)
+					r, g, b, _ := (color.YCbCr{Y: ycbcr.Y[yRow+column], Cb: ycbcr.Cb[ci], Cr: ycbcr.Cr[ci]}).RGBA()
+					out := output.Pix[dstRow+column*4 : dstRow+column*4+4 : dstRow+column*4+4]
+					out[0] = uint8((r + 128) / 257)
+					out[1] = uint8((g + 128) / 257)
+					out[2] = uint8((b + 128) / 257)
+					out[3] = 0xff
+				}
 			}
 		}
 		return ctx.Err()

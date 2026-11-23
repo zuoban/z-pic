@@ -278,13 +278,16 @@ func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
 	bounds := image.Rect(4, 6, 20, 18)
 	nrgbaParent := image.NewNRGBA(parent)
 	rgbaParent := image.NewRGBA(parent)
-	ycbcrParent := image.NewYCbCr(parent, image.YCbCrSubsampleRatio420)
-	for i := range ycbcrParent.Y {
-		ycbcrParent.Y[i] = uint8(i*29 + 17)
-	}
-	for i := range ycbcrParent.Cb {
-		ycbcrParent.Cb[i] = uint8(i*43 + 70)
-		ycbcrParent.Cr[i] = uint8(i*31 + 110)
+	ycbcrSub := func(ratio image.YCbCrSubsampleRatio) image.Image {
+		p := image.NewYCbCr(parent, ratio)
+		for i := range p.Y {
+			p.Y[i] = uint8(i*29 + 17)
+		}
+		for i := range p.Cb {
+			p.Cb[i] = uint8(i*43 + 70)
+			p.Cr[i] = uint8(i*31 + 110)
+		}
+		return p.SubImage(bounds)
 	}
 	for row := parent.Min.Y; row < parent.Max.Y; row++ {
 		for column := parent.Min.X; column < parent.Max.X; column++ {
@@ -305,7 +308,12 @@ func TestThumbnailRasterRGBA64FastPathMatchesFallback(test *testing.T) {
 	}{
 		{"SubNRGBA", nrgbaParent.SubImage(bounds)},
 		{"SubRGBA", rgbaParent.SubImage(bounds)},
-		{"SubYCbCr", ycbcrParent.SubImage(bounds)},
+		{"SubYCbCr444", ycbcrSub(image.YCbCrSubsampleRatio444)},
+		{"SubYCbCr422", ycbcrSub(image.YCbCrSubsampleRatio422)},
+		{"SubYCbCr420", ycbcrSub(image.YCbCrSubsampleRatio420)},
+		{"SubYCbCr440", ycbcrSub(image.YCbCrSubsampleRatio440)},
+		{"SubYCbCr411", ycbcrSub(image.YCbCrSubsampleRatio411)},
+		{"SubYCbCr410", ycbcrSub(image.YCbCrSubsampleRatio410)},
 	} {
 		for _, edge := range []int{7, 64} {
 			fastThumb, err := thumbnailRaster(context.Background(), tc.img, edge)

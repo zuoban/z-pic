@@ -22,6 +22,7 @@ import (
 	"zpic/internal/imageinput"
 	"zpic/internal/toolcache"
 	"zpic/internal/toolio"
+	"zpic/internal/ycbcr"
 )
 
 const toolTimeout = 2 * time.Minute
@@ -188,6 +189,12 @@ func DecodePNG(ctx context.Context, avifData []byte, threads int) ([]byte, error
 // ConvertYCbCrToNRGBA keeps 8-bit YCbCr pixels at 8 bits through the PNG bridge.
 // The PNG encoder otherwise expands these color models to 16-bit RGB.
 func ConvertYCbCrToNRGBA(img image.Image) image.Image {
+	switch src := img.(type) {
+	case *image.YCbCr:
+		return ycbcrToNRGBA(src)
+	case *image.NYCbCrA:
+		return nycbcraToNRGBA(src)
+	}
 	switch img.ColorModel() {
 	case color.YCbCrModel, color.NYCbCrAModel:
 		bounds := img.Bounds()
@@ -197,6 +204,39 @@ func ConvertYCbCrToNRGBA(img image.Image) image.Image {
 	default:
 		return img
 	}
+}
+
+func ycbcrToNRGBA(src *image.YCbCr) *image.NRGBA {
+	b := src.Bounds()
+	dst := image.NewNRGBA(b)
+	ycbcr.ToNRGBAInto(dst, src, b)
+	return dst
+}
+
+func nycbcraToNRGBA(src *image.NYCbCrA) *image.NRGBA {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dst := image.NewNRGBA(b)
+	minX, minY := b.Min.X, b.Min.Y
+	for y := 0; y < h; y++ {
+		sy := minY + y
+		yRow := src.YOffset(minX, sy)
+		aRow := src.AOffset(minX, sy)
+		dOff := y * dst.Stride
+		for x := 0; x < w; x++ {
+			a := src.A[aRow+x]
+			if a != 0 {
+				ci := src.COffset(minX+x, sy)
+				r, g, bl := color.YCbCrToRGB(src.Y[yRow+x], src.Cb[ci], src.Cr[ci])
+				dst.Pix[dOff] = r
+				dst.Pix[dOff+1] = g
+				dst.Pix[dOff+2] = bl
+				dst.Pix[dOff+3] = a
+			}
+			dOff += 4
+		}
+	}
+	return dst
 }
 
 func validDimensions(w, h int) bool {
