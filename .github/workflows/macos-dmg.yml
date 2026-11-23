@@ -40,10 +40,10 @@ jobs:
         run: bash scripts/package-macos-dmg.sh
       - name: Upload DMG and SHA-256
         id: artifact
-        if: github.event_name == 'workflow_dispatch' || steps.package.outputs.notarized == 'true'
+        if: steps.package.outputs.dmg != '' && steps.package.outputs.checksum != ''
         uses: actions/upload-artifact@v6
         with:
-          name: z-pic-macos-arm64-${{ steps.package.outputs.notarized == 'true' && 'notarized' || 'preview' }}-${{ github.run_attempt }}
+          name: z-pic-macos-arm64-${{ steps.package.outputs.notarized == 'true' && 'notarized' || (github.event_name == 'push' && 'adhoc' || 'preview') }}-${{ github.run_attempt }}
           path: |
             ${{ steps.package.outputs.dmg }}
             ${{ steps.package.outputs.checksum }}
@@ -52,7 +52,7 @@ jobs:
 
   release:
     needs: package
-    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.package.outputs.notarized == 'true' && needs.package.outputs.artifact-id != ''
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.package.outputs.artifact-id != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -67,11 +67,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          NOTARIZED: ${{ needs.package.outputs.notarized }}
         shell: bash
         run: |
           images=( *.dmg )
           [[ "${#images[@]}" == 1 && -f "${images[0]}" ]]
           dmg="${images[0]}"
           sha256sum --check -- "$dmg.sha256"
-          gh release create "$GITHUB_REF_NAME" "$dmg" "$dmg.sha256" --verify-tag --generate-notes \
-            --notes '随包编码器的对应源码位于本版本 Source code 归档的 `scripts/sources/`，构建说明位于 `scripts/`。'
+          if [[ "$NOTARIZED" == true ]]; then
+            notes="$(printf '%s\n' \
+              '本版本应用与 DMG 已通过 Developer ID 签名及 Apple 公证。' \
+              '' \
+              '随包编码器的对应源码位于本版本 Source code 归档的 `scripts/sources/`，构建说明位于 `scripts/`。')"
+          else
+            notes="$(printf '%s\n' \
+              '> **安装提示**：本版本 DMG 使用临时签名（ad-hoc），未经过 Apple Developer ID 签名与公证。' \
+              '> 将 **Z Pic** 拖入「应用程序」后，如被 macOS 拦截（提示无法验证开发者或已损坏），请在终端执行：' \
+              '> ```sh' \
+              '> xattr -cr "/Applications/Z Pic.app"' \
+              '> ```' \
+              '> 或在尝试打开后前往「系统设置 → 隐私与安全性」点击「仍要打开」。' \
+              '' \
+              '校验镜像完整性：' \
+              '```sh' \
+              "shasum -a 256 -c $dmg.sha256" \
+              '```' \
+              '' \
+              '随包编码器的对应源码位于本版本 Source code 归档的 `scripts/sources/`，构建说明位于 `scripts/`。')"
+          fi
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$dmg.sha256" --verify-tag --generate-notes --notes "$notes"

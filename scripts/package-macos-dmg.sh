@@ -69,7 +69,7 @@ prepare_signing() {
     fi
   done
   if (( ${#missing[@]} == ${#signing_variables[@]} )); then
-    printf '未配置发布签名。此标签仅构建并校验试装包。\n'
+    printf '未配置发布签名。此标签将使用临时签名构建并校验。\n'
     return
   fi
   if (( ${#missing[@]} > 0 )); then

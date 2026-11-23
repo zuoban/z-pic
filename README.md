@@ -6,7 +6,7 @@
 
 DMG 适用于搭载 Apple 芯片并运行 **macOS 13.0 或更新版本**的 Mac。
 
-- 正式版从 GitHub Releases 下载 `.dmg` 和同名的 `.dmg.sha256`，应用与镜像均使用 Developer ID 签名，镜像附带 Apple 公证票据。
+- 正式版从 GitHub Releases 下载 `.dmg` 和同名的 `.dmg.sha256`。配置了苹果签名与公证 Secrets 时，应用与镜像使用 Developer ID 签名并附带 Apple 公证票据；未配置证书时，Release 镜像使用临时签名（ad-hoc）。
 - 试装版在 GitHub 仓库的「Actions → macOS DMG」选择目标分支并点击「Run workflow」。构建完成后，从该次运行的「Artifacts」下载并解压 `z-pic-macos-arm64-preview-*`，取出其中的 DMG 和 SHA-256 文件。对应版本的编码器源码和构建说明在该次运行的提交中，分别位于 `scripts/sources/` 和 `scripts/`。
 
 将两个文件放在同一目录。以 `0.1.0` 为例，可在该目录运行以下命令校验镜像。
@@ -15,7 +15,13 @@ DMG 适用于搭载 Apple 芯片并运行 **macOS 13.0 或更新版本**的 Mac�
 shasum -a 256 -c z-pic-0.1.0-arm64.dmg.sha256
 ```
 
-看到 `OK` 后双击 DMG，将「Z Pic」拖到「应用程序」，再从「应用程序」打开。等待主窗口出现后，可以推出磁盘映像。试装版使用临时签名。若 macOS 拦截已确认来源的试装版，尝试打开后可在「系统设置 → 隐私与安全性」中对该应用选择「仍要打开」。
+看到 `OK` 后双击 DMG，将「Z Pic」拖到「应用程序」，再从「应用程序」打开。等待主窗口出现后，可以推出磁盘映像。若下载的是临时签名（未公证）版本并被 macOS 拦截（提示无法验证开发者或已损坏），将应用拖入「应用程序」后可在终端运行：
+
+```sh
+xattr -cr "/Applications/Z Pic.app"
+```
+
+或在尝试打开后到「系统设置 → 隐私与安全性」中对该应用选择「仍要打开」。
 
 ## 使用
 
@@ -283,7 +289,7 @@ bash scripts/package-macos-dmg.sh
 | `MACOS_NOTARY_KEY_ID` | 该 API 密钥的 Key ID |
 | `MACOS_NOTARY_ISSUER_ID` | 该团队 API 密钥的 Issuer ID |
 
-标签构建收到完整配置后会签名应用和 DMG，等待 Apple 公证通过，将公证票据附到 DMG，验证 Gatekeeper 评估结果，然后把 DMG 和 SHA-256 文件作为同名标签的 Release 附件发布。未配置 Secrets 时，标签运行只在运行器上打包并校验。配置不完整或任一验证失败时，工作流以失败结束。手动运行使用临时签名生成试装附件。
+标签构建收到完整配置后会签名应用和 DMG，等待 Apple 公证通过，将公证票据附到 DMG，验证 Gatekeeper 评估结果，然后把 DMG 和 SHA-256 文件作为同名标签的 Release 附件发布。未配置 Secrets 时，标签运行会使用临时签名完成打包与校验，并同样将 DMG 和 SHA-256 发布到同名标签的 GitHub Release（Release 说明会标注未公证及首次打开方式）。配置不完整或任一验证失败时，工作流以失败结束。手动运行使用临时签名生成试装附件。
 
 原生窗口端到端测试可使用只在 `e2e` 构建中启用的 MyGo automation 插件，正式构建不导入该插件：
 
