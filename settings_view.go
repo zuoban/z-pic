@@ -142,6 +142,21 @@ func (s *application) settingsPresetSelection(c *ui.Context) {
 	})
 }
 
+func (s *application) settingsSectionStatusColor(c *ui.Context, section settingsSection) (ui.Color, string, bool) {
+	t := c.Theme()
+	switch section {
+	case settingsFolderWatch:
+		if s.anyFolderWatchRunning() {
+			return t.Success, "文件夹监听运行中", true
+		}
+	case settingsAbout:
+		if s.updateState == updateAvailable {
+			return t.Warning, "发现新版本", true
+		}
+	}
+	return ui.Transparent, "", false
+}
+
 func (s *application) settingsSidebar(c *ui.Context) {
 	t := c.Theme()
 	disabled := s.busy || s.editor.confirmDelete
@@ -153,11 +168,15 @@ func (s *application) settingsSidebar(c *ui.Context) {
 			Role(ui.RoleTabList).Label("设置分类").Children(func() {
 			for _, item := range settingsNavItems {
 				active := s.editor.section == item.section
+				dotColor, dotHint, hasDot := s.settingsSectionStatusColor(c, item.section)
 				btn := ui.ButtonBase(c.Key(fmt.Sprintf("settings-nav-%d", item.section)))
 				btn.Role(ui.RoleTab).Label(item.label).AccessSelected(active).Disabled(disabled).
 					FillWidth().Height(settingsControlHeight(c, 34)).Padding(0, 8).Gap(8).
 					Radius(innerRadius(c)).AlignItems(ui.Center).
 					Border(1, ui.Transparent).TextColor(chromeMutedColor(c))
+				if hasDot {
+					btn.Tooltip(dotHint)
+				}
 				iconColor := chromeMetadataColor(c)
 				weight := 400
 				if active {
@@ -184,6 +203,10 @@ func (s *application) settingsSidebar(c *ui.Context) {
 					ui.Icon(c, item.icon).Size(15, 15).Shrink(0).TextColor(iconColor)
 					ui.Text(c, item.label).FontSize(settingsFontSize(c, 13)).FontWeight(weight).
 						SingleLine().Width(0).Grow(1).MinWidth(0)
+					if hasDot {
+						ui.Box(c.Key(fmt.Sprintf("settings-nav-status-%d", item.section))).
+							Size(6, 6).Radius(3).Background(dotColor).Shrink(0)
+					}
 				})
 			}
 		})
@@ -202,10 +225,14 @@ func (s *application) settingsCompactNavigation(c *ui.Context) {
 				Role(ui.RoleTabList).Label("设置分类").Children(func() {
 				for _, item := range settingsNavItems {
 					active := s.editor.section == item.section
+					dotColor, dotHint, hasDot := s.settingsSectionStatusColor(c, item.section)
 					btn := ui.ButtonBase(c.Key(fmt.Sprintf("settings-nav-%d", item.section)))
 					btn.Role(ui.RoleTab).Label(item.label).AccessSelected(active).Disabled(disabled).
-						Height(navH).Padding(0, 10).Radius(innerRadius(c)).Center().
+						Height(navH).Padding(0, 10).Gap(5).Radius(innerRadius(c)).Center().
 						Border(1, ui.Transparent).TextColor(chromeMutedColor(c)).Shrink(0)
+					if hasDot {
+						btn.Tooltip(dotHint)
+					}
 					weight := 400
 					if active {
 						weight = 600
@@ -226,6 +253,10 @@ func (s *application) settingsCompactNavigation(c *ui.Context) {
 					})
 					btn.Children(func() {
 						ui.Text(c, item.label).FontSize(settingsFontSize(c, 12)).FontWeight(weight).SingleLine()
+						if hasDot {
+							ui.Box(c.Key(fmt.Sprintf("settings-nav-status-%d", item.section))).
+								Size(6, 6).Radius(3).Background(dotColor).Shrink(0)
+						}
 					})
 				}
 			})

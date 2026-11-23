@@ -8,6 +8,26 @@ import (
 	"github.com/egoist/mygo/transfer"
 )
 
+func (s *application) releaseDragStaging() {
+	if s.draggingOut {
+		return
+	}
+	s.dragStagedResult = nil
+	s.dragStagedPath = ""
+	if s.dragTempDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(s.dragTempDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "export-") {
+			_ = os.RemoveAll(filepath.Join(s.dragTempDir, entry.Name()))
+		}
+	}
+}
+
 func (s *application) cleanupDragStaging() {
 	if s.dragTempDir != "" {
 		_ = os.RemoveAll(s.dragTempDir)
@@ -119,6 +139,9 @@ func (s *application) dragExportOptions() transfer.DragOptions {
 		Operations: transfer.Copy,
 		Done: func(result transfer.Result) {
 			s.draggingOut = false
+			if s.result != s.dragStagedResult || s.batch != nil || s.overwritten {
+				s.releaseDragStaging()
+			}
 			if result.Err != nil {
 				s.setMessage("拖出文件失败："+result.Err.Error(), true)
 			}

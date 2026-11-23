@@ -235,11 +235,13 @@ func TestBatchRowContextMenuItemsByState(t *testing.T) {
 	pendingPath := filepath.Join(root, "pending.jpg")
 	donePath := filepath.Join(root, "done.jpg")
 	doneSavedPath := filepath.Join(root, "done-out.jpg")
+	overwrittenPath := filepath.Join(root, "overwritten.jpg")
 	failedPath := filepath.Join(root, "failed.jpg")
 	invalidPath := filepath.Join(root, "broken.png")
 	writeTestJPEG(t, pendingPath, 80, 60, 95)
 	writeTestJPEG(t, donePath, 80, 60, 95)
 	writeTestJPEG(t, doneSavedPath, 80, 60, 60)
+	writeTestJPEG(t, overwrittenPath, 80, 60, 60)
 	writeTestJPEG(t, failedPath, 80, 60, 95)
 	if err := os.WriteFile(invalidPath, []byte("not-a-png"), 0o600); err != nil {
 		t.Fatal(err)
@@ -253,33 +255,51 @@ func TestBatchRowContextMenuItemsByState(t *testing.T) {
 		{path: donePath, absPath: donePath, relPath: "done.jpg", format: "jpeg", width: 80, height: 60, originalSize: 4000, outputSize: 2000, status: batchDone, savedPath: doneSavedPath},
 		{path: failedPath, absPath: failedPath, relPath: "failed.jpg", format: "jpeg", width: 80, height: 60, originalSize: 4000, status: batchFailed, errMsg: "写入失败"},
 		{path: invalidPath, absPath: invalidPath, relPath: "broken.png", format: "png", status: batchFailed, invalidInput: true, errMsg: "无法解码"},
+		{path: overwrittenPath, absPath: overwrittenPath, relPath: "overwritten.jpg", format: "jpeg", width: 80, height: 60, originalSize: 4000, outputSize: 2000, status: batchDone, overwritten: true},
 	})
 	s.batch.selected = 0
 
 	tt := ui.NewTester(s.view, 960, 680)
 	tt.UseScreenReader()
 
-	// 1) Right-clicking done.jpg selects index 1 and shows done-state menu items.
+	// 1) Right-clicking non-overwritten done.jpg selects index 1 and shows 重新压缩 alongside done-state menu items.
 	if err := tt.RightClick("done.jpg"); err != nil {
 		t.Fatal(err)
 	}
 	if s.batch.selected != 1 {
 		t.Fatalf("right-clicking done.jpg must select row 1, got %d", s.batch.selected)
 	}
-	for _, want := range []string{"预览", "定位文件", "复制图片", "从队列移除"} {
+	for _, want := range []string{"预览", "重新压缩", "定位文件", "复制图片", "从队列移除"} {
 		if _, ok := tt.AccessByRole(ui.RoleMenuItem, want); !ok {
 			t.Fatalf("done row context menu missing %q", want)
 		}
 	}
-	for _, unwanted := range []string{"开始压缩", "重新压缩"} {
-		if _, ok := tt.AccessByRole(ui.RoleMenuItem, unwanted); ok {
-			t.Fatalf("done row context menu must not show %q", unwanted)
-		}
+	if _, ok := tt.AccessByRole(ui.RoleMenuItem, "开始压缩"); ok {
+		t.Fatal("done row context menu must not show 开始压缩")
 	}
 	clickContextMenuItem(t, tt, "定位文件")
 	if len(revealed) != 1 || revealed[0] != doneSavedPath {
 		t.Fatalf("expected 定位文件 on done row to reveal savedPath %q, got %v", doneSavedPath, revealed)
 	}
+
+	// 1b) Right-clicking overwritten.jpg selects index 4 and omits 重新压缩 to prevent accidental re-overwrite.
+	if err := tt.RightClick("overwritten.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if s.batch.selected != 4 {
+		t.Fatalf("right-clicking overwritten.jpg must select row 4, got %d", s.batch.selected)
+	}
+	for _, want := range []string{"预览", "定位文件", "复制图片", "从队列移除"} {
+		if _, ok := tt.AccessByRole(ui.RoleMenuItem, want); !ok {
+			t.Fatalf("overwritten done row context menu missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"开始压缩", "重新压缩"} {
+		if _, ok := tt.AccessByRole(ui.RoleMenuItem, unwanted); ok {
+			t.Fatalf("overwritten done row context menu must not show %q", unwanted)
+		}
+	}
+	tt.Key(0, ui.KeyEscape)
 
 	// 2) Right-clicking pending.jpg selects index 0 and shows pending-state menu items.
 	if err := tt.RightClick("pending.jpg"); err != nil {
@@ -355,7 +375,7 @@ func TestBatchRowContextMenuItemsByState(t *testing.T) {
 		t.Fatalf("从队列移除 must be disabled while running: ok=%v info=%+v", ok, removeItem)
 	}
 	tt.ClickAt(removeItem.Bounds.X+removeItem.Bounds.W/2, removeItem.Bounds.Y+removeItem.Bounds.H/2)
-	if len(s.batch.items) != 4 {
+	if len(s.batch.items) != 5 {
 		t.Fatalf("clicking disabled 从队列移除 must not remove item: len=%d", len(s.batch.items))
 	}
 	tt.Key(0, ui.KeyEscape)
@@ -463,6 +483,21 @@ func TestBatchRowContextMenuActions(t *testing.T) {
 	tt.Frame()
 	if s.batch.items[1].status != batchDone {
 		t.Fatalf("expected failed.jpg to complete via context menu 重新压缩, got status=%v", s.batch.items[1].status)
+	}
+
+	// Action 3b: 重新压缩 from context menu recompresses non-overwritten done.jpg and stays in list view.
+	prevDoneSaved := s.batch.items[2].savedPath
+	if err := tt.RightClick("done.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	clickContextMenuItem(t, tt, "重新压缩")
+	drainUpdates(func() bool { return s.busy })
+	tt.Frame()
+	if s.batch.items[2].status != batchDone || s.batch.items[2].savedPath == "" || s.batch.items[2].savedPath == prevDoneSaved {
+		t.Fatalf("expected done.jpg to recompress to a fresh output via context menu, prev=%q got=%+v", prevDoneSaved, s.batch.items[2])
+	}
+	if s.batch.previewOpen {
+		t.Fatal("context menu recompress from list must stay in list view")
 	}
 
 	// Action 4: 复制图片 from context menu copies output image for done.jpg.

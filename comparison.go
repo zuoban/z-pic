@@ -18,31 +18,37 @@ const (
 	previewDiff
 )
 
-const comparisonDividerHitHalfWidth = 20
+const (
+	comparisonDividerHitHalfWidth = 20
+	comparisonNarrowCanvasWidth   = 480
+)
 
 type comparisonView struct {
-	mode               int
-	split              float64
-	scale              float64
-	offset             ui.Point
-	viewport           ui.Rect
-	viewportProbed     bool
-	panning            bool
-	panSuppressSlider  bool
-	panFrozenSplit     float64
-	preClickSplit      float64
-	hasPreClickSplit   bool
-	pendingDoubleClick bool
-	doubleClickOrigin  ui.Point
-	panPointer         ui.Point
+	mode                 int
+	split                float64
+	scale                float64
+	offset               ui.Point
+	viewport             ui.Rect
+	viewportProbed       bool
+	panning              bool
+	panSuppressSlider    bool
+	panFrozenSplit       float64
+	preClickSplit        float64
+	hasPreClickSplit     bool
+	pendingDoubleClick   bool
+	doubleClickOnDivider bool
+	doubleClickOrigin    ui.Point
+	panPointer           ui.Point
 
-	diffBitmap  *ui.Bitmap
-	diffMetrics compress.QualityMetrics
-	diffReady   bool
-	diffLoading bool
-	diffError   string
-	diffGen     uint64
-	diffCancel  context.CancelFunc
+	diffBitmap      *ui.Bitmap
+	diffMetrics     compress.QualityMetrics
+	diffReady       bool
+	diffHasHeatmap  bool
+	diffLoading     bool
+	diffWantHeatmap bool
+	diffError       string
+	diffGen         uint64
+	diffCancel      context.CancelFunc
 }
 
 func (s *application) cancelComparisonDiff() {
@@ -51,6 +57,7 @@ func (s *application) cancelComparisonDiff() {
 		s.comparison.diffCancel = nil
 	}
 	s.comparison.diffLoading = false
+	s.comparison.diffWantHeatmap = false
 }
 
 func (s *application) clearComparisonDiff() {
@@ -59,6 +66,7 @@ func (s *application) clearComparisonDiff() {
 	s.comparison.diffBitmap = nil
 	s.comparison.diffMetrics = compress.QualityMetrics{}
 	s.comparison.diffReady = false
+	s.comparison.diffHasHeatmap = false
 	s.comparison.diffError = ""
 }
 
@@ -77,9 +85,19 @@ func (s *application) resetComparison() {
 }
 
 func (s *application) ensureComparisonDiff() {
-	if s.closed || s.file == nil || s.result == nil || s.overwritten ||
-		s.comparison.diffReady || s.comparison.diffLoading || s.comparison.diffError != "" {
+	if s.closed || s.file == nil || s.result == nil || s.overwritten || s.comparison.diffError != "" {
 		return
+	}
+	wantHeatmap := s.comparison.mode == previewDiff
+	if s.comparison.diffReady && (!wantHeatmap || s.comparison.diffHasHeatmap) {
+		return
+	}
+	if s.comparison.diffLoading {
+		if !wantHeatmap || s.comparison.diffWantHeatmap {
+			return
+		}
+		// Upgrade an in-flight metrics-only pass to compute the full heatmap.
+		s.cancelComparisonDiff()
 	}
 	origData := s.file.data
 	compData := s.result.Data
@@ -105,6 +123,7 @@ func (s *application) ensureComparisonDiff() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.comparison.diffCancel = cancel
 	s.comparison.diffLoading = true
+	s.comparison.diffWantHeatmap = wantHeatmap
 	info := compress.ImageInfo{
 		Path:   s.file.path,
 		Format: s.file.format,
@@ -124,30 +143,36 @@ func (s *application) ensureComparisonDiff() {
 		if memErr != nil {
 			err = memErr
 		} else {
-			m, heatmap, analyzeErr := compress.AnalyzeVisualDiffBytes(ctx, origData, compData)
-			metrics, err = m, analyzeErr
-			if err == nil && heatmap != nil && ctx.Err() == nil {
-				bitmap = ui.NewBitmap(heatmap)
+			if wantHeatmap {
+				m, heatmap, analyzeErr := compress.AnalyzeVisualDiffBytes(ctx, origData, compData)
+				metrics, err = m, analyzeErr
+				if err == nil && heatmap != nil && ctx.Err() == nil {
+					bitmap = ui.NewBitmap(heatmap)
+				}
+			} else {
+				metrics, err = compress.MeasureQualityMetricsBytes(ctx, origData, compData)
 			}
 			release()
 		}
-		if err == nil {
-			err = ctx.Err()
+		if ctx.Err() != nil {
+			return
 		}
 		s.updateWithInvalidate(false, func() {
 			if s.comparison.diffGen != gen {
 				return
 			}
 			s.comparison.diffLoading = false
+			s.comparison.diffWantHeatmap = false
 			s.comparison.diffCancel = nil
 			if err != nil {
-				if ctx.Err() == nil {
-					s.comparison.diffError = err.Error()
-				}
+				s.comparison.diffError = err.Error()
 				return
 			}
 			s.comparison.diffMetrics = metrics
-			s.comparison.diffBitmap = bitmap
+			if wantHeatmap {
+				s.comparison.diffBitmap = bitmap
+				s.comparison.diffHasHeatmap = bitmap != nil
+			}
 			s.comparison.diffReady = true
 		})
 	}()
@@ -165,6 +190,35 @@ func formatQualityMetricsSummary(m compress.QualityMetrics) string {
 		return fmt.Sprintf("已缩放 · SSIM %.3f · PSNR %s", m.SSIM, psnr)
 	}
 	return fmt.Sprintf("SSIM %.3f · PSNR %s · 变化 %.1f%%", m.SSIM, psnr, m.ChangedPercent)
+}
+
+func formatQualityMetricsCompact(m compress.QualityMetrics) string {
+	if m.Identical {
+		return "无损一致"
+	}
+	if m.Resized {
+		return fmt.Sprintf("已缩放 · SSIM %.3f", m.SSIM)
+	}
+	return fmt.Sprintf("SSIM %.3f", m.SSIM)
+}
+
+func formatComparisonResultBadge(result *compress.Result, showDelta bool) string {
+	base := "压缩后 · " + formatSize(result.OutputSize)
+	if !showDelta || result.Unchanged || result.OriginalSize <= 0 || result.OutputSize == result.OriginalSize {
+		return base
+	}
+	delta := float64(result.OutputSize-result.OriginalSize) / float64(result.OriginalSize) * 100
+	rounded := int(math.Round(math.Abs(delta)))
+	if rounded == 0 {
+		if result.OutputSize < result.OriginalSize {
+			return base + " (-<1%)"
+		}
+		return base + " (+<1%)"
+	}
+	if result.OutputSize < result.OriginalSize {
+		return fmt.Sprintf("%s (-%d%%)", base, rounded)
+	}
+	return fmt.Sprintf("%s (+%d%%)", base, rounded)
 }
 
 func formatQualityMetricsTooltip(m compress.QualityMetrics) string {
@@ -212,10 +266,14 @@ func (s *application) previewCanPan(bounds ui.Rect) bool {
 }
 
 func (s *application) nearComparisonDivider(width, localX float32) bool {
+	return nearComparisonDividerAt(width, localX, s.comparison.split)
+}
+
+func nearComparisonDividerAt(width, localX float32, split float64) bool {
 	if width <= 0 {
 		return true
 	}
-	divider := width * float32(s.comparison.split/100)
+	divider := width * float32(split/100)
 	handleX := min(width-16, max(16, divider))
 	return math.Abs(float64(localX-divider)) <= comparisonDividerHitHalfWidth ||
 		math.Abs(float64(localX-handleX)) <= comparisonDividerHitHalfWidth
@@ -488,6 +546,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 	}
 	if s.previewLocked() {
 		s.comparison.pendingDoubleClick = false
+		s.comparison.doubleClickOnDivider = false
 	}
 	var canvas ui.Element
 	splitBeforeSlider := s.comparison.split
@@ -500,7 +559,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 		}
 		canvas = ui.SliderBase(c.Key("comparison"), splitTarget, 0, 100).
 			Step(1).Label("原图与压缩结果对比").
-			Description("左侧原图，右侧压缩后。拖动或使用方向键调整分隔线，放大后拖动图片平移，Home 和 End 查看整张图片。")
+			Description("左侧原图，右侧压缩后。拖动或使用方向键调整分隔线，双击分隔线居中，放大后拖动图片平移，Home 和 End 查看整张图片。")
 		if suppressSlider {
 			s.comparison.split = s.comparison.panFrozenSplit
 			if !s.comparison.panning {
@@ -560,6 +619,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 		if s.previewLocked() {
 			s.comparison.panning = false
 			s.comparison.pendingDoubleClick = false
+			s.comparison.doubleClickOnDivider = false
 			return false
 		}
 		switch event.Kind {
@@ -567,8 +627,14 @@ func (s *application) previewCanvas(c *ui.Context) {
 			if event.Button == 0 && event.Clicks == 2 {
 				s.comparison.pendingDoubleClick = true
 				s.comparison.doubleClickOrigin = ui.Point{X: event.X, Y: event.Y}
+				refSplit := splitBeforeSlider
+				if s.comparison.hasPreClickSplit {
+					refSplit = s.comparison.preClickSplit
+				}
+				s.comparison.doubleClickOnDivider = comparing && nearComparisonDividerAt(s.comparison.viewport.W, event.X, refSplit)
 			} else {
 				s.comparison.pendingDoubleClick = false
+				s.comparison.doubleClickOnDivider = false
 				if event.Button == 0 && event.Clicks == 1 && comparing {
 					s.comparison.preClickSplit = splitBeforeSlider
 					s.comparison.hasPreClickSplit = true
@@ -592,6 +658,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 			if s.comparison.pendingDoubleClick &&
 				math.Hypot(float64(event.X-s.comparison.doubleClickOrigin.X), float64(event.Y-s.comparison.doubleClickOrigin.Y)) > 4 {
 				s.comparison.pendingDoubleClick = false
+				s.comparison.doubleClickOnDivider = false
 			}
 			if !s.comparison.panning {
 				return false
@@ -606,8 +673,17 @@ func (s *application) previewCanvas(c *ui.Context) {
 			s.comparison.panning = false
 			if s.comparison.pendingDoubleClick {
 				origin := s.comparison.doubleClickOrigin
+				onDivider := s.comparison.doubleClickOnDivider
 				s.comparison.pendingDoubleClick = false
+				s.comparison.doubleClickOnDivider = false
 				if math.Hypot(float64(event.X-origin.X), float64(event.Y-origin.Y)) <= 4 {
+					if comparing && onDivider {
+						s.comparison.hasPreClickSplit = false
+						s.comparison.split = 50
+						s.comparison.panSuppressSlider = true
+						s.comparison.panFrozenSplit = 50
+						return true
+					}
 					frozen := splitBeforeSlider
 					if s.comparison.hasPreClickSplit {
 						frozen = s.comparison.preClickSplit
@@ -720,7 +796,8 @@ func (s *application) previewCanvas(c *ui.Context) {
 			}
 			return el
 		}
-		renderQualityBadge := func() {
+		narrowCanvas := s.comparison.viewport.W > 0 && s.comparison.viewport.W < comparisonNarrowCanvasWidth
+		renderQualityBadge := func(compact bool) {
 			dotColor := t.Success
 			if !s.comparison.diffMetrics.Identical {
 				if s.comparison.diffMetrics.SSIM < 0.90 {
@@ -730,16 +807,20 @@ func (s *application) previewCanvas(c *ui.Context) {
 				}
 			}
 			summary := formatQualityMetricsSummary(s.comparison.diffMetrics)
+			if compact {
+				summary = formatQualityMetricsCompact(s.comparison.diffMetrics)
+			}
 			styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5).MinWidth(0)).
 				Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics)).Children(func() {
 				ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(dotColor)
 				ui.Text(c, summary).
-					FontSize(11).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).SingleLine().MinWidth(0)
+					FontSize(11).FontWeight(500).FontFeatures("tnum").TextColor(t.Text).
+					SingleLine().TruncateMiddle().MinWidth(0)
 			})
 		}
 		ui.Row(c).Absolute().Top(10).Left(10).Right(10).Gap(8).AlignItems(ui.Center).Children(func() {
 			if s.comparison.mode == previewDiff {
-				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).
+				styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0)).
 					Tooltip("蓝：几乎无差异 · 青：轻微差异 · 黄：中等差异 · 红：明显像素差异").
 					Children(func() {
 						ui.Text(c, "差异热力图").FontSize(11).FontWeight(500).TextColor(t.Text).SingleLine()
@@ -773,10 +854,6 @@ func (s *application) previewCanvas(c *ui.Context) {
 					})
 				ui.Box(c).Grow(1)
 				switch {
-				case s.comparison.diffLoading:
-					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
-						ui.Text(c, "正在计算画质差异…").FontSize(11).FontWeight(500).TextColor(t.TextMuted).SingleLine()
-					})
 				case s.comparison.diffError != "":
 					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(6)).Tooltip(s.comparison.diffError).Children(func() {
 						ui.Box(c).Size(6, 6).Radius(3).Background(t.Danger)
@@ -792,7 +869,11 @@ func (s *application) previewCanvas(c *ui.Context) {
 						}
 					})
 				case s.comparison.diffReady:
-					renderQualityBadge()
+					renderQualityBadge(false)
+				case s.comparison.diffLoading:
+					styleBadge(ui.Row(c).AlignItems(ui.Center).Gap(5)).Children(func() {
+						ui.Text(c, "正在计算画质差异…").FontSize(11).FontWeight(500).TextColor(t.TextMuted).SingleLine()
+					})
 				}
 				return
 			}
@@ -805,7 +886,7 @@ func (s *application) previewCanvas(c *ui.Context) {
 			}
 			ui.Box(c).Grow(1)
 			if comparing && s.comparison.diffReady {
-				renderQualityBadge()
+				renderQualityBadge(narrowCanvas)
 				ui.Box(c).Grow(1)
 			}
 			if comparing || s.comparison.mode == previewResult {
@@ -820,9 +901,10 @@ func (s *application) previewCanvas(c *ui.Context) {
 				if s.comparison.diffReady {
 					badge.Tooltip(formatQualityMetricsTooltip(s.comparison.diffMetrics))
 				}
+				resultLabel := formatComparisonResultBadge(s.result, !narrowCanvas)
 				badge.Children(func() {
 					ui.Box(c).Size(6, 6).Radius(3).Background(dotColor)
-					ui.Text(c, "压缩后 · "+formatSize(s.result.OutputSize)).FontSize(11).FontWeight(500).
+					ui.Text(c, resultLabel).FontSize(11).FontWeight(500).
 						FontFeatures("tnum").TextColor(t.Text).SingleLine()
 				})
 			}

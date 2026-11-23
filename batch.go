@@ -86,22 +86,23 @@ func (item batchItem) effectiveSourceFormat() string {
 }
 
 type batchState struct {
-	items           []batchItem
-	outputMode      int
-	outputDir       string
-	filter          int
-	sort            int
-	query           string
-	list            ui.ListState
-	selected        int
-	listSelected    int
-	listSelectedKey string
-	previewOpen     bool
-	previewIndex    int
-	done            int
-	total           int
-	running         bool
-	currentName     string
+	items             []batchItem
+	outputMode        int
+	outputDir         string
+	filter            int
+	sort              int
+	query             string
+	list              ui.ListState
+	selected          int
+	listSelected      int
+	listSelectedKey   string
+	previewOpen       bool
+	previewIndex      int
+	returnPreviewPath string
+	done              int
+	total             int
+	running           bool
+	currentName       string
 
 	cacheReady     bool
 	cachedStates   []batchItemSnapshot
@@ -361,11 +362,14 @@ func (s *application) deleteBatchItems(shouldRemove func(index int, item batchIt
 	if s.modalOpen() || s.batch == nil || s.batch.running {
 		return 0
 	}
-	visPos := slices.Index(s.filteredBatchIndices(), s.batch.selected)
+	oldVisible := s.filteredBatchIndices()
+	visPos := slices.Index(oldVisible, s.batch.selected)
 	oldSelected := s.batch.selected
 	oldPreview := -1
+	oldPreviewPos := -1
 	if s.batch.previewOpen {
 		oldPreview = s.batch.previewIndex
+		oldPreviewPos = slices.Index(oldVisible, oldPreview)
 	}
 
 	kept := make([]batchItem, 0, len(s.batch.items))
@@ -391,28 +395,75 @@ func (s *application) deleteBatchItems(shouldRemove func(index int, item batchIt
 		s.prepareThumbnailCache()
 		return removed
 	}
+	previewTargetPos := oldPreview
+	if oldPreviewPos >= 0 {
+		previewTargetPos = 0
+		for _, idx := range oldVisible[:oldPreviewPos] {
+			if idx >= 0 && idx < len(newIndex) && newIndex[idx] >= 0 {
+				previewTargetPos++
+			}
+		}
+	}
 	s.batch.items = kept
+	nextPreview := -1
+	closePreview := false
 	if oldPreview >= 0 && oldPreview < len(newIndex) {
 		if mapped := newIndex[oldPreview]; mapped >= 0 {
 			s.batch.previewIndex = mapped
 		} else {
-			s.closeBatchPreview()
+			closePreview = true
+			nextPreview = s.nextPreviewableBatchIndex(s.filteredBatchIndices(), previewTargetPos)
 		}
 	}
 	s.batch.done, s.batch.total, s.batch.currentName = 0, 0, ""
-	if oldSelected >= 0 && oldSelected < len(newIndex) {
+	if nextPreview >= 0 {
+		s.batch.selected = nextPreview
+	} else if oldSelected >= 0 && oldSelected < len(newIndex) {
 		if mapped := newIndex[oldSelected]; mapped >= 0 && slices.Index(s.filteredBatchIndices(), mapped) >= 0 {
 			s.batch.selected = mapped
-			return removed
+		} else {
+			visible := s.filteredBatchIndices()
+			if visPos >= 0 && len(visible) > 0 {
+				s.batch.selected = visible[min(visPos, len(visible)-1)]
+			} else {
+				s.batch.selected = -1
+			}
+		}
+	} else {
+		visible := s.filteredBatchIndices()
+		if visPos >= 0 && len(visible) > 0 {
+			s.batch.selected = visible[min(visPos, len(visible)-1)]
+		} else {
+			s.batch.selected = -1
 		}
 	}
-	visible := s.filteredBatchIndices()
-	if visPos >= 0 && len(visible) > 0 {
-		s.batch.selected = visible[min(visPos, len(visible)-1)]
-	} else {
-		s.batch.selected = -1
+	if closePreview {
+		s.closeBatchPreview()
+		if nextPreview >= 0 {
+			s.openBatchPreview(nextPreview)
+		}
 	}
 	return removed
+}
+
+func (s *application) nextPreviewableBatchIndex(visible []int, targetPos int) int {
+	if s.batch == nil || len(visible) == 0 {
+		return -1
+	}
+	if targetPos < 0 {
+		targetPos = 0
+	}
+	for i := targetPos; i < len(visible); i++ {
+		if idx := visible[i]; idx >= 0 && idx < len(s.batch.items) && !s.batch.items[idx].invalidInput {
+			return idx
+		}
+	}
+	for i := min(targetPos-1, len(visible)-1); i >= 0; i-- {
+		if idx := visible[i]; idx >= 0 && idx < len(s.batch.items) && !s.batch.items[idx].invalidInput {
+			return idx
+		}
+	}
+	return -1
 }
 
 func (s *application) invalidateBatchResults() {
@@ -481,10 +532,34 @@ func (s *application) compressBatchItem(index int) {
 	s.beginBatchRunMode(batchRunSingle, index)
 }
 
+func batchItemPreviewKey(item batchItem) string {
+	if item.absPath != "" {
+		return item.absPath
+	}
+	return item.path
+}
+
+func batchItemCanSingleRun(item batchItem) bool {
+	if item.invalidInput {
+		return false
+	}
+	switch item.status {
+	case batchPending, batchFailed:
+		return true
+	case batchDone:
+		return !item.overwritten
+	default:
+		return false
+	}
+}
+
 func (s *application) clearPendingBatchConfirmation() {
 	s.pendingBatchRestart = false
 	s.pendingBatchRun = batchRunPending
 	s.pendingBatchIndex = -1
+	if s.batch != nil {
+		s.batch.returnPreviewPath = ""
+	}
 }
 
 func (s *application) effectivePendingBatchRun() (batchRunMode, int) {
@@ -505,7 +580,7 @@ func itemMatchesBatchRunMode(index int, item batchItem, mode batchRunMode, singl
 	case batchRunRetryFailed:
 		return item.status == batchFailed
 	case batchRunSingle:
-		return index == singleIndex && (item.status == batchPending || item.status == batchFailed)
+		return index == singleIndex && batchItemCanSingleRun(item)
 	default:
 		return item.status == batchPending
 	}
@@ -554,6 +629,12 @@ func (s *application) beginBatchRunMode(mode batchRunMode, singleIndex int) {
 		s.setMessage("请选择固定输出目录", true)
 		return
 	}
+	if mode == batchRunSingle && s.batch.previewOpen && s.batch.previewIndex == singleIndex &&
+		singleIndex >= 0 && singleIndex < len(s.batch.items) {
+		s.batch.returnPreviewPath = batchItemPreviewKey(s.batch.items[singleIndex])
+	} else {
+		s.batch.returnPreviewPath = ""
+	}
 	if s.batch.outputMode == batchOutputOverwrite && s.batchRunWillOverwriteAny(mode, singleIndex) {
 		s.pendingBatchRun = mode
 		s.pendingBatchIndex = singleIndex
@@ -586,10 +667,16 @@ func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex
 		s.update(func() {
 			s.busy, s.phase = false, ""
 			if err != nil {
+				if s.batch != nil {
+					s.batch.returnPreviewPath = ""
+				}
 				s.setMessage("无法打开文件夹选择器："+err.Error(), true)
 				return
 			}
 			if len(paths) == 0 || s.batch == nil {
+				if s.batch != nil {
+					s.batch.returnPreviewPath = ""
+				}
 				return
 			}
 			s.startBatchWithPickedOutputDir(paths[0], mode, singleIndex)
@@ -598,8 +685,15 @@ func (s *application) promptOutputDirAndStartMode(mode batchRunMode, singleIndex
 }
 
 func (s *application) startBatchWithPickedOutputDir(dir string, mode batchRunMode, singleIndex int) {
-	if dir == "" || s.batch == nil {
+	if s.batch == nil {
 		return
+	}
+	if dir == "" {
+		s.batch.returnPreviewPath = ""
+		return
+	}
+	if mode != batchRunSingle {
+		s.batch.returnPreviewPath = ""
 	}
 	prevDir := s.batch.outputDir
 	s.batch.outputDir = dir
@@ -619,7 +713,13 @@ func (s *application) executeConfirmedBatchOverwrite() {
 		return
 	}
 	mode, index := s.effectivePendingBatchRun()
+	returnPreviewPath := ""
+	if mode == batchRunSingle && s.batch.previewOpen && s.batch.previewIndex == index &&
+		index >= 0 && index < len(s.batch.items) {
+		returnPreviewPath = batchItemPreviewKey(s.batch.items[index])
+	}
 	s.clearPendingBatchConfirmation()
+	s.batch.returnPreviewPath = returnPreviewPath
 	s.confirmBatchOverwrite = false
 	s.launchBatchWorkerMode(mode, index)
 }
@@ -636,12 +736,21 @@ func (s *application) launchBatchWorkerMode(mode batchRunMode, singleIndex int) 
 	if s.busy || s.batch == nil {
 		return
 	}
+	if mode != batchRunSingle {
+		s.batch.returnPreviewPath = ""
+	} else if s.batch.previewOpen && s.batch.previewIndex == singleIndex &&
+		singleIndex >= 0 && singleIndex < len(s.batch.items) {
+		s.batch.returnPreviewPath = batchItemPreviewKey(s.batch.items[singleIndex])
+	}
 	tasks, usedPaths := s.prepareBatchTasks(mode, singleIndex)
 	s.launchPreparedBatchWorker(tasks, usedPaths)
 }
 
 func (s *application) launchPreparedBatchWorker(tasks []batchTask, usedPaths map[string]bool) {
 	if len(tasks) == 0 {
+		if s.batch != nil {
+			s.batch.returnPreviewPath = ""
+		}
 		return
 	}
 	options := s.compressionOptions()
@@ -779,6 +888,8 @@ func (s *application) completeBatchRun(ctx context.Context) {
 	}
 	s.batch.running = false
 	s.batch.currentName = ""
+	returnPreviewPath := s.batch.returnPreviewPath
+	s.batch.returnPreviewPath = ""
 	for i := range s.batch.items {
 		if s.batch.items[i].status == batchProcessing {
 			s.batch.items[i].status = batchPending
@@ -789,25 +900,26 @@ func (s *application) completeBatchRun(ctx context.Context) {
 		s.setMessage(fmt.Sprintf("已取消，已完成 %d 张，剩余 %d 张。", done, pending), false)
 		return
 	}
-	if pending > 0 {
-		if failed > 0 {
-			s.setMessage(fmt.Sprintf("当前已完成 %d 张，失败 %d 张，剩余 %d 张待压缩。", done, failed, pending), true)
-			return
-		}
+	switch {
+	case pending > 0 && failed > 0:
+		s.setMessage(fmt.Sprintf("当前已完成 %d 张，失败 %d 张，剩余 %d 张待压缩。", done, failed, pending), true)
+	case pending > 0:
 		s.setMessage(fmt.Sprintf("当前已完成 %d 张，剩余 %d 张待压缩。", done, pending), false)
-		return
-	}
-	if failed > 0 && done == 0 {
+	case failed > 0 && done == 0:
 		s.setMessage(fmt.Sprintf("批处理完成，%d 张图片处理失败。", failed), true)
-		return
-	}
-	if failed > 0 {
+	case failed > 0:
 		s.setMessage(fmt.Sprintf("批处理完成：成功 %d 张，失败 %d 张。", done, failed), true)
-		return
-	}
-	if s.batch.outputMode == batchOutputOverwrite {
+	case s.batch.outputMode == batchOutputOverwrite:
 		s.setMessage(fmt.Sprintf("批处理完成，已处理 %d 张图片。", done), false)
-		return
+	default:
+		s.setMessage(fmt.Sprintf("批处理完成，已保存 %d 张到目标文件夹。", done), false)
 	}
-	s.setMessage(fmt.Sprintf("批处理完成，已保存 %d 张到目标文件夹。", done), false)
+	if !s.closed && returnPreviewPath != "" {
+		for i, item := range s.batch.items {
+			if !item.invalidInput && batchItemPreviewKey(item) == returnPreviewPath {
+				s.openBatchPreview(i)
+				return
+			}
+		}
+	}
 }

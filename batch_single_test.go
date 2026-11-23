@@ -163,9 +163,28 @@ func TestBatchSinglePendingActionGuardsAndLayout(t *testing.T) {
 			}
 			for _, status := range []batchStatus{batchDone, batchProcessing, batchFailed} {
 				app.batch.items[0].status = status
+				app.batch.items[0].overwritten = false
 				tester.Frame()
 				if _, ok := tester.AccessByRole(ui.RoleButton, "压缩此张"); ok {
 					t.Fatalf("pending-item action must be hidden for status %v", status)
+				}
+				if status == batchDone {
+					if _, ok := tester.AccessByRole(ui.RoleButton, "重新压缩此张"); !ok {
+						t.Fatal("non-overwritten done item must show 重新压缩此张 in preview")
+					}
+					if app.batchRunTargetCount(batchRunSingle, 0) != 1 {
+						t.Fatal("non-overwritten done item must be eligible for single-item recompression")
+					}
+					app.batch.items[0].overwritten = true
+					tester.Frame()
+					if _, ok := tester.AccessByRole(ui.RoleButton, "重新压缩此张"); ok {
+						t.Fatal("overwritten done item must hide 重新压缩此张")
+					}
+					if app.batchRunTargetCount(batchRunSingle, 0) != 0 {
+						t.Fatal("overwritten done item must be rejected by single-item mode")
+					}
+					app.batch.items[0].overwritten = false
+					continue
 				}
 				if status != batchFailed && app.batchRunTargetCount(batchRunSingle, 0) != 0 {
 					t.Fatalf("single-item mode must reject status %v", status)

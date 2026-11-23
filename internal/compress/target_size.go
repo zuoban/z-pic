@@ -152,7 +152,14 @@ func searchTargetSize[T any](ctx context.Context, initial T, initialRank int, ta
 
 const maxTargetResizeAttempts = 6
 
-func searchTargetResize(ctx context.Context, baseline *encodedImage, target int64, minDimension int, encode func(int) (*encodedImage, error)) (*encodedImage, error) {
+func searchTargetResize(
+	ctx context.Context,
+	baseline *encodedImage,
+	target int64,
+	minDimension int,
+	probe func(int) (*encodedImage, error),
+	refine func(int) (*encodedImage, error),
+) (*encodedImage, error) {
 	smallest := baseline
 	baselineLongEdge := max(baseline.width, baseline.height)
 	smallestEdge := baselineLongEdge
@@ -181,7 +188,7 @@ func searchTargetResize(ctx context.Context, baseline *encodedImage, target int6
 			probedMin = true
 		}
 
-		candidate, err := encode(mid)
+		candidate, err := probe(mid)
 		if cancelErr := ctx.Err(); cancelErr != nil {
 			return nil, cancelErr
 		}
@@ -208,6 +215,22 @@ func searchTargetResize(ctx context.Context, baseline *encodedImage, target int6
 		}
 	}
 	if bestFit != nil {
+		if refine == nil {
+			return bestFit, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		refined, err := refine(bestFitEdge)
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return nil, cancelErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		if err == nil && refined != nil && int64(len(refined.data)) <= target {
+			return refined, nil
+		}
 		return bestFit, nil
 	}
 	return smallest, nil

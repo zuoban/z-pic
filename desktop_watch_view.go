@@ -263,8 +263,23 @@ func (s *application) folderWatchDirectoryField(c *ui.Context, key, label, dir s
 					Width(0).Grow(1).MinWidth(0).SingleLine().TruncateMiddle().Tooltip(display)
 			})
 		})
-		settingsButton(c, key, "选择…", 28, disabled).FontSize(settingsFontSize(c, 12)).Padding(0, 10).
-			Label("选择" + label).Shrink(0).OnClick(choose)
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
+			if strings.TrimSpace(dir) != "" {
+				openDisabled := s.editor != nil && s.editor.confirmDelete
+				dirCopy := dir
+				settingsButton(c, key+"-open", "打开", 28, openDisabled).
+					FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+					Label("打开" + label).Tooltip("在文件夹中打开").Shrink(0).
+					OnClick(func() {
+						if s.editor != nil && s.editor.confirmDelete {
+							return
+						}
+						s.openFolderWatchDirectory(dirCopy)
+					})
+			}
+			settingsButton(c, key, "选择…", 28, disabled).FontSize(settingsFontSize(c, 12)).Padding(0, 10).
+				Label("选择" + label).Shrink(0).OnClick(choose)
+		})
 	})
 }
 
@@ -464,6 +479,25 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 					s.revealFileInFolder(outputPath)
 				})
 		}
+		if !inSettings {
+			modal := s.modalOpen()
+			quietButton(c, "watch-open-settings", "设置", 28, modal).
+				FontSize(fontSize).Padding(0, 8).Shrink(0).
+				Label("打开文件夹监听设置").Tooltip("管理文件夹监听规则").
+				OnClick(func() {
+					if s.modalOpen() {
+						return
+					}
+					s.setSettingsOpen(true)
+					if s.settingsOpen && s.editor != nil {
+						s.editor.section = settingsFolderWatch
+						s.editor.confirmDelete = false
+						if s.settingsWindow != nil {
+							s.settingsWindow.Invalidate()
+						}
+					}
+				})
+		}
 		if len(sessions) > 0 {
 			label := "停止监听"
 			if allStopping {
@@ -471,6 +505,28 @@ func (s *application) renderFolderWatchStatusBar(c *ui.Context, inSettings bool)
 			}
 			ghostDestructiveButton(c, "stop-folder-watch", label, 28, allStopping).
 				FontSize(fontSize).FontWeight(500).Padding(0, 10).Shrink(0).OnClick(s.stopFolderWatch)
+		} else if !inSettings {
+			modal := s.modalOpen()
+			if s.hasConfiguredFolderWatchRules() {
+				quietButton(c, "watch-restart", "重新监听", 28, modal).
+					FontSize(fontSize).Padding(0, 8).Shrink(0).
+					Tooltip("按当前规则重新开始监听").
+					OnClick(func() {
+						if s.modalOpen() {
+							return
+						}
+						s.startAllFolderWatches()
+					})
+			}
+			quietButton(c, "watch-dismiss-status", "×", 28, modal).
+				FontSize(fontSize).Padding(0, 8).Shrink(0).
+				Label("关闭监听状态栏").Tooltip("关闭状态条").
+				OnClick(func() {
+					if s.modalOpen() {
+						return
+					}
+					s.dismissFolderWatchStatus()
+				})
 		}
 	})
 }

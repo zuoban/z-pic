@@ -432,3 +432,111 @@ func TestSettingsNarrowLayoutFitsAllNavigationTabs(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsNavigationSemanticStatusDots(t *testing.T) {
+	app := testSelectedApplication()
+	app.setSettingsOpen(true)
+
+	// Verify helper return values across states inside a real ui.Context.
+	var gotWatchColor, gotAboutColor ui.Color
+	var gotWatchHint, gotAboutHint string
+	var gotWatchActive, gotAboutActive, gotGeneralActive bool
+	var wantSuccess, wantWarning ui.Color
+	probe := func(c *ui.Context) {
+		app.applyTheme(c)
+		t := c.Theme()
+		wantSuccess, wantWarning = t.Success, t.Warning
+		gotWatchColor, gotWatchHint, gotWatchActive = app.settingsSectionStatusColor(c, settingsFolderWatch)
+		gotAboutColor, gotAboutHint, gotAboutActive = app.settingsSectionStatusColor(c, settingsAbout)
+		_, _, gotGeneralActive = app.settingsSectionStatusColor(c, settingsGeneral)
+	}
+	probeTester := ui.NewTester(probe, 400, 200)
+	if gotWatchActive || gotAboutActive || gotGeneralActive {
+		t.Fatalf("expected no status dots when idle, got watch=%v about=%v general=%v", gotWatchActive, gotAboutActive, gotGeneralActive)
+	}
+
+	// Activate both folder watch running and update available.
+	app.watch.session = &desktopWatchSession{ready: true}
+	app.updateState = updateAvailable
+	probeTester.Frame()
+	if !gotWatchActive || gotWatchColor != wantSuccess || gotWatchHint != "文件夹监听运行中" {
+		t.Fatalf("unexpected watch status dot: active=%v color=%v want=%v hint=%q", gotWatchActive, gotWatchColor, wantSuccess, gotWatchHint)
+	}
+	if !gotAboutActive || gotAboutColor != wantWarning || gotAboutHint != "发现新版本" {
+		t.Fatalf("unexpected about status dot: active=%v color=%v want=%v hint=%q", gotAboutActive, gotAboutColor, wantWarning, gotAboutHint)
+	}
+	if gotGeneralActive {
+		t.Fatal("general section must not report a status dot")
+	}
+
+	// Verify both wide sidebar and narrow compact navigation expose hints without breaking labels or layout.
+	for _, layout := range []struct {
+		name  string
+		width int
+	}{
+		{name: "wide-sidebar", width: 780},
+		{name: "narrow-compact", width: 420},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			app.watch.session = nil
+			app.updateState = updateIdle
+			tester := ui.NewTester(app.settingsView, layout.width, 680)
+			for _, label := range []string{"通用", "预设", "文件夹监听", "系统集成", "关于"} {
+				tab, ok := tester.AccessByRole(ui.RoleTab, label)
+				if !ok || tab.Description != "" {
+					t.Fatalf("idle tab %q must have no status description: ok=%v tab=%+v", label, ok, tab)
+				}
+			}
+
+			app.watch.session = &desktopWatchSession{ready: true}
+			app.updateState = updateAvailable
+			tester.Frame()
+
+			wantDescriptions := map[string]string{
+				"通用":    "",
+				"预设":    "",
+				"文件夹监听": "文件夹监听运行中",
+				"系统集成":  "",
+				"关于":    "发现新版本",
+			}
+			var prevRight float32
+			for index, label := range []string{"通用", "预设", "文件夹监听", "系统集成", "关于"} {
+				tab, ok := tester.AccessByRole(ui.RoleTab, label)
+				if !ok || tab.Offscreen || tab.Bounds.W <= 0 || tab.Bounds.H <= 0 {
+					t.Fatalf("tab %q must remain visible with status dots active: ok=%v tab=%+v", label, ok, tab)
+				}
+				if tab.Description != wantDescriptions[label] {
+					t.Fatalf("tab %q description=%q, want %q", label, tab.Description, wantDescriptions[label])
+				}
+				if layout.width < settingsSidebarBreakpoint {
+					if tab.Bounds.X < 0 || tab.Bounds.X+tab.Bounds.W > float32(layout.width) {
+						t.Fatalf("narrow tab %q clipped with status dot: %+v", label, tab.Bounds)
+					}
+					if index > 0 && tab.Bounds.X < prevRight {
+						t.Fatalf("narrow tab %q overlaps previous tab: prevRight=%.1f tab=%+v", label, prevRight, tab.Bounds)
+					}
+					prevRight = tab.Bounds.X + tab.Bounds.W
+				}
+			}
+
+			// Clicking the tabs with status dots still switches sections properly.
+			if err := tester.Click("文件夹监听"); err != nil || app.editor.section != settingsFolderWatch {
+				t.Fatalf("clicking 文件夹监听 with status dot failed: err=%v section=%v", err, app.editor.section)
+			}
+			if err := tester.Click("关于"); err != nil || app.editor.section != settingsAbout {
+				t.Fatalf("clicking 关于 with status dot failed: err=%v section=%v", err, app.editor.section)
+			}
+
+			// Clearing states removes status hints cleanly.
+			app.watch.session = nil
+			app.updateState = updateUpToDate
+			tester.Frame()
+			for _, label := range []string{"文件夹监听", "关于"} {
+				tab, ok := tester.AccessByRole(ui.RoleTab, label)
+				if !ok || tab.Description != "" {
+					t.Fatalf("cleared tab %q must drop status description: ok=%v tab=%+v", label, ok, tab)
+				}
+			}
+		})
+	}
+}

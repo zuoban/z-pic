@@ -573,8 +573,11 @@ func (s *application) compressionControls(c *ui.Context, pending, done int, canR
 		}
 		item := s.batch.items[index]
 		label, key, icon := "压缩此张", "batch-preview-compress", toolbarCompressIcon
-		if item.status == batchFailed {
+		switch item.status {
+		case batchFailed:
 			label, key, icon = "重试", "batch-preview-retry", toolbarRestartIcon
+		case batchDone:
+			label, key, icon = "重新压缩此张", "batch-preview-recompress", toolbarRestartIcon
 		}
 		toolbarPrimaryAction(c, key, label, icon, disabled).
 			KeyShortcuts(ui.Cmd, ui.KeyEnter).
@@ -612,7 +615,7 @@ func (s *application) batchPreviewTarget() (int, bool) {
 		return -1, false
 	}
 	item := s.batch.items[index]
-	return index, !item.invalidInput && (item.status == batchPending || item.status == batchFailed)
+	return index, batchItemCanSingleRun(item)
 }
 
 func (s *application) controlsPanel(c *ui.Context, showBatchOutput bool) {

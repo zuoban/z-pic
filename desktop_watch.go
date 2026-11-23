@@ -63,6 +63,7 @@ type desktopFolderWatch struct {
 	ruleSessions map[uint64]*desktopWatchSession
 	last         folderWatchOutcome
 	err          error
+	openDir      func(string) error
 }
 
 // The UI owns the session fields. The worker only signals done and posts updates.
@@ -288,6 +289,49 @@ func (s *application) activeFolderWatchCount() int {
 
 func (s *application) anyFolderWatchRunning() bool {
 	return s.activeFolderWatchCount() > 0
+}
+
+func (s *application) hasConfiguredFolderWatchRules() bool {
+	for _, rule := range s.allWatchRules() {
+		if rule.InputDir != "" && rule.OutputDir != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *application) dismissFolderWatchStatus() {
+	if s.anyFolderWatchRunning() {
+		return
+	}
+	s.watch.last = folderWatchOutcome{}
+	s.watch.err = nil
+	s.invalidateFolderWatchViews()
+}
+
+func (s *application) openFolderWatchDirectory(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return
+	}
+	opener := s.watch.openDir
+	if opener == nil {
+		opener = mygo.Shell.OpenPath
+	}
+	if err := opener(dir); err != nil {
+		msg := "无法打开文件夹：" + err.Error()
+		if s.editor != nil {
+			s.editor.watchMessage = msg
+		} else {
+			s.setMessage(msg, true)
+		}
+		s.invalidateFolderWatchViews()
+		return
+	}
+	if s.editor != nil && strings.HasPrefix(s.editor.watchMessage, "无法打开文件夹：") {
+		s.editor.watchMessage = ""
+		s.invalidateFolderWatchViews()
+	}
 }
 
 func (s *application) folderWatchPreset(name string) (compressionPreset, bool) {

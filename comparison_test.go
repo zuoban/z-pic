@@ -623,6 +623,19 @@ func TestSupportsAlphaFormat(t *testing.T) {
 	}
 }
 
+func awaitComparisonDiff(t *testing.T, updates <-chan func(), ready func() bool) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for !ready() {
+		select {
+		case fn := <-updates:
+			fn()
+		case <-deadline:
+			t.Fatal("timed out waiting for async diff analysis")
+		}
+	}
+}
+
 func TestComparisonDiffHeatmapAndMetrics(t *testing.T) {
 	src := image.NewNRGBA(image.Rect(0, 0, 64, 48))
 	for y := 0; y < 48; y++ {
@@ -693,12 +706,9 @@ func TestComparisonDiffHeatmapAndMetrics(t *testing.T) {
 	if s.comparison.mode != previewDiff {
 		t.Fatalf("expected previewDiff mode, got %d", s.comparison.mode)
 	}
-	select {
-	case fn := <-updates:
-		fn()
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for async diff analysis")
-	}
+	awaitComparisonDiff(t, updates, func() bool {
+		return s.comparison.diffReady && s.comparison.diffHasHeatmap
+	})
 	tester.Frame()
 
 	if !s.comparison.diffReady || s.comparison.diffBitmap == nil {
@@ -766,12 +776,9 @@ func TestComparisonDiffUnchangedOverwriteAndRetry(t *testing.T) {
 	if err := tester.Click("差异"); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case fn := <-updates:
-		fn()
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for unchanged diff heatmap")
-	}
+	awaitComparisonDiff(t, updates, func() bool {
+		return s.comparison.diffReady && s.comparison.diffHasHeatmap
+	})
 	tester.Frame()
 	if !s.comparison.diffReady || s.comparison.diffBitmap == nil || !s.comparison.diffMetrics.Identical {
 		t.Fatalf("unchanged item should still build zero-diff heatmap bitmap: ready=%v bitmap=%v metrics=%+v err=%q",
@@ -780,18 +787,16 @@ func TestComparisonDiffUnchangedOverwriteAndRetry(t *testing.T) {
 
 	// Simulate an error state and verify clicking the retry button recovers.
 	s.comparison.diffReady = false
+	s.comparison.diffHasHeatmap = false
 	s.comparison.diffBitmap = nil
 	s.comparison.diffError = "模拟计算失败"
 	tester.Frame()
 	if err := tester.Click("重试"); err != nil {
 		t.Fatalf("expected clickable retry button on diff error: %v", err)
 	}
-	select {
-	case fn := <-updates:
-		fn()
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for retried diff analysis")
-	}
+	awaitComparisonDiff(t, updates, func() bool {
+		return s.comparison.diffReady && s.comparison.diffHasHeatmap
+	})
 	if !s.comparison.diffReady || s.comparison.diffBitmap == nil || s.comparison.diffError != "" {
 		t.Fatalf("retry should recover diff state: ready=%v bitmap=%v err=%q",
 			s.comparison.diffReady, s.comparison.diffBitmap != nil, s.comparison.diffError)
@@ -1050,7 +1055,12 @@ func TestComparisonProactiveQualityMetricsInCompareMode(t *testing.T) {
 		t.Fatalf("expected computed quality metrics in compare mode: ready=%v metrics=%+v err=%q",
 			s.comparison.diffReady, s.comparison.diffMetrics, s.comparison.diffError)
 	}
+	if s.comparison.diffBitmap != nil || s.comparison.diffHasHeatmap {
+		t.Fatalf("compare mode must lazily skip heatmap allocation: bitmap=%v hasHeatmap=%v",
+			s.comparison.diffBitmap != nil, s.comparison.diffHasHeatmap)
+	}
 	summary := formatQualityMetricsSummary(s.comparison.diffMetrics)
+	compact := formatQualityMetricsCompact(s.comparison.diffMetrics)
 	tooltip := formatQualityMetricsTooltip(s.comparison.diffMetrics)
 	if !tester.HasText(summary) {
 		t.Fatalf("compare mode must render quality metrics summary %q", summary)
@@ -1066,36 +1076,158 @@ func TestComparisonProactiveQualityMetricsInCompareMode(t *testing.T) {
 	}
 
 	// Verify balanced non-overlapping layout between 原图 (left), quality badge (center), and 压缩后 (right).
-	for _, width := range []int{880, 760} {
-		tester.SetSize(width, 660)
+	for _, tc := range []struct {
+		width     int
+		wantQual  string
+		wantDelta bool
+	}{
+		{880, summary, true},
+		{760, compact, false},
+	} {
+		tester.SetSize(tc.width, 660)
+		tester.Frame()
 		tester.Frame()
 		origRect, okOrig := tester.Find("原图 · " + formatSize(s.file.size))
-		qualRect, okQual := tester.Find(summary)
-		resRect, okRes := tester.Find("压缩后 · " + formatSize(s.result.OutputSize))
+		qualRect, okQual := tester.Find(tc.wantQual)
+		wantResult := formatComparisonResultBadge(s.result, tc.wantDelta)
+		resRect, okRes := tester.Find(wantResult)
 		if !okOrig || !okQual || !okRes {
-			t.Fatalf("width %d: all three compare badges must be visible: orig=%v qual=%v res=%v",
-				width, okOrig, okQual, okRes)
+			t.Fatalf("width %d: all three compare badges must be visible: orig=%v qual(%q)=%v res(%q)=%v texts=%v",
+				tc.width, okOrig, tc.wantQual, okQual, wantResult, okRes, tester.Texts())
 		}
 		if origRect.X+origRect.W >= qualRect.X || qualRect.X+qualRect.W >= resRect.X {
 			t.Fatalf("width %d: compare badges must not overlap: orig=%+v qual=%+v res=%+v",
-				width, origRect, qualRect, resRect)
+				tc.width, origRect, qualRect, resRect)
 		}
 	}
 
 	// Original/Result single-view modes should keep overlays uncluttered (no center quality badge).
 	tester.Key(0, ui.Key2)
-	if tester.HasText(summary) {
+	if tester.HasText(summary) || tester.HasText(compact) {
 		t.Fatal("original-only mode must not display the centered compare quality badge")
 	}
 	tester.Key(0, ui.Key3)
-	if tester.HasText(summary) {
+	if tester.HasText(summary) || tester.HasText(compact) {
 		t.Fatal("result-only mode must not display the centered compare quality badge")
 	}
-	// Switching to diff mode reuses the already-computed heatmap without starting a new job.
+
+	// Switching to diff mode preserves already-computed metrics without flicker and lazily populates diffBitmap.
 	genBeforeDiff := s.comparison.diffGen
 	tester.Key(0, ui.Key4)
-	if s.comparison.diffGen != genBeforeDiff || !s.comparison.diffReady || !tester.HasText(summary) {
-		t.Fatalf("switching to diff mode must reuse proactive metrics and heatmap: gen=%d->%d ready=%v",
-			genBeforeDiff, s.comparison.diffGen, s.comparison.diffReady)
+	if s.comparison.diffGen <= genBeforeDiff || !s.comparison.diffLoading || !s.comparison.diffWantHeatmap {
+		t.Fatalf("switching to diff mode must launch heatmap upgrade: gen=%d->%d loading=%v wantHeatmap=%v",
+			genBeforeDiff, s.comparison.diffGen, s.comparison.diffLoading, s.comparison.diffWantHeatmap)
+	}
+	if !s.comparison.diffReady || !tester.HasText(summary) {
+		t.Fatalf("upgrading to diff mode must preserve metrics badge without flicker: ready=%v texts=%v",
+			s.comparison.diffReady, tester.Texts())
+	}
+	awaitComparisonDiff(t, updates, func() bool {
+		return s.comparison.diffReady && s.comparison.diffHasHeatmap
+	})
+	tester.Frame()
+	if s.comparison.diffBitmap == nil || !s.comparison.diffHasHeatmap {
+		t.Fatalf("diff mode must populate diffBitmap after upgrade: bitmap=%v hasHeatmap=%v",
+			s.comparison.diffBitmap != nil, s.comparison.diffHasHeatmap)
+	}
+
+	// Switching away and back to diff mode reuses the cached heatmap without starting another job.
+	genAfterHeatmap := s.comparison.diffGen
+	tester.Key(0, ui.Key1)
+	tester.Key(0, ui.Key4)
+	if s.comparison.diffGen != genAfterHeatmap || s.comparison.diffLoading || s.comparison.diffBitmap == nil {
+		t.Fatalf("re-entering diff mode must reuse cached heatmap: gen=%d->%d loading=%v bitmap=%v",
+			genAfterHeatmap, s.comparison.diffGen, s.comparison.diffLoading, s.comparison.diffBitmap != nil)
+	}
+}
+
+func TestComparisonDoubleClickDividerResetsSplit(t *testing.T) {
+	s := testLargeComparisonApplication()
+	tester := ui.NewTester(s.view, 960, 660)
+	canvas := comparisonCanvas(t, tester)
+	bounds := canvas.Bounds
+
+	// Move split away from center in fit mode, then double-click on the divider handle.
+	s.comparison.split = 75
+	tester.Frame()
+	dividerX := bounds.X + bounds.W*0.75
+	centerY := bounds.Y + bounds.H/2
+	tester.ClickAt(dividerX, centerY)
+	tester.ClickAt(dividerX, centerY)
+	tester.Frame()
+	if math.Abs(s.comparison.split-50) > 0.5 {
+		t.Fatalf("double-clicking divider handle in fit mode must reset split to 50, got %.2f", s.comparison.split)
+	}
+	if s.comparison.scale != 0 {
+		t.Fatalf("double-clicking divider handle must not toggle zoom, got scale=%.2f", s.comparison.scale)
+	}
+
+	// Zoom to 1:1, move split to 25, then double-click on the divider handle.
+	tester.Advance(time.Second)
+	if err := tester.Click("1:1"); err != nil {
+		t.Fatal(err)
+	}
+	s.comparison.split = 25
+	tester.Frame()
+	dividerX = bounds.X + bounds.W*0.25
+	tester.ClickAt(dividerX, centerY)
+	tester.ClickAt(dividerX, centerY)
+	tester.Frame()
+	if math.Abs(s.comparison.split-50) > 0.5 {
+		t.Fatalf("double-clicking divider handle while zoomed must reset split to 50, got %.2f", s.comparison.split)
+	}
+	if s.comparison.scale != 1 {
+		t.Fatalf("double-clicking divider handle while zoomed must preserve 1:1 zoom, got scale=%.2f", s.comparison.scale)
+	}
+
+	// Double-clicking away from the divider must still toggle zoom and preserve split.
+	tester.Advance(time.Second)
+	s.comparison.split = 30
+	tester.Frame()
+	awayX := bounds.X + bounds.W*0.80
+	tester.ClickAt(awayX, centerY)
+	tester.ClickAt(awayX, centerY)
+	tester.Frame()
+	if s.comparison.scale != 0 {
+		t.Fatalf("double-clicking away from divider while zoomed must return to fit mode, got scale=%.2f", s.comparison.scale)
+	}
+	if math.Abs(s.comparison.split-30) > 0.5 {
+		t.Fatalf("double-clicking away from divider must preserve split at 30, got %.2f", s.comparison.split)
+	}
+}
+
+func TestComparisonResultAndCompactBadges(t *testing.T) {
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100 << 10, OutputSize: 32 << 10}, true),
+		"压缩后 · "+formatSize(32<<10)+" (-68%)"; got != want {
+		t.Fatalf("shrunk badge = %q, want %q", got, want)
+	}
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100 << 10, OutputSize: 103 << 10}, true),
+		"压缩后 · "+formatSize(103<<10)+" (+3%)"; got != want {
+		t.Fatalf("grown badge = %q, want %q", got, want)
+	}
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100 << 10, OutputSize: 32 << 10}, false),
+		"压缩后 · "+formatSize(32<<10); got != want {
+		t.Fatalf("concise narrow badge = %q, want %q", got, want)
+	}
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100 << 10, OutputSize: 100 << 10, Unchanged: true}, true),
+		"压缩后 · "+formatSize(100<<10); got != want {
+		t.Fatalf("unchanged badge = %q, want %q", got, want)
+	}
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100_000, OutputSize: 99_800}, true),
+		"压缩后 · "+formatSize(99_800)+" (-<1%)"; got != want {
+		t.Fatalf("tiny shrink badge = %q, want %q", got, want)
+	}
+	if got, want := formatComparisonResultBadge(&compress.Result{OriginalSize: 100_000, OutputSize: 100_200}, true),
+		"压缩后 · "+formatSize(100_200)+" (+<1%)"; got != want {
+		t.Fatalf("tiny growth badge = %q, want %q", got, want)
+	}
+	if got := formatQualityMetricsCompact(compress.QualityMetrics{Identical: true, SSIM: 1}); got != "无损一致" {
+		t.Fatalf("compact identical = %q", got)
+	}
+	if got := formatQualityMetricsCompact(compress.QualityMetrics{Resized: true, SSIM: 0.945}); got != "已缩放 · SSIM 0.945" {
+		t.Fatalf("compact resized = %q", got)
+	}
+	if got := formatQualityMetricsCompact(compress.QualityMetrics{SSIM: 0.981}); got != "SSIM 0.981" {
+		t.Fatalf("compact normal = %q", got)
 	}
 }

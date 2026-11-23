@@ -313,13 +313,28 @@ func compressData(ctx context.Context, data []byte, path, sourcePath string, opt
 		if format == "png" && !usePNGOrientation {
 			source.orientation = pngOrientation(data)
 		}
+		probeBase, needsRefine := lowestQualityOptions(options, targetFormat)
+		var refine func(int) (*encodedImage, error)
+		if needsRefine {
+			refine = func(longEdge int) (*encodedImage, error) {
+				refinedOptions := options
+				refinedOptions.MaxDimension = longEdge
+				refinedOptions.MaxWidth, refinedOptions.MaxHeight, refinedOptions.ScalePercent = 0, 0, 0
+				return source.encodeAtDimension(ctx, refinedOptions, nil)
+			}
+		}
 		selected, err = searchTargetResize(ctx, baseline, options.TargetSizeBytes, minDimension, func(longEdge int) (*encodedImage, error) {
-			// Each probe resamples the source directly at its own long-edge cap.
-			probe := options
+			// Probe feasibility once at lowest quality so dimension search does
+			// not run a nested target-size quality search at every candidate edge.
+			probe := probeBase
 			probe.MaxDimension = longEdge
 			probe.MaxWidth, probe.MaxHeight, probe.ScalePercent = 0, 0, 0
-			return source.encodeAtDimension(ctx, probe, nil)
-		})
+			candidate, probeErr := source.encodeAtDimension(ctx, probe, nil)
+			if probeErr == nil && targetFormat != "png" {
+				candidate.appliedQuality = probe.Quality
+			}
+			return candidate, probeErr
+		}, refine)
 		if err != nil {
 			return nil, fmt.Errorf("压缩已取消：%w", err)
 		}
@@ -817,6 +832,36 @@ var pngTargetSizeTiers = [...]PNGOptions{
 	{MinQuality: 0, MaxQuality: 1, Colors: 4, Speed: 6},
 }
 
+func pngTargetSizeTiersFor(options PNGOptions) []PNGOptions {
+	baseline := options
+	if baseline == (PNGOptions{}) {
+		baseline = DefaultPNGOptions()
+	}
+	tiers := make([]PNGOptions, 0, len(pngTargetSizeTiers))
+	for _, tier := range pngTargetSizeTiers {
+		if tier == baseline || (tier.MaxQuality > baseline.MaxQuality && tier.Colors > baseline.Colors) {
+			continue
+		}
+		tiers = append(tiers, tier)
+	}
+	return tiers
+}
+
+func lowestQualityOptions(options Options, targetFormat string) (Options, bool) {
+	probe := options
+	probe.TargetSizeBytes = 0
+	if targetFormat == "png" {
+		tiers := pngTargetSizeTiersFor(options.PNG)
+		if len(tiers) == 0 {
+			return probe, false
+		}
+		probe.PNG = tiers[len(tiers)-1]
+		return probe, true
+	}
+	probe.Quality = 1
+	return probe, options.Quality > 1
+}
+
 type pngCandidate struct {
 	data      []byte
 	stripped  bool
@@ -846,17 +891,7 @@ func compressPNGWithEncoder(ctx context.Context, data []byte, config image.Confi
 	}
 	if targetSearchEligible && (candidate.oversized || int64(len(candidate.data)) > target) &&
 		(transformed || candidate.stripped || candidate.oversized || int64(len(data)) > target) {
-		baseline := options.PNG
-		if baseline == (PNGOptions{}) {
-			baseline = DefaultPNGOptions()
-		}
-		tiers := make([]PNGOptions, 0, len(pngTargetSizeTiers))
-		for _, tier := range pngTargetSizeTiers {
-			if tier == baseline || (tier.MaxQuality > baseline.MaxQuality && tier.Colors > baseline.Colors) {
-				continue
-			}
-			tiers = append(tiers, tier)
-		}
+		tiers := pngTargetSizeTiersFor(options.PNG)
 		candidate, _, err = searchTargetSize(ctx, candidate, len(tiers)+1, target, func(out pngCandidate) int {
 			if out.oversized {
 				return maxInputSize + 1

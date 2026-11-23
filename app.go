@@ -237,6 +237,9 @@ func (s *application) updateWithInvalidate(invalidateFloating bool, fn func()) {
 			return
 		}
 		fn()
+		if s.dragStagedResult != nil && (s.batch != nil || s.result != s.dragStagedResult) {
+			s.releaseDragStaging()
+		}
 		s.startNextDropImport()
 		if invalidateFloating {
 			s.invalidateFloatingWindow()
@@ -609,6 +612,7 @@ func (s *application) completeSelection(ctx context.Context, selected *selectedI
 	s.prepareThumbnailCache()
 	s.file, s.preview, s.result = selected, selected.preview, nil
 	s.lastSavedPath = ""
+	s.releaseDragStaging()
 	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
@@ -623,6 +627,7 @@ func (s *application) clearSingleImage() {
 	}
 	s.file, s.preview, s.result = nil, nil, nil
 	s.lastSavedPath = ""
+	s.releaseDragStaging()
 	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
@@ -736,6 +741,7 @@ func decodePreviewBitmap(ctx context.Context, data []byte, format string) (*ui.B
 func (s *application) invalidateResult() {
 	s.result = nil
 	s.lastSavedPath = ""
+	s.releaseDragStaging()
 	s.resetComparison()
 	s.confirmOverwrite, s.confirmBatchOverwrite, s.overwritten = false, false, false
 	s.clearPendingBatchConfirmation()
@@ -769,6 +775,7 @@ func (s *application) startCompression() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.busy, s.compressingSingle, s.phase, s.cancel = true, true, "正在压缩图片", cancel
 	s.result, s.preview, s.lastSavedPath = nil, s.file.preview, ""
+	s.releaseDragStaging()
 	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
@@ -813,6 +820,9 @@ func (s *application) completeCompression(ctx context.Context, result *compress.
 		return
 	}
 	s.result, s.preview = result, preview
+	if s.dragStagedResult != result {
+		s.releaseDragStaging()
+	}
 	s.resetComparison()
 	s.confirmOverwrite, s.overwritten = false, false
 	s.setMessage("", false)
@@ -969,6 +979,7 @@ func (s *application) completeOverwriteWithBackup(result *compress.Result, backe
 	}
 	s.overwritten = true
 	s.lastSavedPath = s.file.path
+	s.releaseDragStaging()
 	s.clearComparisonDiff()
 	s.comparison.mode = previewResult
 	if backedUp {

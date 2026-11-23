@@ -834,3 +834,214 @@ func TestCLICompressActivePreset(t *testing.T) {
 		t.Fatalf("expected exit 2 conflict for --preset + --active-preset: code=%d stderr=%q", code, errBuf.String())
 	}
 }
+
+func TestCLICompressOutputPathEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "photo.jpg")
+	srcB := filepath.Join(dir, "second.jpg")
+	writeTestJPEG(t, srcA, 120, 90, 95)
+	writeTestJPEG(t, srcB, 120, 90, 95)
+
+	// 1. Single file with unsupported output extension rejects with exit 2 and does not create a directory.
+	for _, name := range []string{"out.bmp", "out.jgp"} {
+		t.Run("unsupported ext "+name, func(t *testing.T) {
+			target := filepath.Join(dir, name)
+			var stdout, stderr bytes.Buffer
+			code := runCLIContext(t.Context(), []string{"compress", "-o", target, srcA}, &stdout, &stderr)
+			if code != 2 || !strings.Contains(stderr.String(), "不支持的输出文件扩展名") {
+				t.Fatalf("expected exit 2 for unsupported ext %s: code=%d stderr=%q", name, code, stderr.String())
+			}
+			if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("must not create directory or file at %s, stat err=%v", target, err)
+			}
+		})
+	}
+
+	// 2. Existing regular file as -o target rejects with exit 2 for both single-file non-image and multi-file/dir runs.
+	notesFile := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(notesFile, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	existingImg := filepath.Join(dir, "existing.jpg")
+	writeTestJPEG(t, existingImg, 80, 60, 90)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"single file to existing txt", []string{"compress", "-o", notesFile, srcA}},
+		{"multiple files to existing jpg", []string{"compress", "-o", existingImg, srcA, srcB}},
+		{"directory to existing txt", []string{"compress", "-o", notesFile, dir}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runCLIContext(t.Context(), tc.args, &stdout, &stderr)
+			if code != 2 || !strings.Contains(stderr.String(), "已存在且不是目录") {
+				t.Fatalf("expected exit 2 for %s: code=%d stderr=%q", tc.name, code, stderr.String())
+			}
+		})
+	}
+	if data, err := os.ReadFile(notesFile); err != nil || string(data) != "keep me" {
+		t.Fatalf("existing regular file was modified: %q err=%v", string(data), err)
+	}
+
+	// 3. Existing directory containing a dot in its name still works as an output directory for a single file.
+	t.Run("existing dotted dir", func(t *testing.T) {
+		dottedDir := filepath.Join(dir, "out.v1")
+		if err := os.MkdirAll(dottedDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		code := runCLIContext(t.Context(), []string{"compress", "-q", "50", "-o", dottedDir, "--json", srcA}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("existing dotted dir failed: code=%d stderr=%q", code, stderr.String())
+		}
+		var report cliCompressReport
+		if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		wantOut := filepath.Join(dottedDir, "photo.jpg")
+		if len(report.Files) != 1 || report.Files[0].Output != wantOut {
+			t.Fatalf("expected output %q, got %+v", wantOut, report.Files)
+		}
+		if _, err := os.Stat(wantOut); err != nil {
+			t.Fatalf("expected file at %s: %v", wantOut, err)
+		}
+	})
+
+	// 4. Non-existent dotted directory with trailing path separator works as an output directory.
+	t.Run("nonexistent dotted dir with trailing separator", func(t *testing.T) {
+		dottedDir := filepath.Join(dir, "out.v2")
+		var stdout, stderr bytes.Buffer
+		code := runCLIContext(t.Context(), []string{"compress", "-q", "50", "-o", dottedDir + string(filepath.Separator), "--json", srcA}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("dotted dir with trailing slash failed: code=%d stderr=%q", code, stderr.String())
+		}
+		var report cliCompressReport
+		if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		wantOut := filepath.Join(dottedDir, "photo.jpg")
+		if len(report.Files) != 1 || report.Files[0].Output != wantOut {
+			t.Fatalf("expected output %q, got %+v", wantOut, report.Files)
+		}
+		if _, err := os.Stat(wantOut); err != nil {
+			t.Fatalf("expected file at %s: %v", wantOut, err)
+		}
+	})
+}
+
+func TestCLICompressIncompletePresetSaveFixed(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	writeTestJPEG(t, src, 120, 90, 95)
+
+	settingsPath := filepath.Join(dir, "settings.json")
+	incomplete := compressionPreset{
+		name:    "未配目录",
+		quality: 70,
+		png:     compress.DefaultPNGOptions(),
+		output:  presetSaveOptions{Mode: presetSaveFixed, Directory: ""},
+	}
+	if err := saveFullSettings(settingsPath, appSettings{
+		presets:  append(defaultPresets(), incomplete),
+		selected: incomplete.name,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Fails fast before scanning when using --preset or --active-preset without -o/--in-place/--dry-run/--suffix.
+	missingInput := filepath.Join(dir, "does-not-exist.jpg")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"explicit preset missing input fails fast", []string{"compress", "--settings", settingsPath, "--preset", incomplete.name, missingInput}},
+		{"explicit preset valid input fails fast", []string{"compress", "--settings", settingsPath, "--preset", incomplete.name, src}},
+		{"active preset fails fast", []string{"compress", "--settings", settingsPath, "--active-preset", missingInput}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runCLIContext(t.Context(), tc.args, &stdout, &stderr)
+			if code != 2 || !strings.Contains(stderr.String(), "固定输出目录") || !strings.Contains(stderr.String(), incomplete.name) {
+				t.Fatalf("expected exit 2 incomplete preset error for %s: code=%d stderr=%q", tc.name, code, stderr.String())
+			}
+		})
+	}
+
+	// 2. Overriding with -o, --dry-run, --suffix, or --in-place succeeds.
+	t.Run("overrides bypass incomplete preset directory", func(t *testing.T) {
+		outFile := filepath.Join(dir, "explicit.jpg")
+		inPlaceSrc := filepath.Join(dir, "inplace.jpg")
+		writeTestJPEG(t, inPlaceSrc, 120, 90, 95)
+		for _, args := range [][]string{
+			{"compress", "--settings", settingsPath, "--preset", incomplete.name, "-o", outFile, src},
+			{"compress", "--settings", settingsPath, "--preset", incomplete.name, "--dry-run", src},
+			{"compress", "--settings", settingsPath, "--preset", incomplete.name, "--suffix", "-ok", src},
+			{"compress", "--settings", settingsPath, "--preset", incomplete.name, "--in-place", inPlaceSrc},
+		} {
+			var stdout, stderr bytes.Buffer
+			if code := runCLIContext(t.Context(), args, &stdout, &stderr); code != 0 {
+				t.Fatalf("args %v failed: code=%d stderr=%q", args, code, stderr.String())
+			}
+		}
+	})
+}
+
+func TestCLICompressSkipOverwriteSnapshot(t *testing.T) {
+	origHook := cliCompressFileWithAcquire
+	defer func() { cliCompressFileWithAcquire = origHook }()
+
+	var recorded []bool
+	cliCompressFileWithAcquire = func(
+		ctx context.Context,
+		path string,
+		options compress.Options,
+		acquire func(compress.ImageInfo) (func(), error),
+		onStart func(),
+	) (*compress.Result, func(), error) {
+		recorded = append(recorded, options.SkipOverwriteSnapshot)
+		return origHook(ctx, path, options, acquire, onStart)
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	writeTestJPEG(t, src, 120, 90, 100)
+
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantSkip bool
+	}{
+		{
+			name:     "single explicit file -o skips overwrite snapshot",
+			args:     []string{"compress", "-q", "50", "-o", filepath.Join(dir, "single.jpg"), src},
+			wantSkip: true,
+		},
+		{
+			name:     "default copy mode skips overwrite snapshot",
+			args:     []string{"compress", "-q", "50", src},
+			wantSkip: true,
+		},
+		{
+			name:     "dry-run skips overwrite snapshot",
+			args:     []string{"compress", "--dry-run", "-q", "50", src},
+			wantSkip: true,
+		},
+		{
+			name:     "in-place captures overwrite snapshot",
+			args:     []string{"compress", "--in-place", "-q", "50", src},
+			wantSkip: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorded = nil
+			var stdout, stderr bytes.Buffer
+			if code := runCLIContext(t.Context(), tc.args, &stdout, &stderr); code != 0 {
+				t.Fatalf("compress failed: code=%d stderr=%q", code, stderr.String())
+			}
+			if len(recorded) != 1 || recorded[0] != tc.wantSkip {
+				t.Fatalf("SkipOverwriteSnapshot = %v, want [%v]", recorded, tc.wantSkip)
+			}
+		})
+	}
+}

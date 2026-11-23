@@ -502,7 +502,7 @@ func (s *application) batchRowContextMenuItems(c *ui.Context, m ui.MenuParts, it
 			setAction(func() { s.compressBatchItem(idx) })
 		}
 	}
-	if item.status == batchFailed && !item.invalidInput && !s.batch.running {
+	if !item.invalidInput && !s.batch.running && (item.status == batchFailed || (item.status == batchDone && !item.overwritten)) {
 		hasPrimary = true
 		if batchContextMenuItem(c, m, "重新压缩", toolbarRestartIcon, false, false) {
 			idx := itemIndex

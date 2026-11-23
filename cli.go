@@ -28,6 +28,7 @@ var mygoConfigJSON []byte
 
 var appVersion = loadAppVersion()
 var cliTrashItem = mygo.Shell.TrashItem
+var cliCompressFileWithAcquire = compress.FileWithAcquire
 
 func loadAppVersion() string {
 	var config struct {
@@ -955,6 +956,12 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runCLICompressStdin(ctx, opts, resolvedPresetName, outputPath, stdoutOutput, dryRun, metricsOut, jsonOut, quiet, stdin, stdout, stderr)
 	}
 
+	if !dryRun && !inPlace && outputPath == "" && basePreset != nil && !setFlags["suffix"] &&
+		basePreset.output.Mode == presetSaveFixed && strings.TrimSpace(basePreset.output.Directory) == "" {
+		fmt.Fprintf(stderr, "参数错误：预设「%s」设为固定输出目录，但未配置输出目录，请使用 -o 指定输出路径或在设置中补全目录。\n", basePreset.name)
+		return 2
+	}
+
 	scan, err := scanBatchPathsWithOptions(ctx, inputs, nil, nil, 0, !noRecursive)
 	if err != nil {
 		fmt.Fprintf(stderr, "扫描输入失败：%v\n", err)
@@ -1011,19 +1018,30 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 		if outputPath != "" {
 			info, statErr := os.Stat(outputPath)
 			isExistingDir := statErr == nil && info.IsDir()
+			isExistingNonDir := statErr == nil && !info.IsDir()
 			singleInputIsFile := len(inputs) == 1 && len(scan.items) == 1 && scan.items[0].sourceDir == ""
-			isImagePath := isSupportedImageExt(outputPath) || expectedExtMatchesFormat(filepath.Ext(outputPath), "avif")
+			endsWithSep := os.IsPathSeparator(outputPath[len(outputPath)-1])
+			ext := filepath.Ext(outputPath)
+			isImagePath := !endsWithSep && (isSupportedImageExt(outputPath) || expectedExtMatchesFormat(ext, "avif"))
 			if singleInputIsFile && !isExistingDir && isImagePath {
 				item := scan.items[0]
 				if !item.invalidInput {
 					effectiveFmt := compress.ResolveOutputFormat(item.effectiveSourceFormat(), opts.OutputFormat, opts.Lossless)
-					if !expectedExtMatchesFormat(filepath.Ext(outputPath), effectiveFmt) {
-						fmt.Fprintf(stderr, "参数错误：输出文件扩展名 %q 与目标格式 %s 不匹配。\n", filepath.Ext(outputPath), strings.ToUpper(effectiveFmt))
+					if !expectedExtMatchesFormat(ext, effectiveFmt) {
+						fmt.Fprintf(stderr, "参数错误：输出文件扩展名 %q 与目标格式 %s 不匹配。\n", ext, strings.ToUpper(effectiveFmt))
 						return 2
 					}
 				}
 				singleExplicitFile = outputPath
 			} else {
+				if isExistingNonDir {
+					fmt.Fprintf(stderr, "参数错误：输出路径 %q 已存在且不是目录。\n", outputPath)
+					return 2
+				}
+				if singleInputIsFile && !isExistingDir && !endsWithSep && ext != "" {
+					fmt.Fprintf(stderr, "参数错误：不支持的输出文件扩展名 %q（如需输出到目录，请去掉扩展名或以路径分隔符结尾）。\n", ext)
+					return 2
+				}
 				absOut, err := filepath.Abs(outputPath)
 				if err != nil {
 					fmt.Fprintf(stderr, "无效的输出目录：%v\n", err)
@@ -1044,7 +1062,7 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 		} else if basePreset != nil && !setFlags["suffix"] &&
 			!basePreset.output.replacesOriginal() && basePreset.output.Mode != presetSaveAsk {
 			saveOpts = basePreset.output
-			if saveOpts.Mode == presetSaveFixed && saveOpts.Directory != "" {
+			if saveOpts.Mode == presetSaveFixed && strings.TrimSpace(saveOpts.Directory) != "" {
 				if err := os.MkdirAll(saveOpts.Directory, 0o755); err != nil {
 					fmt.Fprintf(stderr, "无法创建预设输出目录：%v\n", err)
 					return 1
@@ -1080,11 +1098,13 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 
 	destinations := make(map[int]string, len(tasks))
 	planErrors := make(map[int]error)
+	if dryRun || !inPlace {
+		opts.SkipOverwriteSnapshot = true
+	}
 	if !dryRun {
 		if singleExplicitFile != "" && len(tasks) == 1 {
 			destinations[tasks[0].index] = singleExplicitFile
 		} else if !inPlace {
-			opts.SkipOverwriteSnapshot = true
 			destinations, planErrors = planBatchOutputs(ctx, tasks, outputDir, nil)
 		} else {
 			var copyTasks []batchTask
@@ -1097,8 +1117,6 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 				destinations, planErrors = planBatchOutputs(ctx, copyTasks, "", nil)
 			}
 		}
-	} else {
-		opts.SkipOverwriteSnapshot = true
 	}
 
 	workers := jobs
@@ -1119,7 +1137,7 @@ func runCLICompress(ctx context.Context, args []string, stdin io.Reader, stdout,
 			return batchCompressionOutcome{err: err}
 		}
 		started := false
-		result, release, err := compress.FileWithAcquire(
+		result, release, err := cliCompressFileWithAcquire(
 			ctx,
 			task.path,
 			opts,

@@ -679,3 +679,246 @@ func TestFolderWatchStatusBarRevealButton(t *testing.T) {
 		t.Fatal("settings window watch reveal button must hide when watch.last.Output == \"\"")
 	}
 }
+
+func TestFolderWatchStatusBarActionsAndDismiss(t *testing.T) {
+	root := t.TempDir()
+	inDir := filepath.Join(root, "in")
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(inDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inPath := filepath.Join(inDir, "sample.jpg")
+	outPath := filepath.Join(outDir, "sample.jpg")
+
+	app := newApplication()
+	updates := make(chan func(), 32)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	t.Cleanup(app.closeFolderWatch)
+
+	// Stopped with error/outcome and NO configured rules:
+	// "设置" and "×" shown, "重新监听" hidden.
+	app.watch.last = folderWatchOutcome{
+		Input:         inPath,
+		Output:        outPath,
+		OriginalBytes: 2048,
+		OutputBytes:   1024,
+	}
+	app.watch.err = errors.New("监听已中断")
+
+	mainTester := ui.NewTester(app.view, 980, 720)
+	if btn, ok := mainTester.AccessByRole(ui.RoleButton, "打开文件夹监听设置"); !ok || btn.Offscreen || btn.Disabled {
+		t.Fatalf("settings button must be shown and enabled on main status bar: ok=%v btn=%+v", ok, btn)
+	}
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "重新监听"); ok {
+		t.Fatal("restart button must be hidden when no watch rules are configured")
+	}
+	if btn, ok := mainTester.AccessByRole(ui.RoleButton, "关闭监听状态栏"); !ok || btn.Offscreen || btn.Disabled {
+		t.Fatalf("dismiss button must be shown and enabled when stopped: ok=%v btn=%+v", ok, btn)
+	}
+
+	// Clicking dismiss clears last/err and hides the status bar cleanly.
+	if err := mainTester.Click("关闭监听状态栏"); err != nil {
+		t.Fatalf("click dismiss status bar: %v", err)
+	}
+	if app.watch.last.Input != "" || app.watch.err != nil {
+		t.Fatalf("dismissFolderWatchStatus must clear last and err, got last=%+v err=%v", app.watch.last, app.watch.err)
+	}
+	mainTester.Frame()
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "打开文件夹监听设置"); ok {
+		t.Fatal("status bar must disappear after dismissing stopped status")
+	}
+
+	// Configure a watch rule and restore stopped status with outcome + error.
+	app.watch.settings = folderWatchSettings{
+		InputDir:  inDir,
+		OutputDir: outDir,
+		Preset:    "均衡",
+	}
+	app.watch.last = folderWatchOutcome{Input: inPath, Output: outPath}
+	app.watch.err = errors.New("临时失败")
+	mainTester.Frame()
+
+	for _, label := range []string{"打开文件夹监听设置", "重新监听", "关闭监听状态栏"} {
+		btn, ok := mainTester.AccessByRole(ui.RoleButton, label)
+		if !ok || btn.Offscreen || btn.Disabled {
+			t.Fatalf("main status bar button %q must be visible and enabled: ok=%v btn=%+v", label, ok, btn)
+		}
+	}
+
+	// Modal open disables all main status bar actions.
+	app.busy = true
+	mainTester.Frame()
+	for _, label := range []string{"打开文件夹监听设置", "重新监听", "关闭监听状态栏"} {
+		btn, ok := mainTester.AccessByRole(ui.RoleButton, label)
+		if !ok || !btn.Disabled {
+			t.Fatalf("main status bar button %q must be disabled while modalOpen: ok=%v btn=%+v", label, ok, btn)
+		}
+	}
+	app.busy = false
+	mainTester.Frame()
+
+	// Clicking "设置" opens settings directly on settingsFolderWatch with confirmDelete=false.
+	if err := mainTester.Click("打开文件夹监听设置"); err != nil {
+		t.Fatalf("click watch-open-settings: %v", err)
+	}
+	if !app.settingsOpen || app.editor == nil || app.editor.section != settingsFolderWatch || app.editor.confirmDelete {
+		t.Fatalf("expected settings open on settingsFolderWatch with confirmDelete=false, got open=%v editor=%+v", app.settingsOpen, app.editor)
+	}
+
+	// Inside settings window (inSettings == true), none of the main-window-only actions appear.
+	settingsTester := ui.NewTester(app.settingsView, 724, 700)
+	for _, label := range []string{"打开文件夹监听设置", "重新监听", "关闭监听状态栏"} {
+		if _, ok := settingsTester.AccessByRole(ui.RoleButton, label); ok {
+			t.Fatalf("settings status bar must not redundantly show %q", label)
+		}
+	}
+
+	// Close settings and click "重新监听" from main window.
+	app.setSettingsOpen(false)
+	mainTester.Frame()
+	if err := mainTester.Click("重新监听"); err != nil {
+		t.Fatalf("click watch-restart: %v", err)
+	}
+	awaitDesktopWatchUpdate(t, updates, func() bool {
+		return app.watch.session != nil && app.watch.session.ready
+	})
+	mainTester.Frame()
+
+	// While running: "设置" and "停止监听" shown; "重新监听" and "×" hidden.
+	if btn, ok := mainTester.AccessByRole(ui.RoleButton, "打开文件夹监听设置"); !ok || btn.Disabled {
+		t.Fatalf("settings button must remain visible while running: ok=%v btn=%+v", ok, btn)
+	}
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "停止监听"); !ok {
+		t.Fatal("stop button must be visible while running")
+	}
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "重新监听"); ok {
+		t.Fatal("restart button must be hidden while running")
+	}
+	if _, ok := mainTester.AccessByRole(ui.RoleButton, "关闭监听状态栏"); ok {
+		t.Fatal("dismiss button must be hidden while running")
+	}
+
+	// dismissFolderWatchStatus() must be a no-op while any session is still running.
+	app.watch.last = folderWatchOutcome{Input: inPath, Output: outPath}
+	app.watch.err = errors.New("keep-me-while-running")
+	app.dismissFolderWatchStatus()
+	if app.watch.last.Input != inPath || app.watch.err == nil {
+		t.Fatalf("dismissFolderWatchStatus must do nothing while running, got last=%+v err=%v", app.watch.last, app.watch.err)
+	}
+}
+
+func TestFolderWatchDirectoryQuickOpenButton(t *testing.T) {
+	root := t.TempDir()
+	inDir := filepath.Join(root, "in")
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(inDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var opened []string
+	var openErr error
+	app := newApplication()
+	updates := make(chan func(), 32)
+	app.dispatchUpdate = func(update func()) { updates <- update }
+	app.watch.openDir = func(dir string) error {
+		opened = append(opened, dir)
+		return openErr
+	}
+	t.Cleanup(app.closeFolderWatch)
+
+	app.setSettingsOpen(true)
+	app.editor.section = settingsFolderWatch
+	app.editor.watch = folderWatchSettings{InputDir: "   ", OutputDir: "", Preset: "均衡"}
+
+	tester := ui.NewTester(app.settingsView, 724, 700)
+	if _, ok := tester.AccessByRole(ui.RoleButton, "打开输入目录"); ok {
+		t.Fatal("quick-open input button must be hidden when InputDir is blank")
+	}
+	if _, ok := tester.AccessByRole(ui.RoleButton, "打开输出目录"); ok {
+		t.Fatal("quick-open output button must be hidden when OutputDir is blank")
+	}
+
+	// Set both directories: quick-open buttons appear to the left of choose buttons and invoke openDir.
+	app.editor.watch.InputDir = inDir
+	app.editor.watch.OutputDir = outDir
+	tester.Frame()
+
+	for _, pair := range []struct {
+		openLabel   string
+		chooseLabel string
+		wantDir     string
+	}{
+		{"打开输入目录", "选择输入目录", inDir},
+		{"打开输出目录", "选择输出目录", outDir},
+	} {
+		openBtn, ok := tester.AccessByRole(ui.RoleButton, pair.openLabel)
+		if !ok || openBtn.Offscreen || openBtn.Disabled {
+			t.Fatalf("%q must be shown and enabled: ok=%v btn=%+v", pair.openLabel, ok, openBtn)
+		}
+		chooseBtn, ok := tester.AccessByRole(ui.RoleButton, pair.chooseLabel)
+		if !ok || chooseBtn.Offscreen {
+			t.Fatalf("%q must be visible: ok=%v btn=%+v", pair.chooseLabel, ok, chooseBtn)
+		}
+		if openBtn.Bounds.X+openBtn.Bounds.W > chooseBtn.Bounds.X {
+			t.Fatalf("%q must be positioned to the left of %q: open=%+v choose=%+v", pair.openLabel, pair.chooseLabel, openBtn.Bounds, chooseBtn.Bounds)
+		}
+		if err := tester.Click(pair.openLabel); err != nil {
+			t.Fatalf("click %q: %v", pair.openLabel, err)
+		}
+		if got := opened[len(opened)-1]; got != pair.wantDir {
+			t.Fatalf("clicking %q opened %q, want %q", pair.openLabel, got, pair.wantDir)
+		}
+	}
+
+	// Start folder watch: choose buttons become disabled, but quick-open buttons stay enabled!
+	if err := app.startFolderWatch(app.editor.watch); err != nil {
+		t.Fatalf("startFolderWatch: %v", err)
+	}
+	awaitDesktopWatchUpdate(t, updates, func() bool {
+		return app.watch.session != nil && app.watch.session.ready
+	})
+	tester.Frame()
+
+	chooseIn, _ := tester.AccessByRole(ui.RoleButton, "选择输入目录")
+	openIn, ok := tester.AccessByRole(ui.RoleButton, "打开输入目录")
+	if !chooseIn.Disabled {
+		t.Fatal("choose input button should be disabled while watch is running")
+	}
+	if !ok || openIn.Disabled {
+		t.Fatalf("quick-open input button must stay enabled while watch is running: ok=%v btn=%+v", ok, openIn)
+	}
+	if err := tester.Click("打开输入目录"); err != nil {
+		t.Fatalf("click quick-open input while running: %v", err)
+	}
+	if len(opened) != 3 || opened[2] != inDir {
+		t.Fatalf("expected quick-open input while running to invoke openDir(%q), got %v", inDir, opened)
+	}
+
+	// When confirmDelete is true, quick-open buttons must be disabled.
+	app.editor.confirmDelete = true
+	tester.Frame()
+	if btn, ok := tester.AccessByRole(ui.RoleButton, "打开输入目录"); !ok || !btn.Disabled {
+		t.Fatalf("quick-open input button must be disabled when confirmDelete==true: ok=%v btn=%+v", ok, btn)
+	}
+	app.editor.confirmDelete = false
+
+	// Error from openDir is surfaced in editor.watchMessage and cleared on next success.
+	openErr = errors.New("permission denied")
+	tester.Frame()
+	if err := tester.Click("打开输出目录"); err != nil {
+		t.Fatalf("click quick-open output with error: %v", err)
+	}
+	if !strings.Contains(app.editor.watchMessage, "permission denied") {
+		t.Fatalf("expected openDir error in editor.watchMessage, got %q", app.editor.watchMessage)
+	}
+	openErr = nil
+	if err := tester.Click("打开输出目录"); err != nil {
+		t.Fatalf("click quick-open output after recovery: %v", err)
+	}
+	if app.editor.watchMessage != "" {
+		t.Fatalf("expected watchMessage to clear after successful openDir, got %q", app.editor.watchMessage)
+	}
+}

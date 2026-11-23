@@ -211,7 +211,7 @@ func TestSearchTargetResize(t *testing.T) {
 				size = 90
 			}
 			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -233,7 +233,7 @@ func TestSearchTargetResize(t *testing.T) {
 		selected, err := searchTargetResize(t.Context(), hugeBaseline, 100, 64, func(longEdge int) (*encodedImage, error) {
 			edges = append(edges, longEdge)
 			return &encodedImage{width: longEdge, data: make([]byte, 120+longEdge/10)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -258,7 +258,7 @@ func TestSearchTargetResize(t *testing.T) {
 				size = 95
 			}
 			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -275,7 +275,7 @@ func TestSearchTargetResize(t *testing.T) {
 			size := sizesByCall[len(edges)]
 			edges = append(edges, longEdge)
 			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -299,7 +299,7 @@ func TestSearchTargetResize(t *testing.T) {
 				return nil, errors.New("failed encode")
 			}
 			return &encodedImage{width: longEdge, data: make([]byte, size)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -320,7 +320,7 @@ func TestSearchTargetResize(t *testing.T) {
 				return &encodedImage{width: longEdge, data: make([]byte, 90)}, nil
 			}
 			return &encodedImage{width: longEdge, data: make([]byte, 140)}, nil
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -328,6 +328,203 @@ func TestSearchTargetResize(t *testing.T) {
 			t.Fatalf("expected valid fit in (287, 360], got width=%d (edges=%v)", selected.width, edges)
 		}
 	})
+}
+
+func TestSearchTargetResizeDecoupled(t *testing.T) {
+	// Synthetic monotonic encoder model: size grows with both edge and quality.
+	// At quality=1, edges <= 400 fit within target=10000.
+	// At bestFitEdge=399, optimal quality is the highest q in [1, 90] fitting <= 10000.
+	const (
+		target         int64 = 10000
+		initialQuality       = 90
+	)
+	syntheticSize := func(edge, quality int) int {
+		return edge*20 + quality*50 + 500
+	}
+	baseline := &encodedImage{
+		width:  512,
+		height: 352,
+		data:   make([]byte, syntheticSize(512, 1)),
+	}
+
+	// Run decoupled search: probe at quality=1, then run ONE quality binary search at bestFitEdge.
+	var decoupledEncodes int
+	var refineEdges []int
+	decoupled, err := searchTargetResize(t.Context(), baseline, target, 64,
+		func(longEdge int) (*encodedImage, error) {
+			decoupledEncodes++
+			return &encodedImage{
+				width:          longEdge,
+				data:           make([]byte, syntheticSize(longEdge, 1)),
+				appliedQuality: 1,
+			}, nil
+		},
+		func(longEdge int) (*encodedImage, error) {
+			refineEdges = append(refineEdges, longEdge)
+			data, applied, err := encodeWithTargetSize(t.Context(), Options{
+				Quality:         initialQuality,
+				TargetSizeBytes: target,
+			}, func(q int) ([]byte, error) {
+				decoupledEncodes++
+				return make([]byte, syntheticSize(longEdge, q)), nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &encodedImage{width: longEdge, data: data, appliedQuality: applied}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("decoupled search failed: %v", err)
+	}
+
+	// Compare against nested search (running full quality search at every probed dimension).
+	var nestedEncodes int
+	nested, err := searchTargetResize(t.Context(), baseline, target, 64,
+		func(longEdge int) (*encodedImage, error) {
+			data, applied, err := encodeWithTargetSize(t.Context(), Options{
+				Quality:         initialQuality,
+				TargetSizeBytes: target,
+			}, func(q int) ([]byte, error) {
+				nestedEncodes++
+				return make([]byte, syntheticSize(longEdge, q)), nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &encodedImage{width: longEdge, data: data, appliedQuality: applied}, nil
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("nested search failed: %v", err)
+	}
+
+	if decoupled.width != nested.width || decoupled.appliedQuality != nested.appliedQuality || len(decoupled.data) != len(nested.data) {
+		t.Fatalf("decoupled=(edge=%d q=%d bytes=%d) != nested=(edge=%d q=%d bytes=%d)",
+			decoupled.width, decoupled.appliedQuality, len(decoupled.data),
+			nested.width, nested.appliedQuality, len(nested.data))
+	}
+	if len(refineEdges) != 1 || refineEdges[0] != decoupled.width {
+		t.Fatalf("expected exactly 1 refinement call at bestFitEdge=%d, got %v", decoupled.width, refineEdges)
+	}
+	// Verify optimal quality at bestFitEdge: q fits and q+1 exceeds target.
+	if int64(syntheticSize(decoupled.width, decoupled.appliedQuality)) > target ||
+		int64(syntheticSize(decoupled.width, decoupled.appliedQuality+1)) <= target {
+		t.Fatalf("refined quality=%d at edge=%d is not optimal for target=%d",
+			decoupled.appliedQuality, decoupled.width, target)
+	}
+	// Decoupled search must use far fewer encodes than nested search (13 vs 39 here).
+	if decoupledEncodes >= nestedEncodes/2 {
+		t.Fatalf("expected decoupled encodes (%d) to be less than half of nested encodes (%d)",
+			decoupledEncodes, nestedEncodes)
+	}
+
+	t.Run("refine error falls back to lowest-quality bestFit", func(t *testing.T) {
+		var refinedEdge int
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64,
+			func(longEdge int) (*encodedImage, error) {
+				size := 150
+				if longEdge <= 400 {
+					size = 90
+				}
+				return &encodedImage{width: longEdge, data: make([]byte, size), appliedQuality: 1}, nil
+			},
+			func(longEdge int) (*encodedImage, error) {
+				refinedEdge = longEdge
+				return nil, errors.New("refinement error")
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if refinedEdge != 399 || selected.width != 399 || len(selected.data) != 90 || selected.appliedQuality != 1 {
+			t.Fatalf("expected fallback to bestFit (edge=399, 90 bytes, q=1), got edge=%d (%d bytes, q=%d), refinedEdge=%d",
+				selected.width, len(selected.data), selected.appliedQuality, refinedEdge)
+		}
+	})
+
+	t.Run("refine exceeding target falls back to lowest-quality bestFit", func(t *testing.T) {
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64,
+			func(longEdge int) (*encodedImage, error) {
+				size := 150
+				if longEdge <= 400 {
+					size = 90
+				}
+				return &encodedImage{width: longEdge, data: make([]byte, size), appliedQuality: 1}, nil
+			},
+			func(longEdge int) (*encodedImage, error) {
+				return &encodedImage{width: longEdge, data: make([]byte, 120), appliedQuality: 45}, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if selected.width != 399 || len(selected.data) != 90 || selected.appliedQuality != 1 {
+			t.Fatalf("expected fallback to bestFit when refine exceeds target, got edge=%d (%d bytes, q=%d)",
+				selected.width, len(selected.data), selected.appliedQuality)
+		}
+	})
+
+	t.Run("miss skips refinement entirely", func(t *testing.T) {
+		refineCalls := 0
+		selected, err := searchTargetResize(t.Context(), baseline, 100, 64,
+			func(longEdge int) (*encodedImage, error) {
+				return &encodedImage{width: longEdge, data: make([]byte, 120+longEdge/10), appliedQuality: 1}, nil
+			},
+			func(longEdge int) (*encodedImage, error) {
+				refineCalls++
+				return nil, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if refineCalls != 0 || selected.width != 64 {
+			t.Fatalf("expected 0 refine calls and smallest edge=64, got refineCalls=%d width=%d",
+				refineCalls, selected.width)
+		}
+	})
+
+	t.Run("refine cancellation propagates error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		selected, err := searchTargetResize(ctx, baseline, 100, 64,
+			func(longEdge int) (*encodedImage, error) {
+				return &encodedImage{width: longEdge, data: make([]byte, 90), appliedQuality: 1}, nil
+			},
+			func(longEdge int) (*encodedImage, error) {
+				cancel()
+				return &encodedImage{width: longEdge, data: make([]byte, 95), appliedQuality: 50}, nil
+			},
+		)
+		if selected != nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled from refine, got selected=%v err=%v", selected != nil, err)
+		}
+	})
+}
+
+func TestLowestQualityOptions(t *testing.T) {
+	for _, format := range []string{"jpeg", "webp", "avif"} {
+		probe, needsRefine := lowestQualityOptions(Options{Quality: 80, TargetSizeBytes: 10240}, format)
+		if probe.Quality != 1 || probe.TargetSizeBytes != 0 || !needsRefine {
+			t.Fatalf("%s q=80: got probe=%+v needsRefine=%v", format, probe, needsRefine)
+		}
+		probeMin, needsRefineMin := lowestQualityOptions(Options{Quality: 1, TargetSizeBytes: 10240}, format)
+		if probeMin.Quality != 1 || probeMin.TargetSizeBytes != 0 || needsRefineMin {
+			t.Fatalf("%s q=1: got probe=%+v needsRefine=%v", format, probeMin, needsRefineMin)
+		}
+	}
+
+	lowestTier := pngTargetSizeTiers[len(pngTargetSizeTiers)-1]
+	probePNG, needsRefinePNG := lowestQualityOptions(Options{Quality: 80, TargetSizeBytes: 10240}, "png")
+	if probePNG.TargetSizeBytes != 0 || probePNG.PNG != lowestTier || !needsRefinePNG {
+		t.Fatalf("png default: got probe.PNG=%+v target=%d needsRefine=%v", probePNG.PNG, probePNG.TargetSizeBytes, needsRefinePNG)
+	}
+	probeLowestPNG, needsRefineLowest := lowestQualityOptions(Options{PNG: lowestTier, TargetSizeBytes: 10240}, "png")
+	if probeLowestPNG.TargetSizeBytes != 0 || probeLowestPNG.PNG != lowestTier || needsRefineLowest {
+		t.Fatalf("png lowest tier: got probe.PNG=%+v target=%d needsRefine=%v", probeLowestPNG.PNG, probeLowestPNG.TargetSizeBytes, needsRefineLowest)
+	}
 }
 
 func TestSearchTargetResizeCancellation(t *testing.T) {
@@ -341,7 +538,7 @@ func TestSearchTargetResizeCancellation(t *testing.T) {
 			calls++
 			cancel()
 			return &encodedImage{width: longEdge, data: make([]byte, 99)}, nil
-		})
+		}, nil)
 		if selected != nil || !errors.Is(err, context.Canceled) || calls != 1 {
 			t.Fatalf("canceled search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
 		}
@@ -354,7 +551,7 @@ func TestSearchTargetResizeCancellation(t *testing.T) {
 		selected, err := searchTargetResize(ctx, baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
 			calls++
 			return &encodedImage{width: longEdge, data: make([]byte, 99)}, nil
-		})
+		}, nil)
 		if selected != nil || !errors.Is(err, context.Canceled) || calls != 0 {
 			t.Fatalf("pre-canceled search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
 		}
@@ -365,7 +562,7 @@ func TestSearchTargetResizeCancellation(t *testing.T) {
 		selected, err := searchTargetResize(t.Context(), baseline, 100, 64, func(longEdge int) (*encodedImage, error) {
 			calls++
 			return nil, context.DeadlineExceeded
-		})
+		}, nil)
 		if selected != nil || !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
 			t.Fatalf("deadline-exceeded search returned result=%v, error=%v after %d probes", selected != nil, err, calls)
 		}

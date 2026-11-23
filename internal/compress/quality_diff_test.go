@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"runtime"
 	"testing"
 )
 
@@ -286,6 +287,88 @@ func TestDiffHeatmapLUTMatchesExactFormula(t *testing.T) {
 				t.Fatalf("sample=%+v diff=%d: got (%d,%d,%d), want (%d,%d,%d)", sample, diff, gotR, gotG, gotB, wantR, wantG, wantB)
 			}
 		}
+	}
+}
+
+func TestAnalyzeVisualDiffParallelMatchesSerial(t *testing.T) {
+	// Use non-multiple-of-8 dimensions above the 65536-pixel parallel threshold
+	// to exercise partial trailing blocks, multi-stripe partitioning, and alpha.
+	cases := []struct {
+		name      string
+		w, h      int
+		withAlpha bool
+	}{
+		{"opaque 301x253", 301, 253, false},
+		{"alpha 275x261", 275, 261, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := syntheticGradientImage(tc.w, tc.h)
+			comp := image.NewNRGBA(orig.Bounds())
+			copy(comp.Pix, orig.Pix)
+			for y := 0; y < tc.h; y++ {
+				for x := 0; x < tc.w; x++ {
+					i := y*comp.Stride + x*4
+					if (x+y)%3 == 0 {
+						comp.Pix[i] ^= 0x0b
+						comp.Pix[i+1] ^= 0x05
+						comp.Pix[i+2] ^= 0x03
+					}
+					if tc.withAlpha {
+						if x < 24 && y < 24 {
+							orig.Pix[i+3] = 0
+							comp.Pix[i+3] = 0
+							comp.Pix[i] ^= 0x55 // invisible RGB difference
+						} else if (x*5+y*7)%17 == 0 {
+							comp.Pix[i+3] = uint8(180 + (x+y)%70)
+						}
+					}
+				}
+			}
+
+			prevProcs := runtime.GOMAXPROCS(1)
+			defer runtime.GOMAXPROCS(prevProcs)
+
+			if got := parallelDiffWorkers(tc.w, tc.h); got != 1 {
+				t.Fatalf("expected 1 worker when GOMAXPROCS=1, got %d", got)
+			}
+			serialMetrics, serialHeatmap, err := AnalyzeVisualDiff(context.Background(), orig, comp)
+			if err != nil {
+				t.Fatalf("serial AnalyzeVisualDiff failed: %v", err)
+			}
+			serialOnlyMetrics, err := MeasureQualityMetrics(context.Background(), orig, comp)
+			if err != nil {
+				t.Fatalf("serial MeasureQualityMetrics failed: %v", err)
+			}
+			if serialOnlyMetrics != serialMetrics {
+				t.Fatalf("MeasureQualityMetrics != AnalyzeVisualDiff: %+v vs %+v", serialOnlyMetrics, serialMetrics)
+			}
+
+			for _, procs := range []int{2, 4, 7} {
+				runtime.GOMAXPROCS(procs)
+				if got := parallelDiffWorkers(tc.w, tc.h); got != procs {
+					t.Fatalf("expected %d workers for %dx%d, got %d", procs, tc.w, tc.h, got)
+				}
+				parMetrics, parHeatmap, err := AnalyzeVisualDiff(context.Background(), orig, comp)
+				if err != nil {
+					t.Fatalf("parallel(%d) AnalyzeVisualDiff failed: %v", procs, err)
+				}
+				if parMetrics != serialMetrics {
+					t.Fatalf("parallel(%d) metrics mismatch:\n got: %+v\nwant: %+v", procs, parMetrics, serialMetrics)
+				}
+				if !bytes.Equal(parHeatmap.Pix, serialHeatmap.Pix) {
+					t.Fatalf("parallel(%d) heatmap pixels diverged from serial output", procs)
+				}
+				parOnlyMetrics, err := MeasureQualityMetrics(context.Background(), orig, comp)
+				if err != nil {
+					t.Fatalf("parallel(%d) MeasureQualityMetrics failed: %v", procs, err)
+				}
+				if parOnlyMetrics != serialMetrics {
+					t.Fatalf("parallel(%d) MeasureQualityMetrics mismatch: %+v vs %+v", procs, parOnlyMetrics, serialMetrics)
+				}
+			}
+		})
 	}
 }
 

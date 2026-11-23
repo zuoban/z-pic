@@ -48,6 +48,7 @@ func main() {
 		app.clearWindowProgress()
 		app.closeFolderWatch()
 		app.closeTray()
+		app.cleanupDragStaging()
 	})
 	mygo.App.WhenReady(func() {
 		startup := mergeStartupPaths(os.Args[1:], pendingOpenFiles)

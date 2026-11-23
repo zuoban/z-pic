@@ -487,3 +487,183 @@ func TestMainWindowDropRoutingAndGuards(t *testing.T) {
 		}
 	})
 }
+
+func TestDragStagingLifecycleAndCleanup(t *testing.T) {
+	newStagedApp := func(t *testing.T, root string) (*application, string) {
+		t.Helper()
+		srcPath := filepath.Join(root, "photo.jpg")
+		raw := writeTestJPEG(t, srcPath, 80, 60, 90)
+		app := newApplication()
+		app.file = &selectedImage{
+			path: srcPath, format: "jpeg", width: 80, height: 60, size: int64(len(raw)), data: raw,
+		}
+		app.result = &compress.Result{
+			SourcePath:   srcPath,
+			Format:       "jpeg",
+			Width:        80,
+			Height:       60,
+			OriginalSize: int64(len(raw)),
+			OutputSize:   int64(len(raw)),
+			Data:         raw,
+		}
+		t.Cleanup(app.cleanupDragStaging)
+		staged := app.stageSingleDragFile()
+		if staged == "" {
+			t.Fatal("expected stageSingleDragFile to create a staged file")
+		}
+		if _, err := os.Stat(staged); err != nil {
+			t.Fatalf("expected staged file on disk: %v", err)
+		}
+		if app.dragStagedResult != app.result || app.dragStagedPath != staged {
+			t.Fatalf("unexpected drag staging state: resultMatch=%v path=%q want=%q",
+				app.dragStagedResult == app.result, app.dragStagedPath, staged)
+		}
+		return app, staged
+	}
+
+	assertCleaned := func(t *testing.T, app *application, staged string) {
+		t.Helper()
+		if app.dragStagedResult != nil || app.dragStagedPath != "" {
+			t.Fatalf("expected drag staging pointers cleared, got result=%v path=%q",
+				app.dragStagedResult != nil, app.dragStagedPath)
+		}
+		if _, err := os.Stat(staged); !os.IsNotExist(err) {
+			t.Fatalf("expected staged file %q removed, stat err=%v", staged, err)
+		}
+		if app.dragTempDir != "" {
+			entries, err := os.ReadDir(app.dragTempDir)
+			if err != nil {
+				t.Fatalf("expected dragTempDir to remain readable: %v", err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), "export-") {
+					t.Fatalf("expected export-* subdirectory removed, still found %q", entry.Name())
+				}
+			}
+		}
+	}
+
+	t.Run("invalidateResult cleans staged memory and files and allows future drags", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+		savedResult := app.result
+
+		app.invalidateResult()
+		assertCleaned(t, app, staged)
+
+		// Future drag still works smoothly using the preserved dragTempDir.
+		app.result = savedResult
+		staged2 := app.stageSingleDragFile()
+		if staged2 == "" {
+			t.Fatal("expected subsequent stageSingleDragFile to succeed after releaseDragStaging")
+		}
+		if _, err := os.Stat(staged2); err != nil {
+			t.Fatalf("expected new staged file on disk: %v", err)
+		}
+	})
+
+	t.Run("clearSingleImage cleans staged memory and files", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+
+		app.clearSingleImage()
+		assertCleaned(t, app, staged)
+	})
+
+	t.Run("completeSelection cleans staged memory and files", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+		nextPath := filepath.Join(root, "next.jpg")
+		nextRaw := writeTestJPEG(t, nextPath, 60, 40, 85)
+
+		app.completeSelection(context.Background(), &selectedImage{
+			path: nextPath, format: "jpeg", width: 60, height: 40, size: int64(len(nextRaw)), data: nextRaw,
+		}, nil)
+		assertCleaned(t, app, staged)
+	})
+
+	t.Run("completeOverwriteWithBackup cleans staged memory and files", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+
+		app.completeOverwriteWithBackup(app.result, false, nil)
+		assertCleaned(t, app, staged)
+	})
+
+	t.Run("loadBatch cleans staged memory and files", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+		otherPath := filepath.Join(root, "other.jpg")
+		writeTestJPEG(t, otherPath, 60, 40, 85)
+
+		updates := make(chan func(), 8)
+		app.dispatchUpdate = func(fn func()) { updates <- fn }
+		app.loadBatch([]string{app.file.path, otherPath}, false)
+		(<-updates)()
+
+		if app.batch == nil || len(app.batch.items) != 2 {
+			t.Fatalf("expected batch loaded with 2 items, got %+v", app.batch)
+		}
+		assertCleaned(t, app, staged)
+	})
+
+	t.Run("active draggingOut defers cleanup until Done when stale", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+
+		// Begin drag via singleDragExportData so draggingOut becomes true.
+		data := app.singleDragExportData()
+		if len(data.Items()) == 0 || !app.draggingOut {
+			t.Fatalf("expected active drag-out session: items=%d draggingOut=%v", len(data.Items()), app.draggingOut)
+		}
+
+		// Mid-drag invalidateResult must preserve staged file and result pointer.
+		app.invalidateResult()
+		if app.dragStagedResult == nil || app.dragStagedPath != staged {
+			t.Fatalf("active draggingOut must preserve staged state: result=%v path=%q",
+				app.dragStagedResult != nil, app.dragStagedPath)
+		}
+		if _, err := os.Stat(staged); err != nil {
+			t.Fatalf("active draggingOut must preserve staged file on disk: %v", err)
+		}
+
+		// Completing the drag now sees s.result != s.dragStagedResult and releases everything.
+		app.dragExportOptions().Done(transfer.Result{})
+		if app.draggingOut {
+			t.Fatal("Done must clear draggingOut")
+		}
+		assertCleaned(t, app, staged)
+	})
+
+	t.Run("Done preserves staged file when result is still current", func(t *testing.T) {
+		root := t.TempDir()
+		app, staged := newStagedApp(t, root)
+		data := app.singleDragExportData()
+		if len(data.Items()) == 0 || !app.draggingOut {
+			t.Fatalf("expected active drag-out session: items=%d draggingOut=%v", len(data.Items()), app.draggingOut)
+		}
+
+		app.dragExportOptions().Done(transfer.Result{})
+		if app.draggingOut {
+			t.Fatal("Done must clear draggingOut")
+		}
+		if app.dragStagedResult != app.result || app.dragStagedPath != staged {
+			t.Fatalf("Done must keep current staged result cached: resultMatch=%v path=%q",
+				app.dragStagedResult == app.result, app.dragStagedPath)
+		}
+		if _, err := os.Stat(staged); err != nil {
+			t.Fatalf("Done must keep current staged file on disk: %v", err)
+		}
+
+		// cleanupDragStaging removes the entire dragTempDir cleanly.
+		tempDir := app.dragTempDir
+		app.cleanupDragStaging()
+		if app.dragTempDir != "" || app.dragStagedResult != nil || app.dragStagedPath != "" {
+			t.Fatalf("cleanupDragStaging must reset all fields: dir=%q result=%v path=%q",
+				app.dragTempDir, app.dragStagedResult != nil, app.dragStagedPath)
+		}
+		if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+			t.Fatalf("cleanupDragStaging must remove dragTempDir %q, stat err=%v", tempDir, err)
+		}
+	})
+}
